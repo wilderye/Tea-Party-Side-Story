@@ -153,7 +153,12 @@ ctx().eventSource.on(events.GENERATION_AFTER_COMMANDS, async (type, _options, dr
         originalId: type === 'continue' ? last?.extra?.teahouse?.id : undefined };
 });
 ctx().eventSource.on(events.TOOL_CALLS_PERFORMED, () => { if (frame?.used) toolResume = true; });
-ctx().eventSource.on(events.GENERATION_ENDED, () => { if (!toolResume) frame = null; preview = false; });
+ctx().eventSource.on(events.GENERATION_ENDED, () => {
+    const streaming = ctx().streamingProcessor;
+    if (streaming && streaming.type !== 'impersonate') recordTheatre(streaming.messageId);
+    if (!toolResume) frame = null;
+    preview = false;
+});
 ctx().eventSource.on(events.CHAT_CHANGED, () => { frame = null; preview = false; toolResume = false; });
 const theatreMacro = () => {
     if (resolving) return '';
@@ -172,13 +177,16 @@ const theatreMacro = () => {
     return text;
 };
 await registerTheatreMacro(ctx(), theatreMacro);
-ctx().eventSource.on(events.MESSAGE_RECEIVED, (messageId) => {
+function recordTheatre(messageId) {
     if (!frame?.used || preview) return;
     const message = ctx().chat[messageId];
     if (!message || message.is_user || message.is_system) return;
     message.extra ??= {}; message.extra.teahouse = { id: frame.selected.id };
-    // ST copies extra into swipe_info immediately after MESSAGE_RECEIVED.
-});
+    // Streaming synchronizes swipes before announcing completion.
+    const swipe = message.swipe_info?.[message.swipe_id];
+    if (swipe) { swipe.extra ??= {}; swipe.extra.teahouse = { id: frame.selected.id }; }
+}
+ctx().eventSource.on(events.MESSAGE_RECEIVED, recordTheatre);
 const settingsHost = document.querySelector('#extensions_settings2') ?? document.querySelector('#extensions_settings');
 if (settingsHost) {
     const section = el('div', undefined, 'extension_container');
