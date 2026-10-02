@@ -1,3 +1,4 @@
+import { createLibraryRequest } from './download-access.js';
 import { validateManifest, readPack, collectPacks, selectTheatre, findEntries } from './library.js';
 const ctx = () => SillyTavern.getContext();
 const key = 'teahouse';
@@ -45,7 +46,8 @@ async function updateLibrary() {
         if (base.protocol !== 'https:' || base.username || base.password) throw new Error('请填写 HTTPS 剧场库地址');
         if (!base.pathname.endsWith('/')) base.pathname += '/';
         notify('正在检查更新…');
-        const next = validateManifest(await (await request(new URL('manifest.json', base), { cache: 'no-store' })).json());
+        const download = await createLibraryRequest(base, request);
+        const next = validateManifest(await (await download('manifest.json')).json());
         const oldPaths = new Set(manifest?.packs.map(x => x.path) ?? []);
         if (manifest && JSON.stringify(next) === JSON.stringify(manifest)) { notify('已是最新剧场库'); return; }
         const packs = [], downloaded = [];
@@ -53,7 +55,7 @@ async function updateLibrary() {
             notify(`正在更新 ${index + 1} / ${next.packs.length}`);
             const existing = oldPaths.has(pack.path);
             const url = existing ? `/user/files/${packName(pack)}` : new URL(pack.path, base);
-            const text = await (await request(url)).text();
+            const text = await (existing ? await request(url) : await download(url)).text();
             packs.push(await readPack(text, pack));
             if (!existing) downloaded.push({ pack, text });
         }
