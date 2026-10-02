@@ -1,0 +1,14 @@
+#teahouse-panel { display:flex; flex-direction:column; gap:12px; text-align:left; width:min(850px,90vw); }
+#teahouse-panel .tea-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+#teahouse-panel .tea-list { max-height:65vh; overflow:auto; }
+#teahouse-panel article { border-bottom:1px solid var(--SmartThemeBorderColor); padding:14px 4px; }
+#teahouse-panel .tea-body { white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0; }
+#teahouse-panel .tea-meta { opacity:.75; font-size:.9em; }
+#teahouse-panel button[aria-pressed="true"] { color:gold; }
+#teahouse-panel input[type="search"] { flex:1; min-width:140px; }
+#teahouse-panel .tea-status { overflow-wrap:anywhere; }
+
+#teahouse-panel .tea-toolbar button { width:auto; min-width:max-content; flex:0 0 auto; white-space:nowrap; }
+#teahouse-panel select { display:block; width:auto; min-width:110px; flex:0 0 auto; }
+#teahouse-panel input[type="search"] { width:auto; min-width:160px; }
+#teahouse-panel { max-width:100%; }

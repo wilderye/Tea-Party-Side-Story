@@ -1,0 +1,5 @@
+{
+  "display_name": "茶话会小剧场", "loading_order": 100,
+  "requires": [], "optional": [], "js": "index.js", "css": "style.css",
+  "author": "茶话会", "version": "0.1.0"
+}
