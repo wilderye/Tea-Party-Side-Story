@@ -1,3 +1,5 @@
 dist/
 node_modules/
-docs/项目约定.md
+docs/
+tests/
+README.md
