@@ -1,3 +1,4 @@
+import { registerTheatreMacro } from './macro-registration.js';
 import { createLibraryRequest } from './download-access.js';
 import { validateManifest, readPack, collectPacks, selectTheatre, findEntries } from './library.js';
 const ctx = () => SillyTavern.getContext();
@@ -170,16 +171,7 @@ const theatreMacro = () => {
     }
     return text;
 };
-const power = ctx().powerUserSettings;
-if (!power?.experimental_macro_engine) ctx().registerMacro('茶话会小剧场', theatreMacro, '本次生成的茶话会预设剧场');
-if (power && 'experimental_macro_engine' in power) {
-    // ST 1.19's lexer rejects Chinese identifiers. Its public processor API keeps
-    // the user's Chinese macro while delegating execution to one registered handler.
-    const { macros } = await import('/scripts/macros/macro-system.js');
-    macros.registry.registerMacro('teaPartyTheatreInternal', { category: 'extension',
-        description: '茶话会小剧场', handler: theatreMacro });
-    macros.engine.addPreProcessor(text => text.replaceAll('{{茶话会小剧场}}', '{{teaPartyTheatreInternal}}'), { source: 'teahouse' });
-}
+await registerTheatreMacro(ctx(), theatreMacro);
 ctx().eventSource.on(events.MESSAGE_RECEIVED, (messageId) => {
     if (!frame?.used || preview) return;
     const message = ctx().chat[messageId];
