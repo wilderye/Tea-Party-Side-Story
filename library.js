@@ -54,11 +54,35 @@ export function selectTheatre(entries, lastId, originalId, random = Math.random)
     const choices = pool.length > 1 ? pool.filter(x => x.id !== lastId) : pool;
     return choices.length ? choices[Math.floor(random() * choices.length)] : null;
 }
-export function findEntries(entries, { tab, query = '', favorites = {} }) {
+export const isManuscript = id => typeof id === 'string' && id.startsWith('local:');
+export function readManuscripts(value) {
+    if (value?.format !== 1 || !Array.isArray(value.entries)) throw new Error('亲笔手稿文件格式不正确');
+    const result = new Map();
+    for (const item of value.entries) {
+        if (!/^local:[a-f0-9-]{32,36}$/.test(item?.id) || !['standalone', 'preset'].includes(item.type)
+            || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 100
+            || typeof item.body !== 'string' || !item.body.trim()
+            || typeof item.publishedAt !== 'string' || !Number.isFinite(Date.parse(item.publishedAt)) || result.has(item.id)) {
+            throw new Error('亲笔手稿文件格式不正确');
+        }
+        result.set(item.id, { id: item.id, title: item.title, type: item.type, body: item.body, publishedAt: item.publishedAt });
+    }
+    return result;
+}
+export function pruneCommunityFavorites(favorites, community) {
+    for (const id of Object.keys(favorites)) if (!isManuscript(id) && !community.has(id)) delete favorites[id];
+}
+export function favoritePool(entries, favorites) {
+    return new Map([...entries].filter(([id, item]) => item.type === 'preset' && Object.hasOwn(favorites, id)));
+}
+export function findEntries(entries, { tab, scope, type, query = '', favorites = {} }) {
+    scope ??= tab === 'favorites' ? 'favorites' : 'community';
+    type ??= tab === 'favorites' ? undefined : tab;
     const term = query.trim().toLocaleLowerCase();
-    return [...entries.values()].filter(x => (tab === 'favorites' ? Object.hasOwn(favorites, x.id) : x.type === tab)
-        && (!term || [x.title, x.body, x.author].some(value => value.toLocaleLowerCase().includes(term))))
-        .sort((a, b) => tab === 'favorites'
+    return [...entries.values()].filter(x => (!type || x.type === type)
+        && (scope === 'favorites' ? Object.hasOwn(favorites, x.id) : isManuscript(x.id) === (scope === 'local'))
+        && (!term || [x.title, x.body, x.author ?? ''].some(value => value.toLocaleLowerCase().includes(term))))
+        .sort((a, b) => scope === 'favorites'
             ? favorites[b.id] - favorites[a.id] || b.id.localeCompare(a.id)
             : Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || b.id.localeCompare(a.id));
 }
