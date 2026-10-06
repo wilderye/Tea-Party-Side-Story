@@ -11,18 +11,19 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
     const writesReply = type => !['quiet', 'impersonate'].includes(type);
     let frame = null, nativeStart = null, nativeFrame = null;
     const pendingReplies = new Map();
-    let preview = false, toolResume = false, resolving = false, epoch = 0;
+    let toolResume = false, resolving = false, epoch = 0;
 
     function reset() {
         frame = nativeStart = nativeFrame = null;
         pendingReplies.clear();
-        preview = toolResume = false;
+        toolResume = false;
         epoch++;
     }
 
     source.on(events.GENERATION_STARTED, (type, _options, dryRun) => {
-        nativeStart = { type, dryRun: !!dryRun, chatId: chatId() };
-        if (!dryRun && writesReply(type)) {
+        if (dryRun) return;
+        nativeStart = { type, chatId: chatId() };
+        if (writesReply(type)) {
             for (const [id, pending] of pendingReplies) {
                 if (!ctx().chat[id] || pending.chatId !== chatId()) pendingReplies.delete(id);
             }
@@ -30,13 +31,15 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
         }
     });
     source.on(events.GENERATION_AFTER_COMMANDS, async (type, _options, dryRun) => {
+        // Macro callbacks have no request identity. A dry run must not replace
+        // the real assembly or consume its STARTED marker. If they overlap,
+        // both use that assembly's single cached choice; an idle preview has none.
+        if (dryRun) return;
         // Native Generate emits STARTED first. Extension-only prompt requests may
         // emit AFTER_COMMANDS too: evaluate their macros, but don't give them a reply.
-        const native = !!nativeStart && nativeStart.type === type && nativeStart.dryRun === !!dryRun
+        const native = !!nativeStart && nativeStart.type === type
             && nativeStart.chatId === chatId();
         nativeStart = null;
-        preview = !!dryRun;
-        if (dryRun) return;
         const generationEpoch = epoch, origin = chatId();
         await loaded;
         if (generationEpoch !== epoch || origin !== chatId() || !settings.enabled) return;
@@ -52,7 +55,7 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
     });
 
     source.on(events.GENERATE_AFTER_DATA, (_data, dryRun) => {
-        if (dryRun || preview || !settings.enabled || !frame || frame.chatId !== chatId()) return;
+        if (dryRun || !settings.enabled || !frame || frame.chatId !== chatId()) return;
         if (!frame.prepared) {
             frame.prepared = true;
             if (frame.native && writesReply(frame.type)) {
@@ -114,7 +117,6 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
         // This is a button-state notification, not delivery of a particular reply.
         // In both ST 1.14 and 1.19 it can precede MESSAGE_RECEIVED.
         frame = nativeStart = null;
-        preview = false;
     });
     source.on(events.TOOL_CALLS_PERFORMED, () => {
         if (nativeFrame?.used.size) toolResume = true;
@@ -123,7 +125,7 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
 
     function theatreMacro(kind) {
         if (!settings.enabled || resolving) return '';
-        const active = !preview && frame?.chatId === chatId() ? frame : null;
+        const active = frame?.chatId === chatId() ? frame : null;
         if (active && Object.hasOwn(active.texts, kind)) return active.texts[kind];
         const all = state.entries;
         const pool = kind === 'community' ? all : favoritePool(all, settings.favorites);

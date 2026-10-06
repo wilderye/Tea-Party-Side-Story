@@ -4,6 +4,7 @@ import { registerTheatreGeneration } from '../generation.js';
 
 async function fixture(loaded = Promise.resolve(), beforeRegister = () => {}) {
     const listeners = new Map(), macros = new Map();
+    let saves = 0;
     const source = {
         on(name, fn) {
             assert.ok(name, 'only native event names are registered');
@@ -25,9 +26,10 @@ async function fixture(loaded = Promise.resolve(), beforeRegister = () => {}) {
             'TOOL_CALLS_PERFORMED', 'CHAT_CHANGED'].map(x => [x, x])),
     };
     beforeRegister(source, context);
-    const generation = await registerTheatreGeneration(() => context, { settings, entries }, loaded, () => {});
+    const generation = await registerTheatreGeneration(() => context, { settings, entries }, loaded, () => { saves++; });
     return {
         context, settings, entries, source, generation, emit: source.emit.bind(source),
+        get saves() { return saves; },
         macro: (name = '茶话会小剧场') => macros.get(name)(),
         async begin(type = 'normal', { native = true, preview = false } = {}) {
             if (native) await source.emit('GENERATION_STARTED', type, {}, preview);
@@ -39,6 +41,92 @@ async function fixture(loaded = Promise.resolve(), beforeRegister = () => {}) {
 
 const message = (text = '正文') => ({ mes: text, is_user: false, extra: { other: 'preserved' }, swipe_id: 0,
     swipes: [text], swipe_info: [{ extra: { other: 'preserved' } }] });
+
+for (const previewFirst of [false, true]) {
+    for (const previewFinishesFirst of [false, true]) {
+        test(`正文与预计算重叠仍逐条换剧场：预计算先展开宏=${previewFirst}，先完成=${previewFinishesFirst}`, async () => {
+            const f = await fixture();
+            f.settings.lastId = f.settings.lastFavoriteId = 'A';
+            for (const expected of ['B', 'A', 'B']) {
+                const saves = f.saves;
+                await f.begin();
+                if (!previewFirst) {
+                    assert.equal(f.macro(), `theatre ${expected}`);
+                    assert.equal(f.macro('我收藏的小剧场'), `theatre ${expected}`);
+                }
+                await f.begin('normal', { preview: true });
+                assert.equal(f.macro(), `theatre ${expected}`, '重叠的预计算共用正文选择');
+                assert.equal(f.macro('我收藏的小剧场'), `theatre ${expected}`);
+                if (previewFinishesFirst) await f.emit('GENERATE_AFTER_DATA', {}, true);
+                const sent = [f.macro(), f.macro('我收藏的小剧场')];
+                await f.ready();
+                if (!previewFinishesFirst) await f.emit('GENERATE_AFTER_DATA', {}, true);
+                assert.deepEqual(sent, [`theatre ${expected}`, `theatre ${expected}`]);
+                assert.equal(f.saves - saves, 2, '两个宏各记录一次，不因预计算多抽取');
+                const messageId = f.context.chat.length;
+                f.context.chat.push(message());
+                await f.emit('MESSAGE_RECEIVED', messageId, 'normal');
+                assert.deepEqual(f.context.chat[messageId].extra.teahouse, { id: expected, favoriteId: expected });
+                await f.emit('GENERATION_ENDED');
+                await f.begin('normal', { native: false });
+                f.macro(); f.macro('我收藏的小剧场');
+                await f.ready(); await f.emit('GENERATION_ENDED');
+                assert.equal(f.settings.lastId, expected, '随后额外请求不推进正文历史');
+                assert.equal(f.settings.lastFavoriteId, expected);
+            }
+        });
+    }
+}
+
+test('正文开始通知与命令处理之间的预计算不能消耗正文身份', async () => {
+    const f = await fixture();
+    await f.emit('GENERATION_STARTED', 'normal', {}, false);
+    await f.begin('normal', { preview: true });
+    f.macro(); f.macro('我收藏的小剧场');
+    await f.emit('GENERATE_AFTER_DATA', {}, true);
+    assert.equal(f.saves, 0, '尚无正文组装时，预计算不抽取');
+    await f.emit('GENERATION_AFTER_COMMANDS', 'normal', {}, false);
+    f.macro(); f.macro('我收藏的小剧场'); await f.ready();
+    assert.equal(f.settings.lastId, 'A');
+    assert.equal(f.settings.lastFavoriteId, 'A');
+    f.context.chat.push(message()); await f.emit('MESSAGE_RECEIVED', 0, 'normal');
+    assert.deepEqual(f.context.chat[0].extra.teahouse, { id: 'A', favoriteId: 'A' });
+});
+
+test('预计算单独运行及正文结束后运行都不推进历史；继续生成仍沿用原剧场', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 2; i++) {
+        await f.begin('normal', { preview: true }); f.macro(); f.macro('我收藏的小剧场');
+        await f.emit('GENERATE_AFTER_DATA', {}, true);
+    }
+    assert.equal(f.saves, 0);
+    f.context.chat.push(message());
+    f.context.chat[0].extra.teahouse = { id: 'B', favoriteId: 'B' };
+    await f.begin('continue');
+    await f.begin('normal', { preview: true });
+    assert.equal(f.macro(), 'theatre B'); assert.equal(f.macro('我收藏的小剧场'), 'theatre B');
+    await f.ready(); await f.emit('GENERATE_AFTER_DATA', {}, true);
+    await f.emit('MESSAGE_RECEIVED', 0, 'appendFinal'); await f.emit('GENERATION_ENDED');
+    const saves = f.saves;
+    await f.begin('normal', { preview: true }); f.macro(); f.macro('我收藏的小剧场');
+    await f.emit('GENERATE_AFTER_DATA', {}, true);
+    assert.equal(f.saves, saves);
+    assert.deepEqual(f.context.chat[0].extra.teahouse, { id: 'B', favoriteId: 'B' });
+});
+
+test('正文等待剧场库加载时插入预计算，加载完成后仍按正文抽取', async () => {
+    let finish;
+    const f = await fixture(new Promise(resolve => { finish = resolve; }));
+    f.settings.lastId = 'A';
+    await f.emit('GENERATION_STARTED', 'normal', {}, false);
+    const waiting = f.emit('GENERATION_AFTER_COMMANDS', 'normal', {}, false);
+    await f.begin('normal', { preview: true }); f.macro();
+    finish(); await waiting;
+    assert.equal(f.macro(), 'theatre B');
+    await f.ready(); await f.emit('GENERATE_AFTER_DATA', {}, true);
+    f.context.chat.push(message()); await f.emit('MESSAGE_RECEIVED', 0, 'normal');
+    assert.equal(f.context.chat[0].extra.teahouse.id, 'B');
+});
 
 for (const streaming of [false, true]) {
     for (const extensionFirst of [false, true]) {
