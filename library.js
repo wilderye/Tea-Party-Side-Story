@@ -4,6 +4,7 @@ export const MAX_PACK_BYTES = 8 * 1024 * 1024;
 const idPattern = /^\d{16,22}$/;
 export function validateEntry(item) {
     if (!item || !idPattern.test(item.id) || !['standalone', 'preset'].includes(item.type)
+        || (item.gore !== undefined && typeof item.gore !== 'boolean')
         || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 100
         || typeof item.body !== 'string' || !item.body.trim() || item.body.length > 4000
         || typeof item.author !== 'string' || !item.author.trim() || item.author.length > 100
@@ -11,8 +12,9 @@ export function validateEntry(item) {
         throw new Error('剧场文件格式不正确');
     }
     return { id: item.id, title: item.title, type: item.type, body: item.body,
-        author: item.author, publishedAt: item.publishedAt };
+        author: item.author, publishedAt: item.publishedAt, ...(item.gore !== undefined ? { gore: item.gore } : {}) };
 }
+export const allowsContent = (item, showGore = false) => !!item && (showGore === true || item.gore !== true);
 export async function hash(text) {
     const bytes = new TextEncoder().encode(text);
     return sha256(bytes);
@@ -90,12 +92,12 @@ export function reconcileRandomOrder(previous, entries, random = Math.random) {
     const current = new Set(ids), known = new Set(previous);
     return previous.filter(id => current.has(id)).concat(ids.filter(id => !known.has(id)));
 }
-export function findEntries(entries, { tab, scope, type, query = '', favorites = {}, order }) {
+export function findEntries(entries, { tab, scope, type, query = '', favorites = {}, order, showGore = false }) {
     scope ??= tab === 'favorites' ? 'favorites' : 'community';
     type ??= tab === 'favorites' ? undefined : tab;
     const term = query.trim().toLocaleLowerCase();
     const positions = order && new Map(order.map((id, index) => [id, index]));
-    return [...entries.values()].filter(x => (!type || x.type === type)
+    return [...entries.values()].filter(x => allowsContent(x, showGore) && (!type || x.type === type)
         && (scope === 'favorites' ? Object.hasOwn(favorites, x.id) : isManuscript(x.id) === (scope === 'local'))
         && (!term || [x.title, x.body, x.author ?? ''].some(value => value.toLocaleLowerCase().includes(term))))
         .sort((a, b) => positions

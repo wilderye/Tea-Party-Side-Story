@@ -4,7 +4,8 @@
     min-height:0; padding:0; border:0; border-radius:8px; overflow:hidden;
     background:transparent; box-shadow:0 24px 64px #102f2850;
 }
-.popup.teahouse-dialog .popup-body { padding:0; height:100%; min-height:0; max-height:100%; }
+/* Keep the fixed dialog filled even when SillyTavern enables its Safari popup rules. */
+dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:0; max-height:100%; flex:1 1 0; }
 .popup.teahouse-dialog .popup-content { margin:0; padding:0; height:100%; min-height:0; overflow:hidden; }
 .popup.teahouse-dialog .popup-controls,.popup.teahouse-dialog .popup-button-close { display:none; }
 #teahouse-panel {
@@ -25,6 +26,15 @@
 #teahouse-panel button:disabled { opacity:.4; cursor:default; }
 #teahouse-panel :is(button,input,textarea,select):focus-visible { outline:2px solid var(--tea-coral); outline-offset:3px; }
 #teahouse-panel .tea-glyph { display:inline-flex; flex:none; }
+#teahouse-panel .tea-content-tag { display:inline-block; margin-left:8px; padding:0 8px; border:1px solid currentColor; border-radius:4px; font:12px/16px var(--tea-ui); vertical-align:middle; opacity:.85; white-space:nowrap; }
+#teahouse-panel .tea-content-preference { padding:16px 0; border-bottom:1px solid var(--tea-line); }
+#teahouse-panel .tea-content-preference .tea-setting-row { border:0; padding-top:0; }
+#teahouse-panel .tea-setting-description { color:var(--tea-muted); font-size:12px; line-height:24px; }
+#teahouse-panel input[role=switch] { appearance:none; position:relative; flex:none; width:48px; height:24px; margin:8px 0; padding:0; border:1px solid var(--tea-muted); border-radius:16px; background:var(--tea-line); cursor:pointer; }
+#teahouse-panel input[role=switch]::after { content:''; position:absolute; width:16px; height:16px; top:3px; left:3px; border-radius:50%; background:var(--tea-paper); }
+#teahouse-panel input[role=switch]::before { content:none; display:none; }
+#teahouse-panel input[role=switch]:checked { background:var(--tea-forest); border-color:var(--tea-forest); }
+#teahouse-panel input[role=switch]:checked::after { left:27px; }
 #teahouse-panel .tea-glyph svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
 #teahouse-panel .tea-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:40px; min-width:40px; height:40px; border-radius:50%; }
 #teahouse-panel .tea-icon:hover:not(:disabled) { background:#183e360c; }
@@ -91,7 +101,8 @@
 #teahouse-panel .tea-article-meta { margin-top:8px; font-size:12px; line-height:24px; color:var(--tea-muted); }
 #teahouse-panel .tea-art { position:relative; flex:none; width:248px; height:184px; display:grid; place-items:center; isolation:isolate; }
 #teahouse-panel .tea-art::before { content:''; position:absolute; z-index:-1; width:160px; height:160px; border-radius:50%; right:24px; top:8px; background:var(--tea-yellow); }
-#teahouse-panel .tea-art::after { content:'✳'; position:absolute; bottom:0; right:0; color:var(--tea-coral); font:48px/48px Georgia,serif; }
+#teahouse-panel .tea-art-mark { position:absolute; bottom:0; right:0; color:var(--tea-coral); }
+#teahouse-panel .tea-art-mark svg { width:48px; height:48px; stroke-width:1; stroke-linecap:butt; }
 #teahouse-panel .tea-art img { width:248px; height:184px; object-fit:contain; mix-blend-mode:multiply; transform:rotate(-5deg); }
 #teahouse-panel .tea-body { font:var(--tea-body-size)/1.5 var(--tea-ui); overflow-wrap:anywhere; color:var(--tea-ink); }
 #teahouse-panel .tea-reading>.tea-body { padding:0 40px 32px; }
@@ -114,7 +125,7 @@
 #teahouse-panel .tea-body a { color:#925039; text-decoration:underline; text-underline-offset:3px; }
 #teahouse-panel .tea-body code { font:.875em/1.5 Consolas,monospace; color:inherit; background:#e8e9dd; padding:2px 4px; border-radius:3px; white-space:break-spaces; }
 #teahouse-panel .tea-body pre { margin:16px 0; padding:16px; background:#ecece1; overflow:auto; border-radius:4px; tab-size:4; }
-#teahouse-panel .tea-body pre code { padding:0; background:none; white-space:pre; overflow-wrap:normal; }
+#teahouse-panel .tea-body pre code { padding:0; border:0; background:none; white-space:pre-wrap; overflow-wrap:anywhere; }
 #teahouse-panel .tea-body hr { border:0; border-top:1px solid var(--tea-line); margin:24px 0; }
 #teahouse-panel .tea-table-scroll { overflow-x:auto; margin:16px 0; }
 #teahouse-panel .tea-body table { border-collapse:collapse; min-width:100%; font-size:.875em; }
@@ -279,7 +290,7 @@
     #teahouse-panel .tea-feed-entry .tea-art { width:88px; height:96px; margin-top:16px; }
     #teahouse-panel .tea-feed-entry .tea-art img { width:96px; height:88px; }
     #teahouse-panel .tea-feed-entry .tea-art::before { width:72px; height:72px; right:0; top:0; }
-    #teahouse-panel .tea-feed-entry .tea-art::after { font-size:24px; line-height:24px; bottom:0; }
+    #teahouse-panel .tea-feed-entry .tea-art-mark svg { width:24px; height:24px; }
     #teahouse-panel .tea-excerpt { max-height:320px; overflow:hidden; }
     #teahouse-panel .tea-excerpt .tea-body { display:flow-root; }
     #teahouse-panel .tea-excerpt .tea-body>:last-child { margin-bottom:0; }
@@ -297,7 +308,7 @@
     #teahouse-panel .tea-reader-footer { padding:8px 18px calc(8px + env(safe-area-inset-bottom)); }
     #teahouse-panel .tea-desktop-setting { display:none; }
     #teahouse-panel .tea-setting-row { flex-wrap:wrap; }
-    #teahouse-panel .tea-setting-row select { font-size:16px; }
+    #teahouse-panel .tea-setting-row select { font-size:14px; height:32px; padding:0 12px; }
     #teahouse-panel .tea-settings-note { padding:16px 18px calc(16px + env(safe-area-inset-bottom)); }
 }
 @media(prefers-reduced-motion:reduce) { #teahouse-panel * { scroll-behavior:auto!important; transition:none!important; } }

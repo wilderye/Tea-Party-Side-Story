@@ -1,5 +1,5 @@
 import { registerTheatreMacros, theatreMacros } from './macro-registration.js';
-import { selectTheatre, favoritePool } from './library.js';
+import { selectTheatre, favoritePool, allowsContent } from './library.js';
 
 // Prompt assembly and delivery of a native reply have different lifetimes.
 // An extension may assemble another prompt while MESSAGE_RECEIVED is still running.
@@ -126,12 +126,23 @@ export async function registerTheatreGeneration(ctx, state, loaded, saveSettings
     function theatreMacro(kind) {
         if (!settings.enabled || resolving) return '';
         const active = frame?.chatId === chatId() ? frame : null;
-        if (active && Object.hasOwn(active.texts, kind)) return active.texts[kind];
-        const all = state.entries;
+        if (active && Object.hasOwn(active.texts, kind)) {
+            const cached = state.entries.get(active.choices[kind]);
+            if (cached && !allowsContent(cached, settings.showGore)) {
+                active.texts[kind] = ''; delete active.choices[kind]; active.missing.add(kind);
+            }
+            return active.texts[kind];
+        }
+        const all = new Map([...state.entries].filter(([, item]) => allowsContent(item, settings.showGore)));
         const pool = kind === 'community' ? all : favoritePool(all, settings.favorites);
         const lastKey = kind === 'community' ? 'lastId' : 'lastFavoriteId';
         const originalKey = kind === 'community' ? 'id' : 'favoriteId';
-        const original = active ? all.get(active.original[originalKey]) : null;
+        const originalId = active?.original[originalKey];
+        const original = active ? all.get(originalId) : null;
+        // A filtered continuation must not inject a different story into the old reply.
+        if (originalId && state.entries.has(originalId) && !all.has(originalId)) {
+            active.texts[kind] = ''; active.missing.add(kind); return '';
+        }
         const selected = active
             ? (original?.type === 'preset' ? original : selectTheatre(pool, settings[lastKey]))
             : [...pool.values()].find(x => x.type === 'preset');

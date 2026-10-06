@@ -27,6 +27,7 @@ const paths = {
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
     copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
     cup: '<path d="M4 9h14v6a6 6 0 0 1-12 0V9M18 10h2a3 3 0 0 1 0 6h-2M3 22h18M9 6c-3-2 3-3 0-5M14 6c-3-2 3-3 0-5"/>',
+    asterisk: '<path d="M12 4v16M4 12h16M6.35 6.35l11.3 11.3M6.35 17.65l11.3-11.3"/>',
 };
 function glyph(name) {
     const holder = element('span', undefined, 'tea-glyph');
@@ -40,7 +41,8 @@ function iconButton(name, label, action) {
 function art() {
     const node = element('div', undefined, 'tea-art'); node.setAttribute('aria-hidden', 'true');
     const img = element('img'); img.src = new URL('./assets/tea-party.svg', import.meta.url).href; img.alt = '';
-    node.append(img); return node;
+    const mark = glyph('asterisk'); mark.classList.add('tea-art-mark');
+    node.append(img, mark); return node;
 }
 const typeLabel = type => type === 'preset' ? '随文剧场' : '独立剧场';
 const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿' })[scope];
@@ -53,7 +55,7 @@ export function createTheatrePanel(ctx, state, actions) {
     const expanded = new Set();
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
-    const scopeEntries = value => findEntries(state.entries, { scope: value, favorites: state.settings.favorites });
+    const scopeEntries = value => findEntries(state.entries, { scope: value, favorites: state.settings.favorites, showGore: state.settings.showGore });
     function syncRandomOrders() {
         const scopes = new Set(randomOrders.keys());
         if (panel && sortMode() === 'random') scopes.add(scope);
@@ -68,7 +70,7 @@ export function createTheatrePanel(ctx, state, actions) {
     const pageStart = () => media?.matches ? page * mobilePageSize() : desktopStarts[page] ?? 0;
     const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : desktopStarts.length;
     const pageForIndex = index => media?.matches ? Math.max(0, Math.floor(index / mobilePageSize())) : Math.max(0, desktopStarts.findLastIndex(start => start <= index));
-    const matches = () => findEntries(state.entries, { scope, type, query, favorites: state.settings.favorites,
+    const matches = () => findEntries(state.entries, { scope, type, query, favorites: state.settings.favorites, showGore: state.settings.showGore,
         order: sortMode() === 'random' ? randomOrders.get(scope) : undefined });
     async function confirm(text, actionLabel) {
         return await ctx().callGenericPopup(element('div', text, 'tea-confirm'), ctx().POPUP_TYPE.CONFIRM, '',
@@ -185,7 +187,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const oldSearch = panel.querySelector('input[type="search"]');
         const focused = oldSearch && document.activeElement === oldSearch;
         const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd, oldSearch.selectionDirection] : null;
-        const focusedControl = panel.contains(document.activeElement) ? document.activeElement.closest('button, select') : null;
+        const focusedControl = panel.contains(document.activeElement) ? document.activeElement.closest('button, select, input[role="switch"]') : null;
         const focusKey = focusedControl?.getAttribute('aria-label');
         observer?.disconnect(); panel.replaceChildren(); panel.dataset.mode = mode;
         panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`);
@@ -222,19 +224,20 @@ export function createTheatrePanel(ctx, state, actions) {
             search.focus({ preventScroll: true });
             search.setSelectionRange(...selection);
         }
-        else if (focusKey) [...panel.querySelectorAll('button, select')].find(b => b.getAttribute('aria-label') === focusKey && b.getClientRects().length)?.focus({ preventScroll: true });
+        else if (focusKey) [...panel.querySelectorAll('button, select, input[role="switch"]')].find(b => b.getAttribute('aria-label') === focusKey && b.getClientRects().length)?.focus({ preventScroll: true });
         observer?.observe(list);
         for (const body of panel.querySelectorAll('.tea-feed-entry .tea-body')) observer?.observe(body);
         measureBodies();
     }
     function emptyText() {
         return query.trim() ? '没有找到符合条件的小剧场，换个词试试。' : scope === 'favorites' ? '这里还没有符合分类的收藏。'
-            : scope === 'local' ? '点击上方加号，写下你的第一份手稿。\n亲笔手稿仅保存在本地，不会上传至茶会选集分享。' : '茶会选集里还没有这类剧场，可以检查更新。';
+            : scope === 'local' ? '点击上方加号，写下你的第一份手稿。\n亲笔手稿仅保存在本地，不会上传至茶会选集分享。' : '当前分类和内容偏好下没有可显示的剧场。';
     }
     function catalogItem(item, number = 1) {
         const row = element('button', undefined, 'tea-story'); row.type = 'button';
         const text = element('span');
         text.append(element('span', item.title, 'tea-story-title'), element('small', `${typeLabel(item.type)} · ${item.author || '我'}`));
+        if (item.gore) text.firstChild.append(element('span', 'G 向', 'tea-content-tag'));
         row.append(element('span', String(number).padStart(2, '0'), 'tea-number'), text);
         return row;
     }
@@ -425,6 +428,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const kicker = element('div', undefined, 'tea-article-type');
         if (number) kicker.append(element('span', String(number).padStart(2, '0'), 'tea-number'));
         kicker.append(element('span', typeLabel(item.type)));
+        if (item.gore) kicker.append(element('span', 'G 向', 'tea-content-tag'));
         title.append(kicker, element('h2', item.title, 'tea-article-title'), element('p', isManuscript(item.id) ? '亲笔手稿 / 我' : `社区投稿 / ${item.author}`, 'tea-article-meta'));
         head.append(title); if (illustration) head.append(art()); return head;
     }
@@ -513,6 +517,19 @@ export function createTheatrePanel(ctx, state, actions) {
         updateStatus.setAttribute('role', 'status'); updateStatus.setAttribute('aria-live', 'polite');
         controls.append(element('strong', '更新剧场库'), button, element('small', '启动酒馆时会自动更新。'), updateStatus);
         update.append(controls); area.append(update);
+        const preference = element('section', undefined, 'tea-content-preference');
+        const label = element('label', undefined, 'tea-setting-row');
+        const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = state.settings.showGore === true;
+        toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', 'tea-gore-description');
+        toggle.setAttribute('aria-label', '显示 G 向内容');
+        label.append(element('strong', '显示 G 向内容'), toggle);
+        const description = element('p', '开启后，插件列表和随文剧场随机将会展示/抽选相关内容。', 'tea-setting-description');
+        description.id = 'tea-gore-description';
+        toggle.addEventListener('change', () => {
+            state.settings.showGore = toggle.checked; actions.saveSettings();
+            page = 0; selectedId = null; returnScroll = 0; expanded.clear(); render();
+        });
+        preference.append(label, element('p', '血腥、猎奇等内容', 'tea-setting-description'), description); area.append(preference);
         function choice(label, values, current, set, className = '') {
             const row = element('div', undefined, `tea-setting-row ${className}`), buttons = element('div', undefined, 'tea-choice'); buttons.setAttribute('aria-label', label);
             for (const [value, text] of values) { const button = textButton(text, () => { set(value); actions.saveSettings(); render(); }); button.setAttribute('aria-pressed', String(current === value)); buttons.append(button); }

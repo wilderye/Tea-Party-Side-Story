@@ -42,6 +42,27 @@ async function fixture(loaded = Promise.resolve(), beforeRegister = () => {}) {
 const message = (text = '正文') => ({ mes: text, is_user: false, extra: { other: 'preserved' }, swipe_id: 0,
     swipes: [text], swipe_info: [{ extra: { other: 'preserved' } }] });
 
+test('两个宏默认过滤G向，开启后可抽取，关闭后续写不重新注入也不换成别篇',async()=>{
+    const f = await fixture(); f.entries.get('A').gore = true;
+    for(const name of ['茶话会小剧场','我收藏的小剧场']) assert.equal(f.macro(name),'theatre B');
+    await f.begin(); assert.equal(f.macro(),'theatre B'); assert.equal(f.macro('我收藏的小剧场'),'theatre B'); await f.emit('GENERATION_ENDED');
+    f.settings.showGore = true; await f.begin();
+    assert.equal(f.macro(),'theatre A'); assert.equal(f.macro('我收藏的小剧场'),'theatre A');
+    await f.ready(); f.context.chat.push(message()); await f.emit('MESSAGE_RECEIVED',0,'normal'); await f.emit('GENERATION_ENDED');
+    f.settings.showGore = false; await f.begin('continue');
+    assert.equal(f.macro(),''); assert.equal(f.macro('我收藏的小剧场'),'');
+    assert.equal(f.context.chat[0].mes,'正文'); assert.deepEqual(f.settings.favorites,{A:1,B:2});
+    await f.emit('GENERATION_ENDED'); await f.begin(); assert.equal(f.macro(),'theatre B');
+});
+
+test('全部被过滤时不回退到G向；同轮缓存及工具续接也不能绕过关闭开关',async()=>{
+    const f = await fixture(); for(const item of f.entries.values()) item.gore=true;
+    await f.begin(); assert.equal(f.macro(),''); await f.emit('GENERATION_ENDED');
+    f.settings.showGore=true; await f.begin(); assert.match(f.macro(),/theatre/);
+    f.settings.showGore=false; assert.equal(f.macro(),'');
+    await f.emit('TOOL_CALLS_PERFORMED'); await f.begin(); assert.equal(f.macro(),'');
+});
+
 for (const previewFirst of [false, true]) {
     for (const previewFinishesFirst of [false, true]) {
         test(`正文与预计算重叠仍逐条换剧场：预计算先展开宏=${previewFirst}，先完成=${previewFinishesFirst}`, async () => {

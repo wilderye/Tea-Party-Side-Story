@@ -8,6 +8,7 @@ const ctx = () => SillyTavern.getContext();
 const settings = ctx().extensionSettings.teahouse ??= { favorites: {}, pageSize: 5, lastId: null, libraryUrl: '' };
 settings.favorites ??= {};
 settings.enabled ??= true;
+settings.showGore = settings.showGore === true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
 if (!['left', 'right'].includes(settings.edgeSide)) settings.edgeSide = 'left';
