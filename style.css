@@ -166,8 +166,19 @@
 #teahouse-edge { position:fixed; left:0; top:40dvh; z-index:1000; width:24px; height:64px; padding:0; border:1px solid var(--SmartThemeBorderColor); border-left:0; border-radius:0 8px 8px 0; background:var(--SmartThemeBlurTintColor); color:var(--SmartThemeBodyColor); cursor:pointer; opacity:.7; }
 #teahouse-edge:hover,#teahouse-edge:focus-visible { opacity:1; }
 #teahouse-edge[data-side="right"] { left:auto; right:0; border-left:1px solid var(--SmartThemeBorderColor); border-right:0; border-radius:8px 0 0 8px; }
-.teahouse-edge-sides { margin-left:24px; display:flex; gap:16px; }
+.teahouse-edge-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.teahouse-edge-row>.checkbox_label { flex:none; }
+.teahouse-edge-sides { display:flex; flex:none; gap:2px; padding:2px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; background:color-mix(in srgb,var(--SmartThemeBodyColor) 5%,transparent); }
 .teahouse-edge-sides[hidden] { display:none; }
+.teahouse-edge-side { position:relative; display:block; margin:0; cursor:pointer; }
+.teahouse-edge-side input[type=radio] { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:inherit; }
+.teahouse-edge-side span { display:block; min-width:50px; padding:3px 9px; border:1px solid transparent; border-radius:4px; color:var(--SmartThemeBodyColor); font-size:13px; line-height:20px; text-align:center; white-space:nowrap; }
+.teahouse-edge-side input:checked+span { border-color:var(--SmartThemeQuoteColor); background:color-mix(in srgb,var(--SmartThemeQuoteColor) 20%,transparent); font-weight:600; }
+.teahouse-edge-side input:focus-visible+span { outline:2px solid var(--SmartThemeQuoteColor); outline-offset:2px; }
+.teahouse-edge-side:has(input:disabled) { opacity:.5; cursor:default; }
+@media(pointer:coarse) {
+    .teahouse-edge-side span { min-height:44px; display:flex; align-items:center; justify-content:center; }
+}
 .teahouse-settings-controls { display:flex; flex-direction:column; gap:8px; padding:8px 0; }
 .teahouse-settings-controls .checkbox_label { margin:0; }
 .teahouse-settings-controls .menu_button { width:fit-content; white-space:nowrap; }

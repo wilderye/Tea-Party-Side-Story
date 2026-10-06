@@ -240,23 +240,25 @@ if (settingsHost) {
     const controls = element('div', undefined, 'teahouse-settings-controls');
     content.append(controls); drawer.append(header, content); section.append(drawer);
     settingsSection = { controls: {} };
+    const edgeRow = element('div', undefined, 'teahouse-edge-row');
     for (const [name, label] of [['enabled','启用插件'], ['qrEnabled','快捷回复入口'], ['edgeEnabled','侧边入口']]) {
         const row = element('label', undefined, 'checkbox_label'); const input = element('input'); input.type = 'checkbox';
         input.addEventListener('change', () => name === 'enabled' ? setEnabled(input.checked) : setEntrance(name, input.checked));
-        row.append(input, element('span', label)); controls.append(row); settingsSection.controls[name] = input;
+        row.append(input, element('span', label));
+        (name === 'edgeEnabled' ? edgeRow : controls).append(row); settingsSection.controls[name] = input;
     }
     settingsSection.edgeSides = element('div', undefined, 'teahouse-edge-sides');
     settingsSection.edgeSides.setAttribute('role', 'group');
     settingsSection.edgeSides.setAttribute('aria-label', '侧边入口位置');
     settingsSection.edgeSideInputs = [];
-    for (const [value, label] of [['left', '左侧边'], ['right', '右侧边']]) {
-        const row = element('label', undefined, 'checkbox_label'), input = element('input');
+    for (const [value, label] of [['left', '左侧'], ['right', '右侧']]) {
+        const row = element('label', undefined, 'teahouse-edge-side'), input = element('input');
         input.type = 'radio'; input.name = 'teahouse-edge-side'; input.value = value;
         input.addEventListener('change', () => { if (input.checked) setEntrance('edgeSide', value); });
         row.append(input, element('span', label)); settingsSection.edgeSides.append(row);
         settingsSection.edgeSideInputs.push(input);
     }
-    controls.append(settingsSection.edgeSides);
+    edgeRow.append(settingsSection.edgeSides); controls.append(edgeRow);
     settingsSection.open = textButton('打开剧场', () => ui.open()); settingsSection.open.id = 'teahouse-open';
     settingsSection.open.classList.add('menu_button'); controls.append(settingsSection.open);
     settingsSection.update = textButton('更新茶会选集', updateLibrary);
