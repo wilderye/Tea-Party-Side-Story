@@ -75,14 +75,32 @@ export function pruneCommunityFavorites(favorites, community) {
 export function favoritePool(entries, favorites) {
     return new Map([...entries].filter(([id, item]) => item.type === 'preset' && Object.hasOwn(favorites, id)));
 }
-export function findEntries(entries, { tab, scope, type, query = '', favorites = {} }) {
+// Keep only IDs here so edits always read the current story from the library.
+// An absent order starts a new shuffle; an existing order keeps its survivors
+// and appends new stories, including when the previous list was empty.
+export function reconcileRandomOrder(previous, entries, random = Math.random) {
+    const ids = entries.map(item => item.id);
+    if (previous === undefined) {
+        for (let i = ids.length - 1; i > 0; i--) {
+            const j = Math.floor(random() * (i + 1));
+            [ids[i], ids[j]] = [ids[j], ids[i]];
+        }
+        return ids;
+    }
+    const current = new Set(ids), known = new Set(previous);
+    return previous.filter(id => current.has(id)).concat(ids.filter(id => !known.has(id)));
+}
+export function findEntries(entries, { tab, scope, type, query = '', favorites = {}, order }) {
     scope ??= tab === 'favorites' ? 'favorites' : 'community';
     type ??= tab === 'favorites' ? undefined : tab;
     const term = query.trim().toLocaleLowerCase();
+    const positions = order && new Map(order.map((id, index) => [id, index]));
     return [...entries.values()].filter(x => (!type || x.type === type)
         && (scope === 'favorites' ? Object.hasOwn(favorites, x.id) : isManuscript(x.id) === (scope === 'local'))
         && (!term || [x.title, x.body, x.author ?? ''].some(value => value.toLocaleLowerCase().includes(term))))
-        .sort((a, b) => scope === 'favorites'
+        .sort((a, b) => positions
+            ? (positions.get(a.id) ?? positions.size) - (positions.get(b.id) ?? positions.size)
+            : scope === 'favorites'
             ? favorites[b.id] - favorites[a.id] || b.id.localeCompare(a.id)
             : Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || b.id.localeCompare(a.id));
 }

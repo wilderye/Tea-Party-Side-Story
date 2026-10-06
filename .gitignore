@@ -1,5 +1,19 @@
 dist/
 node_modules/
 docs/
-tests/
+# Local design drafts and reference images; runtime assets stay in assets/.
+/preview_ui_*.html
+/theme-concept/
+/wonderland-concept-assets/
+/pic.jpg
+/wall2.jpg
+tests/*
+!tests/update-regression.test.js
+!tests/macro-empty.test.js
+!tests/panel-flow.browser.cjs
+!tests/qr-entry.test.js
+!tests/markdown.test.js
+!tests/personal.test.js
+!tests/random-sort.test.js
+!tests/generation.test.js
 README.md

@@ -1,26 +1,55 @@
-import { registerTheatreMacros } from './macro-registration.js';
+import { registerTheatreGeneration } from './generation.js';
 import { createLibraryRequest } from './download-access.js';
-import { validateManifest, readPack, collectPacks, selectTheatre, readManuscripts, pruneCommunityFavorites, favoritePool } from './library.js';
+import { validateManifest, readPack, collectPacks, readManuscripts, pruneCommunityFavorites } from './library.js';
 import { createTheatrePanel, element, textButton } from './panel.js';
 import { syncQrEntry } from './qr-entry.js';
 
 const ctx = () => SillyTavern.getContext();
-const settings = ctx().extensionSettings.teahouse ??= { favorites: {}, pageSize: 10, lastId: null, libraryUrl: '' };
+const settings = ctx().extensionSettings.teahouse ??= { favorites: {}, pageSize: 5, lastId: null, libraryUrl: '' };
 settings.favorites ??= {};
 settings.enabled ??= true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
+if (!['left', 'right'].includes(settings.edgeSide)) settings.edgeSide = 'left';
 settings.lastFavoriteId ??= null;
+if (!['time', 'random'].includes(settings.sortMode)) settings.sortMode = 'time';
 const saveSettings = () => ctx().saveSettingsDebounced();
 const state = {
     settings, community: new Map(), manuscripts: new Map(), personalError: '', saving: false,
-    updating: false, status: '',
+    updating: false, status: '', statusKind: '',
     get entries() { return new Map([...this.community, ...this.manuscripts]); },
 };
-let manifest = null, ui, updateController, qrTask = Promise.resolve();
+let manifest = null, ui, updateController, settingsSection, qrTask = Promise.resolve();
 const packName = pack => `teahouse-${pack.sha256}.json`;
 const personalFile = 'teahouse-manuscripts.json';
-function notify(message) { state.status = message; ui?.refresh(); }
+let statusTimer;
+function notify(message, kind = '', duration = kind === 'update' ? 5000 : 0) {
+    clearTimeout(statusTimer);
+    state.status = message; state.statusKind = kind; refreshSettings(); ui?.refresh();
+    if (message && duration > 0) {
+        statusTimer = setTimeout(() => notify(''), duration);
+        statusTimer?.unref?.();
+    }
+}
+export function setLibraryUrl(value) {
+    const next = value.trim();
+    if (next === settings.libraryUrl) return;
+    settings.libraryUrl = next;
+    updateController?.abort();
+    saveSettings();
+    if (state.statusKind === 'update') notify('');
+}
+function libraryBase(value) {
+    if (!value?.trim()) throw new Error('请先在酒馆扩展设置中填写剧场库地址');
+    let base;
+    try { base = new URL(value.trim()); }
+    catch { throw new Error('剧场库地址格式不正确，请填写完整的 HTTPS 地址'); }
+    if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
+        throw new Error('请填写不含账号、密码、查询参数或片段的 HTTPS 剧场库地址');
+    }
+    if (!base.pathname.endsWith('/')) base.pathname += '/';
+    return base;
+}
 async function request(url, options = {}) {
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -69,28 +98,34 @@ const loaded = Promise.all([loadCommunity(), loadManuscripts()]);
 export async function updateLibrary() {
     if (!settings.enabled || state.updating) return;
     state.updating = true;
+    refreshSettings();
     const controller = updateController = new AbortController();
     try {
         await loaded;
         if (controller.signal.aborted) return;
-        const base = new URL(settings.libraryUrl);
-        if (base.protocol !== 'https:' || base.username || base.password) throw new Error('请在扩展设置中填写 HTTPS 剧场库地址');
-        if (!base.pathname.endsWith('/')) base.pathname += '/';
-        notify('正在检查更新…');
+        const base = libraryBase(settings.libraryUrl);
+        notify('正在检查更新…', 'update', 0);
         const download = await createLibraryRequest(base, (url, options) => request(url, { ...options, signal: controller.signal }));
         const next = validateManifest(await (await download('manifest.json')).json());
-        if (manifest && JSON.stringify(next) === JSON.stringify(manifest)) { notify('茶会选集已是最新'); return; }
+        if (manifest && JSON.stringify(next) === JSON.stringify(manifest)) { notify('茶会选集已是最新', 'update'); return; }
         const oldPaths = new Set(manifest?.packs.map(x => x.path) ?? []);
         const packs = [], downloaded = [];
         for (const [index, pack] of next.packs.entries()) {
             if (controller.signal.aborted) return;
-            notify(`正在更新 ${index + 1} / ${next.packs.length}`);
-            const existing = oldPaths.has(pack.path);
-            const text = await (existing
-                ? await request(`/user/files/${packName(pack)}`, { signal: controller.signal })
-                : await download(new URL(pack.path, base))).text();
-            packs.push(await readPack(text, pack));
-            if (!existing) downloaded.push({ pack, text });
+            notify(`正在更新 ${index + 1} / ${next.packs.length}`, 'update', 0);
+            let text, items, downloadedPack = false;
+            if (oldPaths.has(pack.path)) {
+                try {
+                    text = await (await request(`/user/files/${packName(pack)}`, { signal: controller.signal })).text();
+                    items = await readPack(text, pack);
+                } catch (error) { if (controller.signal.aborted) throw error; }
+            }
+            if (!items) {
+                text = await (await download(new URL(pack.path, base))).text();
+                items = await readPack(text, pack); downloadedPack = true;
+            }
+            packs.push(items);
+            if (downloadedPack) downloaded.push({ pack, text });
         }
         const nextEntries = collectPacks(packs);
         for (const { pack, text } of downloaded) {
@@ -103,10 +138,10 @@ export async function updateLibrary() {
         state.community = nextEntries; manifest = next;
         pruneCommunityFavorites(settings.favorites, state.community);
         saveSettings();
-        notify(`茶会选集更新完成，共 ${state.community.size} 条`);
+        notify(`茶会选集更新完成，共 ${state.community.size} 条`, 'update');
     } catch (error) {
-        if (!controller.signal.aborted) notify(`更新未完成：${error.message}。原有剧场保持可用。`);
-    } finally { state.updating = false; updateController = null; ui?.refresh(); }
+        if (!controller.signal.aborted) notify(`更新未完成：${error.message}。${manifest ? '原有剧场保持可用。' : '请检查地址和网络后重试。'}`, 'update');
+    } finally { state.updating = false; updateController = null; refreshSettings(); ui?.refresh(); }
 }
 
 async function writeManuscripts(next) {
@@ -147,66 +182,12 @@ function toggleFavorite(id) {
     saveSettings();
 }
 
-// A generation frame belongs to one character reply, with one independent draw per macro.
-let frame = null, preview = false, toolResume = false, resolving = false;
 const events = ctx().eventTypes;
-ctx().eventSource.on(events.GENERATION_AFTER_COMMANDS, async (type, _options, dryRun) => {
-    preview = !!dryRun;
-    if (dryRun) return;
-    await loaded;
-    if (!settings.enabled) { frame = null; return; }
-    if (toolResume && frame) { toolResume = false; return; }
-    toolResume = false;
-    frame = { choices: {}, texts: {}, used: new Set(), original: type === 'continue' ? ctx().chat.at(-1)?.extra?.teahouse ?? {} : {} };
-});
-ctx().eventSource.on(events.TOOL_CALLS_PERFORMED, () => { if (frame?.used.size) toolResume = true; });
-ctx().eventSource.on(events.GENERATION_ENDED, () => {
-    const streaming = ctx().streamingProcessor;
-    if (streaming && streaming.type !== 'impersonate') recordTheatre(streaming.messageId);
-    if (!toolResume) frame = null;
-    preview = false;
-});
-ctx().eventSource.on(events.CHAT_CHANGED, () => { frame = null; preview = false; toolResume = false; });
-function theatreMacro(kind) {
-    if (!settings.enabled || resolving) return '';
-    const active = !preview && frame;
-    if (active && Object.hasOwn(frame.texts, kind)) return frame.texts[kind];
-    const all = kind === 'community' ? state.community : state.entries;
-    const pool = kind === 'community' ? all : favoritePool(all, settings.favorites);
-    const lastKey = kind === 'community' ? 'lastId' : 'lastFavoriteId';
-    const originalKey = kind === 'community' ? 'id' : 'favoriteId';
-    const original = active ? all.get(frame.original[originalKey]) : null;
-    // Continuing an existing reply survives unfavoriting, but not deletion or a type change.
-    const selected = active
-        ? (original?.type === 'preset' ? original : selectTheatre(pool, settings[lastKey]))
-        : [...pool.values()].find(x => x.type === 'preset');
-    if (!selected) { if (active) frame.texts[kind] = ''; return ''; }
-    resolving = true;
-    let text;
-    try { text = ctx().substituteParams(selected.body); } finally { resolving = false; }
-    if (active) {
-        frame.choices[kind] = selected.id; frame.texts[kind] = text; frame.used.add(kind);
-        settings[lastKey] = selected.id; saveSettings();
-    }
-    return text;
-}
-await registerTheatreMacros(ctx(), { community: () => theatreMacro('community'), favorites: () => theatreMacro('favorites') });
-function recordTheatre(messageId) {
-    if (!settings.enabled || !frame?.used.size || preview) return;
-    const message = ctx().chat[messageId];
-    if (!message || message.is_user || message.is_system) return;
-    const record = {};
-    if (frame.used.has('community')) record.id = frame.choices.community;
-    if (frame.used.has('favorites')) record.favoriteId = frame.choices.favorites;
-    message.extra ??= {}; message.extra.teahouse = record;
-    const swipe = message.swipe_info?.[message.swipe_id];
-    if (swipe) { swipe.extra ??= {}; swipe.extra.teahouse = { ...record }; }
-}
-ctx().eventSource.on(events.MESSAGE_RECEIVED, recordTheatre);
+const generation = await registerTheatreGeneration(ctx, state, loaded, saveSettings);
 
 export function setEnabled(value) {
     settings.enabled = value;
-    if (!value) { updateController?.abort(); frame = null; toolResume = false; notify('插件已停用'); }
+    if (!value) { updateController?.abort(); generation.reset(); notify('插件已停用'); }
     else notify('');
     saveSettings(); syncEntrances(); refreshSettings(); ui?.refresh();
 }
@@ -218,7 +199,8 @@ function syncEntrances() {
     if (settings.enabled && settings.edgeEnabled) {
         const edge = textButton('', () => ui.open()); edge.id = 'teahouse-edge'; edge.title = '茶话会小剧场';
         edge.setAttribute('aria-label', '打开茶话会小剧场');
-        const icon = element('i', undefined, 'fa-solid fa-chevron-right'); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
+        edge.dataset.side = settings.edgeSide;
+        const icon = element('i', undefined, `fa-solid fa-chevron-${settings.edgeSide === 'right' ? 'left' : 'right'}`); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
         document.body.append(edge);
     }
     qrTask = qrTask.catch(() => {}).then(() => syncQrEntry(globalThis.quickReplyApi, settings.enabled && settings.qrEnabled))
@@ -226,37 +208,65 @@ function syncEntrances() {
 }
 ui = createTheatrePanel(ctx, state, {
     loaded, updateLibrary, saveManuscript, deleteManuscript, toggleFavorite, saveSettings,
-    setEnabled, setEntrance,
 });
 ctx().SlashCommandParser.addCommandObject(ctx().SlashCommand.fromProps({
     name: 'teahouse', helpString: '打开茶话会小剧场', callback: async () => { if (settings.enabled) await ui.open(); return ''; },
 }));
 if (events.APP_READY) ctx().eventSource.on(events.APP_READY, syncEntrances);
 
-let settingsSection;
+
 function refreshSettings() {
     if (!settingsSection) return;
     for (const [name, input] of Object.entries(settingsSection.controls)) {
         input.checked = settings[name]; input.disabled = name !== 'enabled' && !settings.enabled;
     }
+    settingsSection.edgeSides.hidden = !settings.edgeEnabled;
+    for (const input of settingsSection.edgeSideInputs) {
+        input.checked = settings.edgeSide === input.value;
+        input.disabled = !settings.enabled || !settings.edgeEnabled;
+    }
     settingsSection.open.disabled = !settings.enabled;
+    settingsSection.update.disabled = !settings.enabled || state.updating;
+    settingsSection.status.textContent = state.statusKind === 'update' ? state.status : '';
+    settingsSection.status.hidden = !settingsSection.status.textContent;
 }
 const settingsHost = document.querySelector('#extensions_settings2') ?? document.querySelector('#extensions_settings');
 if (settingsHost) {
-    const section = element('div', undefined, 'extension_container teahouse-settings');
-    section.append(element('h3', '茶话会小剧场'));
+    const section = element('div', undefined, 'teahouse-settings');
+    const drawer = element('div', undefined, 'inline-drawer');
+    const header = element('div', undefined, 'inline-drawer-toggle inline-drawer-header');
+    header.append(element('b', '茶话会小剧场'), element('div', undefined, 'inline-drawer-icon fa-solid fa-circle-chevron-down down'));
+    const content = element('div', undefined, 'inline-drawer-content');
+    const controls = element('div', undefined, 'teahouse-settings-controls');
+    content.append(controls); drawer.append(header, content); section.append(drawer);
     settingsSection = { controls: {} };
-    for (const [name, label] of [['enabled','启用插件'], ['qrEnabled','启用 QR 入口'], ['edgeEnabled','启用侧边折叠']]) {
+    for (const [name, label] of [['enabled','启用插件'], ['qrEnabled','快捷回复入口'], ['edgeEnabled','侧边入口']]) {
         const row = element('label', undefined, 'checkbox_label'); const input = element('input'); input.type = 'checkbox';
         input.addEventListener('change', () => name === 'enabled' ? setEnabled(input.checked) : setEntrance(name, input.checked));
-        row.append(input, element('span', label)); section.append(row); settingsSection.controls[name] = input;
+        row.append(input, element('span', label)); controls.append(row); settingsSection.controls[name] = input;
     }
-    settingsSection.open = textButton('打开小剧场', () => ui.open()); settingsSection.open.id = 'teahouse-open';
-    settingsSection.open.classList.add('menu_button'); section.append(settingsSection.open);
+    settingsSection.edgeSides = element('div', undefined, 'teahouse-edge-sides');
+    settingsSection.edgeSides.setAttribute('role', 'group');
+    settingsSection.edgeSides.setAttribute('aria-label', '侧边入口位置');
+    settingsSection.edgeSideInputs = [];
+    for (const [value, label] of [['left', '左侧边'], ['right', '右侧边']]) {
+        const row = element('label', undefined, 'checkbox_label'), input = element('input');
+        input.type = 'radio'; input.name = 'teahouse-edge-side'; input.value = value;
+        input.addEventListener('change', () => { if (input.checked) setEntrance('edgeSide', value); });
+        row.append(input, element('span', label)); settingsSection.edgeSides.append(row);
+        settingsSection.edgeSideInputs.push(input);
+    }
+    controls.append(settingsSection.edgeSides);
+    settingsSection.open = textButton('打开剧场', () => ui.open()); settingsSection.open.id = 'teahouse-open';
+    settingsSection.open.classList.add('menu_button'); controls.append(settingsSection.open);
+    settingsSection.update = textButton('更新茶会选集', updateLibrary);
+    settingsSection.update.classList.add('menu_button'); controls.append(settingsSection.update);
+    settingsSection.status = element('small'); settingsSection.status.setAttribute('role', 'status'); settingsSection.status.hidden = true; controls.append(settingsSection.status);
     const label = element('label', '剧场库地址'); const address = element('input');
     address.type = 'password'; address.autocomplete = 'off'; address.className = 'text_pole'; address.placeholder = 'HTTPS 剧场库地址'; address.value = settings.libraryUrl;
-    address.addEventListener('change', () => { settings.libraryUrl = address.value.trim(); saveSettings(); });
-    label.append(address); section.append(label); settingsHost.append(section); refreshSettings();
+    address.addEventListener('input', () => setLibraryUrl(address.value));
+    address.addEventListener('change', () => { address.value = settings.libraryUrl; });
+    label.append(address); controls.append(label); settingsHost.append(section); refreshSettings();
     if (!settings.libraryUrl) {
         try {
             const config = await (await request(new URL('config.json', import.meta.url))).json();

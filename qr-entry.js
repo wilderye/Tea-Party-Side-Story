@@ -19,8 +19,7 @@ export async function syncQrEntry(api, enabled) {
         });
         else if (qr.isHidden) api.updateQuickReply(setName, label, { isHidden: false });
         api.addGlobalSet(setName);
-        // Enabling this entrance also enables its host bar. Never disable other QRs.
-        if (!api.settings.isEnabled) { api.settings.isEnabled = true; api.settings.save(); }
+        // The host's master switch belongs to the user; changing it affects every QR.
     } else {
         if (qr && !qr.isHidden) api.updateQuickReply(setName, label, { isHidden: true });
         api.removeGlobalSet(setName);
