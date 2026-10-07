@@ -26,7 +26,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
 #teahouse-panel button:disabled { opacity:.4; cursor:default; }
 #teahouse-panel :is(button,input,textarea,select):focus-visible { outline:2px solid var(--tea-coral); outline-offset:3px; }
 #teahouse-panel .tea-glyph { display:inline-flex; flex:none; }
-#teahouse-panel .tea-content-tag { display:inline-block; margin-left:8px; padding:0 8px; border:1px solid currentColor; border-radius:4px; font:12px/16px var(--tea-ui); vertical-align:middle; opacity:.85; white-space:nowrap; }
+#teahouse-panel .tea-content-tag { display:inline-block; padding:0 4px; border:1px solid currentColor; border-radius:4px; font:11px/14px var(--tea-ui); vertical-align:middle; opacity:.85; white-space:nowrap; }
 #teahouse-panel .tea-content-preference { padding:16px 0; border-bottom:1px solid var(--tea-line); }
 #teahouse-panel .tea-content-preference .tea-setting-row { border:0; padding-top:0; }
 #teahouse-panel .tea-setting-description { color:var(--tea-muted); font-size:12px; line-height:24px; }
@@ -81,6 +81,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
 #teahouse-panel .tea-story[aria-current=true] { background:var(--tea-coral); color:var(--tea-forest); }
 #teahouse-panel .tea-number { font:italic 14px/24px Georgia,serif; opacity:.75; }
 #teahouse-panel .tea-story-title { font-size:15px; line-height:24px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+#teahouse-panel .tea-story-title .tea-content-tag { margin-right:8px; }
 #teahouse-panel .tea-story small { display:block; font-size:11px; line-height:16px; margin-top:8px; color:#b6cabc; }
 #teahouse-panel .tea-story[aria-current=true] small { color:#354d3f; }
 #teahouse-panel.tea-compact .tea-story { min-height:64px; padding-top:8px; padding-bottom:8px; }
@@ -280,6 +281,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
     #teahouse-panel .tea-page-popover .tea-page-hint { margin:0; font-size:12px; line-height:16px; text-align:center; color:var(--tea-muted); }
     #teahouse-panel .tea-page-popover .tea-page-error { color:#9d4535; }
     #teahouse-panel .tea-feed-entry { padding:12px 0 24px; border-bottom:1px solid var(--tea-line); margin:0; }
+    #teahouse-panel .tea-content-tag { padding:0 3px; border-radius:3px; font-size:10px; line-height:12px; }
     #teahouse-panel .tea-feed-entry:last-child { border:0; }
     #teahouse-panel .tea-feed-entry .tea-article-head { min-height:0; padding:0; margin-bottom:12px; gap:16px; align-items:flex-start; }
     #teahouse-panel .tea-feed-entry .tea-article-title { font-size:22px; line-height:30px; }

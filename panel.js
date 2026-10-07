@@ -237,7 +237,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const row = element('button', undefined, 'tea-story'); row.type = 'button';
         const text = element('span');
         text.append(element('span', item.title, 'tea-story-title'), element('small', `${typeLabel(item.type)} · ${item.author || '我'}`));
-        if (item.gore) text.firstChild.append(element('span', 'G 向', 'tea-content-tag'));
+        if (item.gore) text.firstChild.prepend(element('span', 'G向', 'tea-content-tag'));
         row.append(element('span', String(number).padStart(2, '0'), 'tea-number'), text);
         return row;
     }
@@ -428,7 +428,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const kicker = element('div', undefined, 'tea-article-type');
         if (number) kicker.append(element('span', String(number).padStart(2, '0'), 'tea-number'));
         kicker.append(element('span', typeLabel(item.type)));
-        if (item.gore) kicker.append(element('span', 'G 向', 'tea-content-tag'));
+        if (item.gore) kicker.append(element('span', 'G向', 'tea-content-tag'));
         title.append(kicker, element('h2', item.title, 'tea-article-title'), element('p', isManuscript(item.id) ? '亲笔手稿 / 我' : `社区投稿 / ${item.author}`, 'tea-article-meta'));
         head.append(title); if (illustration) head.append(art()); return head;
     }
