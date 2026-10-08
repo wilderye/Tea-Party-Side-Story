@@ -1,5 +1,5 @@
 {
   "display_name": "茶话会小剧场", "loading_order": 100,
   "requires": [], "optional": [], "js": "index.js", "css": "style.css",
-  "author": "荒行", "version": "0.2.0"
+  "author": "荒行", "version": "0.2.1"
 }

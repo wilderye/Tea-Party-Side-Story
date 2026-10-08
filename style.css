@@ -67,8 +67,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
 #teahouse-panel .tea-sort summary::-webkit-details-marker { display:none; }
 #teahouse-panel .tea-sort summary:focus-visible { outline:2px solid var(--tea-coral); outline-offset:2px; }
 #teahouse-panel .tea-sort[open]>summary { color:var(--tea-yellow); background:#ffffff10; }
-#teahouse-panel .tea-sort-menu { position:absolute; z-index:4; right:0; top:calc(100% + 4px); min-width:144px; padding:6px; border:1px solid var(--tea-line); border-radius:8px; background:var(--tea-paper); color:var(--tea-ink); box-shadow:0 8px 24px #102f2826; }
-#teahouse-panel .tea-sort-menu button { display:flex; align-items:center; justify-content:space-between; gap:24px; width:100%; min-height:40px; padding:8px 12px; border-radius:4px; font-size:13px; text-align:left; }
+#teahouse-panel .tea-sort-menu { position:absolute; z-index:4; right:0; top:calc(100% + 4px); width:max-content; padding:4px; border:1px solid var(--tea-line); border-radius:8px; background:var(--tea-paper); color:var(--tea-ink); box-shadow:0 8px 24px #102f2826; }
+#teahouse-panel .tea-sort-menu button { display:flex; align-items:center; justify-content:flex-start; gap:8px; width:100%; min-height:32px; padding:4px 8px; border-radius:4px; font-size:14px; white-space:nowrap; text-align:left; }
 #teahouse-panel .tea-sort-menu button:hover,#teahouse-panel .tea-sort-menu button:focus-visible { background:#183e360c; }
 #teahouse-panel .tea-sort-menu button[aria-checked=true] { font-weight:700; }
 #teahouse-panel .tea-sort-menu button[aria-checked=false]>.tea-glyph { visibility:hidden; }
@@ -195,6 +195,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
 .teahouse-settings-controls .checkbox_label { margin:0; }
 .teahouse-settings-controls .menu_button { width:fit-content; white-space:nowrap; }
 @media(min-width:761px) {
+    #teahouse-panel .tea-sort-menu { padding:8px 4px 8px 8px; }
     #teahouse-panel .tea-reading { scrollbar-gutter:stable; }
     #teahouse-panel .tea-catalog-measure { position:absolute; visibility:hidden; pointer-events:none; top:0; left:0; }
     #teahouse-panel .tea-story small { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
@@ -248,6 +249,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0; height:100%; min-height:
     #teahouse-panel .tea-search-cancel { width:44px; flex:none; height:44px; font-size:13px; }
     #teahouse-panel .tea-kind-bar { padding:0; height:44px; }
     #teahouse-panel .tea-kinds { padding:0; gap:16px; }
+    #teahouse-panel .tea-sort-menu button { min-height:44px; }
     #teahouse-panel .tea-sort-menu .tea-sort-reshuffle { border-top:1px solid var(--tea-line); border-radius:0; margin-top:4px; }
     #teahouse-panel .tea-sort[open]>summary { color:var(--tea-forest); background:#183e360c; }
     #teahouse-panel .tea-kinds button { height:44px; color:var(--tea-muted); }
