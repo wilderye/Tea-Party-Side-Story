@@ -2,7 +2,7 @@ import { registerTheatreGeneration } from './generation.js';
 import { createLibraryRequest } from './download-access.js';
 import { validateManifest, readPack, collectPacks, readManuscripts, pruneCommunityFavorites } from './library.js';
 import { createTheatrePanel, element, textButton } from './panel.js';
-import { syncQrEntry } from './qr-entry.js';
+import { syncQrEntry, removeQrEntry } from './qr-entry.js';
 import { createPlayRuntime } from './play-runtime.js';
 import { createPlayPromptFavorites } from './play-prompt-favorites.js';
 import { createDiagnostics, observePluginErrors } from './diagnostics.js';
@@ -28,6 +28,7 @@ const state = {
     get entries() { return new Map([...this.community, ...this.manuscripts]); },
 };
 let manifest = null, ui, updateController, settingsSection, qrTask = Promise.resolve();
+let uninstalling = false;
 const packName = pack => `teahouse-${pack.sha256}.json`;
 const personalFile = 'teahouse-manuscripts.json';
 let statusTimer;
@@ -223,6 +224,7 @@ function setEntrance(key, value) {
     settings[key] = value; saveSettings(); syncEntrances(); refreshSettings();
 }
 function syncEntrances() {
+    if (uninstalling) return;
     document.querySelector('#teahouse-edge')?.remove();
     if (settings.enabled && settings.edgeEnabled) {
         const edge = textButton('', () => ui.open()); edge.id = 'teahouse-edge'; edge.title = '茶话会小剧场';
@@ -231,8 +233,23 @@ function syncEntrances() {
         const icon = element('i', undefined, `fa-solid fa-chevron-${settings.edgeSide === 'right' ? 'left' : 'right'}`); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
         document.body.append(edge);
     }
-    qrTask = qrTask.catch(() => {}).then(() => syncQrEntry(globalThis.quickReplyApi, settings.enabled && settings.qrEnabled))
+    qrTask = qrTask.catch(() => {}).then(() => {
+        if (!uninstalling) return syncQrEntry(globalThis.quickReplyApi, settings.enabled && settings.qrEnabled);
+    })
         .catch(error => { diagnostics.error('更新快捷入口', error); notify(error.message); });
+}
+export async function onUninstall() {
+    uninstalling = true;
+    document.querySelector('#teahouse-edge')?.remove();
+    try {
+        await qrTask;
+        await removeQrEntry(globalThis.quickReplyApi);
+    } catch (error) {
+        diagnostics.error('卸载时清理快捷入口', error);
+        globalThis.toastr?.warning('快捷回复入口未能清理，请在快速回复设置中手动删除“茶话会小剧场 · 插件入口”中的插件按钮。',
+            '卸载清理未完成', { escapeHtml: true, timeOut: 0, extendedTimeOut: 0, closeButton: true });
+        throw error;
+    }
 }
 ui = createTheatrePanel(ctx, state, {
     loaded, updateLibrary, saveManuscript, deleteManuscript, toggleFavorite, saveSettings, playground, promptFavorites, diagnostics,

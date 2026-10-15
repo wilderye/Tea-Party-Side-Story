@@ -25,3 +25,22 @@ export async function syncQrEntry(api, enabled) {
         api.removeGlobalSet(setName);
     }
 }
+
+export async function removeQrEntry(api) {
+    if (!api) throw new Error('酒馆的快速回复功能尚未就绪，无法清理插件入口。');
+    const set = api.getSetByName(setName);
+    if (!set) return;
+    const qr = api.getQrByLabel(setName, label);
+    if (qr && qr.message !== command) return;
+    if (qr) api.deleteQuickReply(setName, label);
+    else if (api.listQuickReplies(setName).length) return;
+
+    // Deleting a reply schedules a delayed save. Finish it before deleting the
+    // empty set, otherwise that save can recreate the set after the deletion.
+    await set.save();
+    if (api.listQuickReplies(setName).length) return;
+    api.removeGlobalSet(setName);
+    await api.deleteSet(setName);
+    // The host API can resolve even when its delete request failed.
+    if (api.getSetByName(setName)) throw new Error('酒馆未能删除“茶话会小剧场 · 插件入口”快捷回复集合。');
+}
