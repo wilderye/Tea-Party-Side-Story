@@ -1,83 +1,81 @@
 import { findEntries, isManuscript, reconcileRandomOrder } from './library.js';
 import { renderMarkdown } from './markdown.js';
-
-export function element(tag, text, className) {
-    const node = document.createElement(tag);
-    if (text !== undefined) node.textContent = text;
-    if (className) node.className = className;
-    return node;
-}
-export function textButton(text, action) {
-    const node = element('button', text); node.type = 'button';
-    node.addEventListener('click', action); return node;
-}
-const paths = {
-    star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
-    close: '<path d="m6 6 12 12M18 6 6 18"/>', plus: '<path d="M12 4v16M4 12h16"/>',
-    left: '<path d="m14 6-6 6 6 6"/>', right: '<path d="m10 6 6 6-6 6"/>',
-    down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m6 15 6-6 6 6"/>',
-    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
-    settings: '<path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 16h6M16 9h6"/>',
-    edit: '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',
-    save: '<path d="M5 3h12l4 4v14H3V3zM7 3v6h10V3M7 21v-8h10v8"/>',
-    insert: '<path d="M14 4h6v16H4v-6M3 8h11m-4-4 4 4-4 4"/>',
-    refresh: '<path d="M20 10a8 8 0 0 0-14-5L3 8m0-5v5h5M4 14a8 8 0 0 0 14 5l3-3m0 5v-5h-5"/>',
-    sort: '<path d="M3 6h18M6 12h12M9 18h6"/>',
-    check: '<path d="m5 12 4 4L19 6"/>',
-    trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
-    copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
-    cup: '<path d="M4 9h14v6a6 6 0 0 1-12 0V9M18 10h2a3 3 0 0 1 0 6h-2M3 22h18M9 6c-3-2 3-3 0-5M14 6c-3-2 3-3 0-5"/>',
-    asterisk: '<path d="M12 4v16M4 12h16M6.35 6.35l11.3 11.3M6.35 17.65l11.3-11.3"/>',
-};
-function glyph(name) {
-    const holder = element('span', undefined, 'tea-glyph');
-    holder.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`;
-    return holder;
-}
-function iconButton(name, label, action) {
-    const node = textButton('', action); node.className = 'tea-icon'; node.title = label;
-    node.setAttribute('aria-label', label); node.append(glyph(name)); return node;
-}
+import { createAppearance } from './appearance.js';
+import { element, textButton, glyph, iconButton, copyText, createPageJump } from './ui.js';
+import { renderDiagnostics } from './diagnostics-view.js';
+import { createPlayView } from './play-view.js';
+import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
+import { createPlayApiSettings, renderPlayPromptSetting, renderPlayProcessingSettings } from './play-settings-view.js';
+export { element, textButton } from './ui.js';
 function art() {
     const node = element('div', undefined, 'tea-art'); node.setAttribute('aria-hidden', 'true');
     const img = element('img'); img.src = new URL('./assets/tea-party.svg', import.meta.url).href; img.alt = '';
     const mark = glyph('asterisk'); mark.classList.add('tea-art-mark');
     node.append(img, mark); return node;
 }
-const typeLabel = type => type === 'preset' ? '随文剧场' : '独立剧场';
-const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿' })[scope];
+const typeLabel = type => ({ preset: '随文剧场', standalone: '独立剧场', record: '演出记录' })[type] ?? '独立剧场';
+const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿', play: '剧场演出' })[scope];
+const bodyFontSizes = Array.from({ length: 11 }, (_, index) => 12 + index * 2);
 
 export function createTheatrePanel(ctx, state, actions) {
-    let panel, popup, opening = false, observer, measureFrame, resizeViewport, media;
+    let panel, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
     let scope = 'community', type = '', query = '', page = 0, mode = 'list', selectedId = null;
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer, returnScroll = 0;
-    let searchComposing = false, mobileSearchOpen = false;
+    let searchComposing = false, mobileSearchOpen = false, catalogCollapsed = false;
+    let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings;
+    let favoriteType = 'standalone', favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
+    let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
+    const favoriteReaders = new Map();
+    const currentType = () => scope === 'favorites' ? favoriteType : type;
+    const isRecordFavorites = () => scope === 'favorites' && favoriteType === 'record';
+    const orderKey = () => isRecordFavorites() ? 'record-favorites' : scope;
+    const recordEntries = () => new Map([...favoriteRows.values()].map(favorite => [favorite.id, {
+        id: favorite.id, type: 'record', title: favorite.title.trim() || favorite.firstLine || '内容已隐藏', author: favorite.characterName,
+        body: favorite.firstLine, publishedAt: favorite.savedAt, favorite,
+    }]));
+    const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
+    const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
+    const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites);
     const expanded = new Set();
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
-    const scopeEntries = value => findEntries(state.entries, { scope: value, favorites: state.settings.favorites, showGore: state.settings.showGore });
+    const scopeEntries = value => value === 'record-favorites'
+        ? findEntries(recordEntries(), { scope: 'favorites', favorites: recordFavoriteTimes() })
+        : findEntries(state.entries, { scope: value, favorites: state.settings.favorites, showGore: state.settings.showGore });
     function syncRandomOrders() {
         const scopes = new Set(randomOrders.keys());
-        if (panel && sortMode() === 'random') scopes.add(scope);
+        if (panel && scope !== 'play' && sortMode() === 'random') scopes.add(orderKey());
         for (const value of scopes) randomOrders.set(value, reconcileRandomOrder(randomOrders.get(value), scopeEntries(value)));
     }
     const dirty = () => mode === 'editor' && JSON.stringify(draft) !== originalDraft;
     let desktopStarts = [0];
     const mobilePageSize = () => [5, 10, 20, 50].includes(state.settings.pageSize) ? state.settings.pageSize : 5;
-    const bodyFontSize = () => media?.matches
-        ? ([15, 16, 18].includes(state.settings.mobileFontSize) ? state.settings.mobileFontSize : 15)
-        : (state.settings.fontSize === 18 ? 18 : 16);
+    const bodyFontSize = () => {
+        const value = media?.matches ? state.settings.mobileFontSize : state.settings.fontSize;
+        const defaultSize = scope === 'play' ? 18 : 16;
+        const rounded = Number.isInteger(value) ? Math.round(value / 2) * 2 : defaultSize;
+        return bodyFontSizes.includes(rounded) ? rounded : defaultSize;
+    };
+    function applyFontSource() {
+        // Themes can set body.fontFamily without changing Tavern's font variable.
+        const family = state.settings.fontSource === 'tavern' ? getComputedStyle(document.body).fontFamily : '';
+        for (const property of ['--tea-ui', '--tea-display']) {
+            if (family) panel.style.setProperty(property, family);
+            else panel.style.removeProperty(property);
+        }
+    }
     const pageStart = () => media?.matches ? page * mobilePageSize() : desktopStarts[page] ?? 0;
     const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : desktopStarts.length;
     const pageForIndex = index => media?.matches ? Math.max(0, Math.floor(index / mobilePageSize())) : Math.max(0, desktopStarts.findLastIndex(start => start <= index));
-    const matches = () => findEntries(state.entries, { scope, type, query, favorites: state.settings.favorites, showGore: state.settings.showGore,
-        order: sortMode() === 'random' ? randomOrders.get(scope) : undefined });
+    const matches = () => findEntries(isRecordFavorites() ? recordEntries() : state.entries, { scope, type: currentType(), query,
+        favorites: isRecordFavorites() ? recordFavoriteTimes() : state.settings.favorites, showGore: state.settings.showGore,
+        order: sortMode() === 'random' ? randomOrders.get(orderKey()) : undefined });
     async function confirm(text, actionLabel) {
         return await ctx().callGenericPopup(element('div', text, 'tea-confirm'), ctx().POPUP_TYPE.CONFIRM, '',
             { okButton: actionLabel, cancelButton: '取消' }) === ctx().POPUP_RESULT.AFFIRMATIVE;
     }
     async function canLeave() {
-        if (busy || confirming) return false;
+        if (busy || confirming || playView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
         if (!dirty()) return true;
         confirming = true;
         try { return await confirm('手稿有未保存的修改，确定放弃吗？', '放弃修改'); }
@@ -86,24 +84,41 @@ export function createTheatrePanel(ctx, state, actions) {
     async function close() { if (popup) await popup.complete(ctx().POPUP_RESULT.CANCELLED); }
     async function back() {
         if (!await canLeave()) return;
-        mode = mode === 'help' ? 'settings' : 'list'; message = ''; render();
+        const leavingSettings = mode === 'settings';
+        mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
+        if (leavingSettings && isRecordFavorites()) actions.playground?.display?.updateSettings();
+        message = ''; render();
         const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = returnScroll;
     }
     function showMessage(text) {
         clearTimeout(messageTimer);
         message = text;
-        const status = panel?.querySelector('.tea-status');
-        if (status) { status.textContent = message || state.status; status.hidden = !status.textContent; }
+        updateStatus();
         if (text) messageTimer = setTimeout(() => showMessage(''), 5000);
+    }
+    function updateStatus() {
+        const status = panel?.querySelector('.tea-status');
+        if (status) {
+            status.textContent = message || (mode === 'settings' && state.statusKind === 'update' ? '' : state.status);
+            status.hidden = !status.textContent;
+        }
+        const update = panel?.querySelector('.tea-manual-update');
+        if (update) {
+            update.disabled = state.updating || !state.settings.enabled;
+            update.setAttribute('aria-busy', String(!!state.updating));
+        }
+        const progress = panel?.querySelector('.tea-update-status');
+        if (progress) progress.textContent = state.statusKind === 'update' ? state.status : '';
     }
     function measureBodies() {
         cancelAnimationFrame(measureFrame);
+        if (scope === 'play') { if (mode === 'list') playView?.layout(); return; }
         measureFrame = requestAnimationFrame(() => {
             if (!panel) return;
             if (!media.matches) {
                 const list = panel.querySelector('.tea-list');
                 const height = list.clientHeight;
-                if (!height) return;
+                if (!height || !list.clientWidth) return;
                 const result = matches();
                 const probe = element('div', undefined, 'tea-catalog-measure');
                 probe.style.width = `${list.clientWidth}px`;
@@ -120,7 +135,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     const anchor = result.findIndex(item => item.id === selectedId);
                     desktopStarts = starts;
                     page = anchor >= 0 ? pageForIndex(anchor) : Math.min(page, starts.length - 1);
-                    render();
+                    render({ preserveSettings: true });
                 }
                 return;
             }
@@ -137,24 +152,52 @@ export function createTheatrePanel(ctx, state, actions) {
             }
         });
     }
-    async function navigate(change) {
+    function showCatalog(nextMode = 'list') {
+        if (mode === 'settings' && !media.matches) settingsReturnMode = nextMode;
+        else mode = nextMode;
+    }
+    async function navigate(change, catalogOnly = false) {
         if (!await canLeave()) return;
-        change(); mode = 'list'; page = 0; selectedId = null; message = ''; returnScroll = 0;
-        render(); panel.querySelector('.tea-list').scrollTop = 0;
+        if (mode === 'settings' && !catalogOnly && isRecordFavorites()) actions.playground?.display?.updateSettings();
+        change();
+        if (catalogOnly) showCatalog(); else mode = 'list';
+        page = 0; selectedId = null; message = ''; returnScroll = 0;
+        actions.diagnostics?.info(`打开${scopeLabel(scope)}`);
+        render(); const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = 0;
+        if (isRecordFavorites()) void refreshFavoriteCatalog();
     }
     function reshuffle() {
-        return navigate(() => randomOrders.set(scope, reconcileRandomOrder(undefined, scopeEntries(scope))));
+        return navigate(() => randomOrders.set(orderKey(), reconcileRandomOrder(undefined, scopeEntries(orderKey()))), true);
     }
     async function beginEdit(item) {
         if (!await canLeave() || state.personalError || !state.settings.enabled) return;
         returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
         draft = item ? { id: item.id, title: item.title, type: item.type, body: item.body }
-            : { title: '', type: type || 'standalone', body: '' };
+            : { title: '', type: currentType() === 'preset' ? 'preset' : 'standalone', body: '' };
         originalDraft = JSON.stringify(draft); mode = 'editor'; message = ''; render();
     }
-    function openSettings() {
-        returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
+    async function toggleSettings() {
+        if (mode === 'settings') return back();
+        if (!await canLeave()) return;
+        if (mode !== 'record') returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
+        settingsReturnMode = mode;
+        actions.diagnostics?.info('打开插件设置');
         mode = 'settings'; message = ''; render();
+    }
+    async function refreshFavoriteCatalog() {
+        const id = ++favoriteLoadId;
+        const [records, display] = await Promise.allSettled([
+            actions.playground?.listFavorites?.() ?? [], actions.playground?.display?.refresh(),
+        ]);
+        if (id !== favoriteLoadId) return;
+        favoriteLoaded = true;
+        if (records.status === 'fulfilled') {
+            favoriteRows = new Map(records.value.map(row => [row.id, row])); favoriteLoadError = '';
+        } else favoriteLoadError = records.reason.message || '演出记录收藏暂时无法读取';
+        if (isRecordFavorites() && ['list', 'record', 'settings'].includes(mode)) {
+            render({ preserveSettings: true });
+            if (display.status === 'rejected') showMessage('酒馆正则读取失败，请在设置中刷新正则列表后重试。');
+        }
     }
     async function select(item) {
         if (!state.settings.enabled || item.type !== 'standalone') return;
@@ -166,77 +209,208 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function tabs() {
         const nav = element('nav', undefined, 'tea-tabs'); nav.setAttribute('aria-label', '内容栏目');
-        for (const value of ['community', 'favorites', 'local']) {
-            const button = textButton(scopeLabel(value), () => navigate(() => { scope = value; }));
+        for (const value of ['community', 'local', 'favorites', ...(actions.playground ? ['play'] : [])]) {
+            const button = textButton(scopeLabel(value), () => { if (scope !== value || mode !== 'list') void navigate(() => { scope = value; }); });
             button.setAttribute('aria-pressed', String(scope === value)); nav.append(button);
         }
         return nav;
     }
-    function topActions() {
+    function updateCatalogVisibility() {
+        panel.classList.toggle('tea-catalog-collapsed', catalogCollapsed);
+        for (const button of panel.querySelectorAll('.tea-catalog-toggle')) {
+            button.setAttribute('aria-expanded', String(!catalogCollapsed));
+            button.title = catalogCollapsed ? '展开左侧栏' : '收起左侧栏';
+            button.setAttribute('aria-label', button.title);
+        }
+    }
+    function topbar() {
+        const header = element('header', undefined, 'tea-topbar');
+        const toggle = iconButton('panel', catalogCollapsed ? '展开左侧栏' : '收起左侧栏', () => {
+            playView?.prepareLayout();
+            catalogCollapsed = !catalogCollapsed; updateCatalogVisibility(); measureBodies();
+        });
+        toggle.classList.add('tea-catalog-toggle');
+        toggle.setAttribute('aria-expanded', String(!catalogCollapsed));
+        toggle.setAttribute('aria-controls', scope === 'play' ? 'play-catalog' : 'tea-catalog');
+        header.append(toggle, tabs(), topActions()); return header;
+    }
+    function topActions(mobileHeader = false) {
         const box = element('div', undefined, 'tea-actions');
         const add = iconButton('plus', '新建手稿', () => beginEdit()); add.disabled = !!state.personalError || !state.settings.enabled;
-        box.append(add, iconButton('settings', '设置', openSettings), iconButton('close', '关闭面板', close));
+        if (scope !== 'play') { if (!isRecordFavorites()) box.append(add); }
+        else if (mobileHeader) box.append(getPlayView().chooseButton);
+        box.append(settingsButton(), iconButton('close', '关闭面板', close));
         return box;
     }
-    function render() {
+    function settingsButton() {
+        const button = iconButton('settings', '设置', toggleSettings);
+        button.classList.add('tea-settings-toggle'); button.setAttribute('aria-pressed', String(mode === 'settings'));
+        return button;
+    }
+    async function selectInPlugin(item) {
+        if (!state.settings.enabled || !actions.playground || !await canLeave()) return;
+        const view = getPlayView();
+        if (!await view.fillFromEntry(item)) return;
+        scope = 'play'; mode = 'list'; message = ''; render();
+        view.focusInput();
+    }
+    function brandHeader() {
+        const brand = element('header', undefined, 'tea-brand'), name = element('div');
+        name.append(element('h1', '茶话会'), element('p', '小 剧 场')); brand.append(glyph('cup'), name);
+        const mobileActions = topActions(true); mobileActions.classList.add('tea-mobile-actions'); brand.append(mobileActions);
+        return brand;
+    }
+    function ensurePlayShell() {
+        if (playCatalog) return;
+        const view = getPlayView();
+        playCatalog = element('aside', undefined, 'tea-catalog play-catalog'); playCatalog.id = 'play-catalog'; playCatalog.setAttribute('aria-label', '角色列表');
+        const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs');
+        playCatalog.append(brandHeader(), mobileTabs, view.browser);
+        playWorkspace = element('section', undefined, 'tea-workspace play-workspace'); playWorkspace.setAttribute('aria-label', '剧场演出');
+        const header = topbar(); header.classList.add('play-topbar');
+        playWorkspace.append(header, view.page); panel.append(playCatalog, playWorkspace);
+    }
+    function renderFavoriteWorkspace(visible) {
+        if (!favoriteWorkspace) {
+            favoriteWorkspace = element('section', undefined, 'tea-workspace play-favorite-workspace');
+            favoriteWorkspace.setAttribute('aria-label', '演出记录收藏');
+            const mobileHead = element('header', undefined, 'tea-view-title tea-back-title play-favorite-mobile-head');
+            const name = element('div'); name.append(element('h2', '演出记录'));
+            mobileHead.append(iconButton('left', '返回收藏目录', back), name,
+                settingsButton(), iconButton('close', '关闭面板', close));
+            favoriteEmpty = element('p', '', 'tea-empty'); favoriteWorkspace.append(topbar(), mobileHead, favoriteEmpty);
+        }
+        favoriteWorkspace.hidden = false;
+        for (const reader of favoriteReaders.values()) reader.node.hidden = true;
+        const item = visible.find(item => item.id === selectedId);
+        const show = item && (!media.matches || mode === 'record');
+        if (show) {
+            let reader = favoriteReaders.get(item.id);
+            if (!reader) {
+                reader = createPlayFavoriteReader(actions.playground, { notify: showMessage,
+                    onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
+                    onRemove(id) {
+                        favoriteLoadId++;
+                        favoriteRows.delete(id); favoriteReaders.get(id)?.node.remove(); favoriteReaders.delete(id);
+                        selectedId = null; mode = 'list'; render();
+                    },
+                });
+                favoriteReaders.set(item.id, reader);
+            }
+            if (reader.node.parentElement !== favoriteWorkspace) favoriteWorkspace.append(reader.node);
+            reader.node.hidden = false; void reader.load(item.favorite);
+        }
+        favoriteEmpty.hidden = !!show; favoriteEmpty.textContent = emptyText();
+        return favoriteWorkspace;
+    }
+    function appendStatus() {
+        const status = element('div', undefined, 'tea-status');
+        status.setAttribute('role', 'status'); panel.append(status); updateStatus();
+    }
+    function render({ preserveSettings = false } = {}) {
         if (!panel || searchComposing) return;
+        if (mode !== 'settings') apiSettings?.cancel();
+        const keptSettings = preserveSettings && mode === 'settings' ? panel.querySelector('.tea-settings')?.parentElement : null;
+        const settingsPosition = mode === 'settings' ? settingsView?.() : null;
+        if (!keptSettings) {
+            diagnosticsView?.dispose(); diagnosticsView = null;
+            settingsView = null;
+        }
+        playView?.deactivate();
         syncRandomOrders();
         const oldList = panel.querySelector('.tea-list'), scroll = oldList?.scrollTop ?? 0;
         const oldReading = panel.querySelector('.tea-reading');
         const readingScroll = oldReading?.scrollTop ?? 0;
-        const oldSearch = panel.querySelector('input[type="search"]');
+        const oldSearch = catalogSearch();
         const focused = oldSearch && document.activeElement === oldSearch;
         const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd, oldSearch.selectionDirection] : null;
         const focusedControl = panel.contains(document.activeElement) ? document.activeElement.closest('button, select, input[role="switch"]') : null;
         const focusKey = focusedControl?.getAttribute('aria-label');
-        observer?.disconnect(); panel.replaceChildren(); panel.dataset.mode = mode;
+        observer?.disconnect(); cancelAnimationFrame(measureFrame);
+        // Keep the conversation connected while another tab is open. Detaching
+        // it would reset rendered webpages and replace the user's input element.
+        for (const child of [...panel.children]) {
+            if (child !== playCatalog && child !== playWorkspace && child !== favoriteWorkspace && child !== keptSettings) child.remove();
+        }
+        if (playCatalog) { playCatalog.hidden = true; playWorkspace.hidden = true; }
+        if (favoriteWorkspace) favoriteWorkspace.hidden = true;
+        panel.dataset.mode = mode;
+        applyFontSource();
         panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`);
-        panel.classList.toggle('tea-compact', !!state.settings.compact);
+        panel.classList.toggle('tea-compact', state.settings.compact !== false);
         panel.classList.toggle('tea-searching', media.matches && (mobileSearchOpen || !!query));
-        const result = matches();
+        panel.classList.toggle('tea-play-mode', scope === 'play');
+        panel.classList.toggle('tea-record-favorites', isRecordFavorites());
+        panel.classList.toggle('tea-has-play', !!actions.playground);
+        updateCatalogVisibility();
+        if (scope === 'play') {
+            ensurePlayShell(); playCatalog.hidden = false;
+            if (mode === 'list') {
+                playWorkspace.hidden = false; appendStatus(); getPlayView().activate(panel); return;
+            }
+        }
+        const result = scope === 'play' ? [] : matches();
         page = Math.max(0, Math.min(page, pageCount(result.length) - 1));
         const visible = result.slice(pageStart(), media.matches ? pageStart() + mobilePageSize() : desktopStarts[page + 1] ?? result.length);
         if (!visible.some(item => item.id === selectedId)) selectedId = visible[0]?.id ?? null;
-        const catalog = renderCatalog(visible, result.length); panel.append(catalog);
-        const workspace = element('section', undefined, 'tea-workspace'); workspace.setAttribute('aria-label', '阅读与编辑');
-        if (mode === 'list') {
-            const topbar = element('header', undefined, 'tea-topbar'); topbar.append(tabs(), topActions()); workspace.append(topbar);
-            if (!state.settings.enabled) workspace.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
-            else if (selectedId) renderReader(workspace, visible.find(item => item.id === selectedId));
-            else workspace.append(art(), element('h2', '下一场故事，等你入座', 'tea-empty-title'), element('p', emptyText(), 'tea-empty'));
-        } else {
-            const title = element('header', undefined, 'tea-view-title'), titleText = element('div');
-            titleText.append(element('h2', mode === 'editor' ? draft.id ? '编辑手稿' : '新的一页' : mode === 'settings' ? '设置' : '随文剧场用法'));
-            if (mode === 'editor') titleText.append(element('p', '把一个念头，写成一场小剧场。'));
-            const exit = iconButton('close', mode === 'editor' ? '关闭编辑，返回列表' : mode === 'help' ? '返回设置' : '返回列表', back); exit.disabled = busy;
-            title.append(titleText, exit); workspace.append(title);
-            if (mode === 'editor') renderEditor(workspace);
-            else if (mode === 'settings') renderSettings(workspace);
-            else renderHelp(workspace);
+        if (scope !== 'play') panel.insertBefore(renderCatalog(visible, result.length), favoriteWorkspace ?? keptSettings ?? null);
+        let workspace = keptSettings;
+        if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible);
+        else if (!workspace) {
+            workspace = element('section', undefined, 'tea-workspace'); workspace.setAttribute('aria-label', '阅读与编辑');
+            if (mode === 'list' || mode === 'settings' && !media.matches) {
+                workspace.append(topbar());
+            }
+            if (mode === 'list') {
+                if (!state.settings.enabled) workspace.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
+                else if (selectedId) renderReader(workspace, visible.find(item => item.id === selectedId));
+                else workspace.append(art(), element('h2', '下一场故事，等你入座', 'tea-empty-title'), element('p', emptyText(), 'tea-empty'));
+            } else {
+                if (mode !== 'settings' || media.matches) {
+                    const title = element('header', undefined, 'tea-view-title'), titleText = element('div');
+                    titleText.append(element('h2', mode === 'editor' ? draft.id ? '编辑手稿' : '新的一页' : mode === 'settings' ? '设置' : '随文剧场用法'));
+                    if (mode === 'editor') titleText.append(element('p', '把一个念头，写成一场小剧场。'));
+                    const exit = iconButton(mode === 'editor' ? 'close' : 'left', mode === 'editor' ? '关闭编辑，返回列表' : mode === 'help' ? '返回设置' : scope === 'play' ? '返回剧场演出' : '返回列表', back); exit.disabled = busy;
+                    if (mode === 'editor') title.append(titleText, exit);
+                    else {
+                        title.classList.add('tea-back-title'); title.append(exit, titleText);
+                        if (mode === 'settings') title.append(element('small', '自动保存', 'tea-auto-save'));
+                    }
+                    workspace.append(title);
+                }
+                if (mode === 'editor') renderEditor(workspace);
+                else if (mode === 'settings') renderSettings(workspace, settingsPosition);
+                else renderHelp(workspace);
+            }
         }
-        panel.append(workspace);
-        const status = element('div', message || (mode === 'settings' && state.statusKind === 'update' ? '' : state.status), 'tea-status'); status.setAttribute('role', 'status'); status.hidden = !status.textContent; panel.append(status);
-        const list = panel.querySelector('.tea-list'); list.scrollTop = scroll;
+        if (workspace.parentElement !== panel) panel.append(workspace);
+        if (!keptSettings) diagnosticsView?.restore();
+        if (settingsPosition && !keptSettings) workspace.querySelector('.tea-settings').scrollTop = settingsPosition.scrollTop;
+        appendStatus();
+        const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = scroll;
         const reading = panel.querySelector('.tea-reading');
         if (reading && oldReading?.dataset.id === selectedId) reading.scrollTop = readingScroll;
-        if (focused && panel.querySelector('input[type="search"]')?.getClientRects().length) {
-            const search = panel.querySelector('input[type="search"]');
+        const search = catalogSearch();
+        if (focused && search) {
             search.focus({ preventScroll: true });
             search.setSelectionRange(...selection);
         }
         else if (focusKey) [...panel.querySelectorAll('button, select, input[role="switch"]')].find(b => b.getAttribute('aria-label') === focusKey && b.getClientRects().length)?.focus({ preventScroll: true });
-        observer?.observe(list);
+        if (list) observer?.observe(list);
         for (const body of panel.querySelectorAll('.tea-feed-entry .tea-body')) observer?.observe(body);
         measureBodies();
     }
     function emptyText() {
+        if (isRecordFavorites()) return favoriteLoadError || (!favoriteLoaded ? '正在读取收藏…'
+            : query.trim() ? '没有找到符合条件的演出记录。' : '还没有收藏演出记录。');
         return query.trim() ? '没有找到符合条件的小剧场，换个词试试。' : scope === 'favorites' ? '这里还没有符合分类的收藏。'
             : scope === 'local' ? '点击上方加号，写下你的第一份手稿。\n亲笔手稿仅保存在本地，不会上传至茶会选集分享。' : '当前分类和内容偏好下没有可显示的剧场。';
     }
     function catalogItem(item, number = 1) {
         const row = element('button', undefined, 'tea-story'); row.type = 'button';
         const text = element('span');
-        text.append(element('span', item.title, 'tea-story-title'), element('small', `${typeLabel(item.type)} · ${item.author || '我'}`));
+        text.append(element('span', scope === 'favorites' ? favoriteTitle(item.favorite ?? item) : item.title, 'tea-story-title'),
+            element('small', item.favorite ? item.favorite.characterName : `${typeLabel(item.type)} · ${item.author || '我'}`));
         if (item.gore) text.firstChild.prepend(element('span', 'G向', 'tea-content-tag'));
         row.append(element('span', String(number).padStart(2, '0'), 'tea-number'), text);
         return row;
@@ -254,7 +428,7 @@ export function createTheatrePanel(ctx, state, actions) {
         for (const [value, label] of [['time', '时间顺序'], ['random', '随机顺序']]) {
             const button = textButton('', async () => {
                 details.open = false;
-                if (value !== sortMode()) await navigate(() => { state.settings.sortMode = value; actions.saveSettings(); });
+                if (value !== sortMode()) await navigate(() => { state.settings.sortMode = value; actions.saveSettings(); }, true);
                 panel?.querySelector('.tea-sort summary')?.focus({ preventScroll: true });
             });
             button.setAttribute('role', 'menuitemradio'); button.setAttribute('aria-checked', String(sortMode() === value));
@@ -294,14 +468,13 @@ export function createTheatrePanel(ctx, state, actions) {
         details.append(summary, menu); return details;
     }
     function renderCatalog(visible, total) {
-        const catalog = element('aside', undefined, 'tea-catalog'); catalog.setAttribute('aria-label', '小剧场目录');
-        const brand = element('header', undefined, 'tea-brand'), name = element('div');
-        name.append(element('h1', '茶话会'), element('p', '小 剧 场')); brand.append(glyph('cup'), name);
-        const mobileActions = topActions(); mobileActions.classList.add('tea-mobile-actions'); brand.append(mobileActions); catalog.append(brand);
+        const catalog = element('aside', undefined, 'tea-catalog'); catalog.id = 'tea-catalog'; catalog.setAttribute('aria-label', '小剧场目录');
+        catalog.append(brandHeader());
         const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs'); catalog.append(mobileTabs);
         const searchLine = element('div', undefined, 'tea-search-line'), label = element('label', undefined, 'tea-search-box');
-        const input = element('input'); input.type = 'search'; input.placeholder = media.matches && type ? `搜索${typeLabel(type)}…` : '找一场故事…'; input.value = query;
-        input.setAttribute('aria-label', '搜索标题、正文或署名'); input.disabled = !state.settings.enabled;
+        const input = element('input'); input.type = 'search'; input.placeholder = isRecordFavorites() ? '搜索标题或角色…'
+            : media.matches && currentType() ? `搜索${typeLabel(currentType())}…` : '找一场故事…'; input.value = query;
+        input.setAttribute('aria-label', isRecordFavorites() ? '搜索标题或角色名字' : '搜索标题、正文或署名'); input.disabled = !state.settings.enabled;
         const applySearch = (value = input.value) => { query = value; page = 0; selectedId = null; render(); panel.querySelector('.tea-list').scrollTop = 0; };
         input.addEventListener('compositionstart', () => { searchComposing = true; });
         input.addEventListener('compositionend', () => { searchComposing = false; applySearch(); });
@@ -312,7 +485,7 @@ export function createTheatrePanel(ctx, state, actions) {
             input.addEventListener('focus', () => { mobileSearchOpen = true; });
             const clear = iconButton('close', '清空搜索', () => {
                 mobileSearchOpen = true; searchComposing = false; applySearch('');
-                panel.querySelector('input[type="search"]').focus({ preventScroll: true });
+                catalogSearch()?.focus({ preventScroll: true });
             });
             clear.classList.add('tea-search-clear'); clear.hidden = !query; label.append(clear);
             const cancelSearch = () => {
@@ -331,9 +504,13 @@ export function createTheatrePanel(ctx, state, actions) {
             shuffle.hidden = sortMode() !== 'random'; shuffle.disabled = !state.settings.enabled;
             reshuffleSlot.append(shuffle); searchLine.append(reshuffleSlot); catalog.append(searchLine);
         }
-        const kinds = element('nav', undefined, 'tea-kinds'); kinds.setAttribute('aria-label', '剧场分类');
-        for (const [value, label] of [['', '全部'], ['standalone', '独立剧场'], ['preset', '随文剧场']]) {
-            const button = textButton(label, () => navigate(() => { type = value; })); button.setAttribute('aria-pressed', String(type === value)); kinds.append(button);
+        const kinds = element('nav', undefined, 'tea-kinds'); kinds.setAttribute('aria-label', scope === 'favorites' ? '收藏分类' : '剧场分类');
+        kinds.classList.toggle('tea-favorite-kinds', scope === 'favorites');
+        const types = scope === 'favorites' ? [['standalone', '独立剧场'], ['preset', '随文剧场'], ['record', '演出记录']]
+            : [['', '全部'], ['standalone', '独立剧场'], ['preset', '随文剧场']];
+        for (const [value, label] of types) {
+            const button = textButton(label, () => navigate(() => { if (scope === 'favorites') favoriteType = value; else type = value; }, true));
+            button.setAttribute('aria-pressed', String(currentType() === value)); kinds.append(button);
         }
         const kindBar = element('div', undefined, 'tea-kind-bar'); kindBar.append(kinds);
         if (media.matches) {
@@ -348,24 +525,29 @@ export function createTheatrePanel(ctx, state, actions) {
         if (media.matches) {
             const tools = element('div', undefined, 'tea-mobile-tools'); tools.append(searchLine, kindBar); catalog.append(tools);
         } else catalog.append(kindBar);
-        const heading = element('div', undefined, 'tea-list-heading'); heading.append(element('span', scopeLabel(scope)), element('span', `${total} 篇`)); catalog.append(heading);
         const list = element('div', undefined, 'tea-list tea-scroll');
-        if (state.personalError && scope !== 'community') list.append(element('p', state.personalError, 'tea-error'));
-        if (!state.settings.enabled) list.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
+        const showCatalogEmpty = scope === 'local' || media.matches || mode !== 'list';
+        if (state.personalError && scope !== 'community' && !isRecordFavorites()) list.append(element('p', state.personalError, 'tea-error'));
+        if (isRecordFavorites() && favoriteLoadError) list.append(iconButton('refresh', '重新读取收藏列表', () => void refreshFavoriteCatalog()));
+        if (!state.settings.enabled) {
+            if (showCatalogEmpty) list.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
+        }
         else for (const [i, item] of visible.entries()) {
-            if (media.matches) list.append(renderFeedEntry(item, pageStart() + i + 1));
+            if (media.matches && !isRecordFavorites()) list.append(renderFeedEntry(item, pageStart() + i + 1));
             else {
                 const button = textButton('', async () => {
                     if (!await canLeave()) return;
-                    selectedId = item.id; mode = 'list'; message = ''; render(); const reading = panel.querySelector('.tea-reading'); if (reading) reading.scrollTop = 0;
+                    returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
+                    selectedId = item.id; showCatalog(media.matches && isRecordFavorites() ? 'record' : 'list'); message = ''; render();
+                    const reading = panel.querySelector('.tea-reading'); if (reading) reading.scrollTop = 0;
                 });
                 const row = catalogItem(item, pageStart() + i + 1);
                 button.className = row.className; button.dataset.id = item.id;
-                button.setAttribute('aria-current', String(selectedId === item.id)); button.setAttribute('aria-label', item.title);
+                button.setAttribute('aria-current', String(selectedId === item.id)); button.setAttribute('aria-label', item.title); button.title = item.title;
                 button.append(...row.childNodes); list.append(button);
             }
         }
-        if (!total && state.settings.enabled) list.append(element('p', emptyText(), 'tea-empty')); catalog.append(list);
+        if (!total && state.settings.enabled && showCatalogEmpty) list.append(element('p', emptyText(), 'tea-empty')); catalog.append(list);
         catalog.append(renderPagination(total));
         return catalog;
     }
@@ -374,53 +556,15 @@ export function createTheatrePanel(ctx, state, actions) {
         const pages = pageCount(total);
         const turnTo = async target => {
             if (!await canLeave()) return;
-            page = target; selectedId = null; mode = 'list'; render(); panel.querySelector('.tea-list').scrollTop = 0;
+            page = target; selectedId = null; showCatalog(); render(); panel.querySelector('.tea-list').scrollTop = 0;
         };
         const prev = iconButton('left', '上一页', () => turnTo(page - 1)); prev.disabled = page === 0;
         const next = iconButton('right', '下一页', () => turnTo(page + 1)); next.disabled = page + 1 >= pages;
-        const pageText = `${String(page + 1).padStart(2, '0')} / ${String(pages).padStart(2, '0')}`;
-        if (!media.matches) {
-            footer.append(prev, element('span', pageText, 'tea-page-display'), next);
-            return footer;
-        }
-        const jump = element('details', undefined, 'tea-page-jump');
-        const summary = element('summary', undefined, 'tea-page-display');
-        summary.setAttribute('role', 'button'); summary.setAttribute('aria-label', '跳转到某页');
-        summary.setAttribute('aria-expanded', 'false'); summary.setAttribute('aria-controls', 'tea-page-popover');
-        summary.title = `第 ${page + 1} 页，共 ${pages} 页，点击跳转`;
-        summary.append(element('span', String(page + 1).padStart(2, '0'), 'tea-page-current'),
-            element('span', ' / ', 'tea-page-divider'), element('span', String(pages).padStart(2, '0'), 'tea-page-total'), glyph('down'));
-        const form = element('form', undefined, 'tea-page-popover'); form.id = 'tea-page-popover'; form.noValidate = true;
-        const label = element('label', '跳转'); label.htmlFor = 'tea-page-target';
-        const controls = element('div', undefined, 'tea-page-controls'), input = element('input');
-        input.id = 'tea-page-target'; input.type = 'text'; input.inputMode = 'numeric'; input.pattern = '[0-9]*';
-        input.autocomplete = 'off'; input.value = String(page + 1); input.setAttribute('aria-label', '跳转页码'); input.setAttribute('aria-describedby', 'tea-page-hint');
-        const go = element('button'); go.type = 'submit'; go.setAttribute('aria-label', '确认跳转'); go.title = '确认跳转'; go.append(glyph('check'));
-        const hint = element('p', `共 ${pages} 页`, 'tea-page-hint'); hint.id = 'tea-page-hint'; hint.setAttribute('aria-live', 'polite');
-        const resetHint = () => { hint.textContent = `共 ${pages} 页`; hint.classList.remove('tea-page-error'); input.removeAttribute('aria-invalid'); };
-        controls.append(label, input, go); form.append(controls, hint); jump.append(summary, form);
-        summary.addEventListener('click', event => {
-            event.preventDefault(); jump.open = !jump.open;
-            // Focus during the tap so mobile browsers may open the numeric keyboard.
-            if (jump.open) { input.value = String(page + 1); resetHint(); input.focus({ preventScroll: true }); input.select(); }
-        });
-        jump.addEventListener('toggle', () => summary.setAttribute('aria-expanded', String(jump.open)));
-        jump.addEventListener('focusout', event => { if (!jump.contains(event.relatedTarget)) jump.open = false; });
-        jump.addEventListener('keydown', event => {
-            if (jump.open && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); jump.open = false; summary.focus({ preventScroll: true }); }
-        });
-        input.addEventListener('input', resetHint);
-        form.addEventListener('submit', async event => {
-            event.preventDefault();
-            const value = input.value.trim(), target = Number(value);
-            if (!/^\d+$/.test(value) || !Number.isInteger(target) || target < 1 || target > pages) {
-                hint.textContent = `请输入 1～${pages}`; hint.classList.add('tea-page-error'); input.setAttribute('aria-invalid', 'true'); input.focus({ preventScroll: true }); return;
-            }
-            jump.open = false; input.blur();
-            await turnTo(target - 1);
-            panel?.querySelector('.tea-page-jump summary')?.focus({ preventScroll: true });
-        });
-        footer.append(prev, jump, next);
+        const jump = createPageJump({ getPage: () => page, getPages: () => pages, onSelect: async target => {
+            await turnTo(target); panel?.querySelector('.tea-page-jump summary')?.focus({ preventScroll: true });
+        } });
+        jump.update();
+        footer.append(prev, jump.node, next);
         return footer;
     }
     function articleHeader(item, number, illustration) {
@@ -429,7 +573,8 @@ export function createTheatrePanel(ctx, state, actions) {
         if (number) kicker.append(element('span', String(number).padStart(2, '0'), 'tea-number'));
         kicker.append(element('span', typeLabel(item.type)));
         if (item.gore) kicker.append(element('span', 'G向', 'tea-content-tag'));
-        title.append(kicker, element('h2', item.title, 'tea-article-title'), element('p', isManuscript(item.id) ? '亲笔手稿 / 我' : `社区投稿 / ${item.author}`, 'tea-article-meta'));
+        title.append(kicker, element('h2', scope === 'favorites' && number ? favoriteTitle(item) : item.title, 'tea-article-title'),
+            element('p', isManuscript(item.id) ? '亲笔手稿 / 我' : `社区投稿 / ${item.author}`, 'tea-article-meta'));
         head.append(title); if (illustration) head.append(art()); return head;
     }
     function articleActions(item) {
@@ -438,7 +583,12 @@ export function createTheatrePanel(ctx, state, actions) {
         const favorite = Object.hasOwn(state.settings.favorites, item.id);
         const star = iconButton('star', favorite ? '取消收藏' : '收藏剧场', () => { actions.toggleFavorite(item.id); render(); });
         star.classList.add('tea-star'); star.setAttribute('aria-pressed', String(favorite)); buttons.append(star);
-        if (item.type === 'standalone') { const use = iconButton('insert', '填入输入框', () => select(item)); use.classList.add('tea-primary'); buttons.append(use); }
+        if (item.type === 'standalone') {
+            const use = iconButton('insert', '在酒馆中游玩', () => select(item)); buttons.append(use);
+            if (actions.playground) {
+                const play = iconButton('cup', '在插件中游玩', () => selectInPlugin(item)); play.classList.add('tea-primary', 'play-in-plugin'); buttons.append(play);
+            } else use.classList.add('tea-primary');
+        }
         return buttons;
     }
     function markdownBody(item) { const body = element('div', undefined, 'tea-body'); body.innerHTML = renderMarkdown(item.body); return body; }
@@ -446,7 +596,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const reading = element('div', undefined, 'tea-reading tea-scroll'); reading.dataset.id = item.id;
         reading.append(articleHeader(item, null, true), markdownBody(item)); workspace.append(reading);
         const footer = element('footer', undefined, 'tea-reader-footer');
-        footer.append(element('p', item.type === 'standalone' ? '一场独立的番外\n选用后填入酒馆输入框' : '藏在日常里的小插曲\n由预设宏在回复时随机调用', 'tea-footer-note'), articleActions(item)); workspace.append(footer);
+        footer.append(element('p', item.type === 'standalone' ? '一场独立的番外' : '藏在日常里的小插曲\n由预设宏在回复时随机调用', 'tea-footer-note'), articleActions(item)); workspace.append(footer);
     }
     function renderFeedEntry(item, number) {
         const article = element('article', undefined, 'tea-feed-entry'); article.dataset.id = item.id; article.setAttribute('aria-label', item.title);
@@ -483,8 +633,8 @@ export function createTheatrePanel(ctx, state, actions) {
                 try { approved = await confirm(`确定删除手稿「${draft.title}」吗？对应收藏也会移除。`, '删除手稿'); } finally { confirming = false; }
                 if (!approved) return;
                 busy = true; render();
-                try { await actions.deleteManuscript(draft.id); mode = 'list'; showMessage('手稿已删除'); }
-                catch (error) { showMessage(error.message); }
+                try { await actions.deleteManuscript(draft.id); actions.diagnostics?.info('手稿已删除'); mode = 'list'; showMessage('手稿已删除'); }
+                catch (error) { actions.diagnostics?.error('删除亲笔手稿', error); showMessage(error.message); }
                 finally { busy = false; render(); }
             }); remove.disabled = busy; buttons.append(remove);
         }
@@ -496,74 +646,125 @@ export function createTheatrePanel(ctx, state, actions) {
             busy = true; render();
             try {
                 const item = await actions.saveManuscript(draft);
+                actions.diagnostics?.info('手稿已保存');
                 if (draft.id) selectedId = item.id;
                 mode = 'list'; showMessage(draft.id ? '手稿已保存' : '手稿已保存到亲笔手稿');
-            } catch (error) { showMessage(error.message); }
+            } catch (error) { actions.diagnostics?.error('保存亲笔手稿', error); showMessage(error.message); }
             finally {
                 busy = false; render();
                 if (mode === 'list') panel.querySelector('.tea-list').scrollTop = returnScroll;
             }
         }); workspace.append(form, footer);
     }
-    function renderSettings(workspace) {
+    function renderSettings(workspace, viewState) {
         const area = element('div', undefined, 'tea-scroll tea-settings');
+        function group(name) {
+            const section = element('section', undefined, 'tea-settings-group');
+            section.append(element('h3', name)); area.append(section); return section;
+        }
+        const library = group('剧场库');
         const update = element('section', undefined, 'tea-update-setting');
         const controls = element('div', undefined, 'tea-update-controls');
-        const button = textButton('', actions.updateLibrary); button.className = 'tea-manual-update';
-        button.setAttribute('aria-label', '手动更新'); button.setAttribute('aria-busy', String(!!state.updating));
-        button.disabled = state.updating || !state.settings.enabled;
-        button.append(glyph('refresh'), element('span', '手动更新'));
-        const updateStatus = element('div', state.statusKind === 'update' ? state.status : '', 'tea-update-status');
+        const button = iconButton('refresh', '手动更新', actions.updateLibrary); button.classList.add('tea-manual-update');
+        const updateStatus = element('div', '', 'tea-update-status');
         updateStatus.setAttribute('role', 'status'); updateStatus.setAttribute('aria-live', 'polite');
         controls.append(element('strong', '更新剧场库'), button, element('small', '启动酒馆时会自动更新。'), updateStatus);
-        update.append(controls); area.append(update);
+        update.append(controls); library.append(update);
         const preference = element('section', undefined, 'tea-content-preference');
         const label = element('label', undefined, 'tea-setting-row');
         const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = state.settings.showGore === true;
         toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', 'tea-gore-description');
         toggle.setAttribute('aria-label', '显示 G 向内容');
         label.append(element('strong', '显示 G 向内容'), toggle);
-        const description = element('p', '开启后，插件列表和随文剧场随机将会展示/抽选相关内容。', 'tea-setting-description');
+        const description = element('p', '在列表和随文剧场中包含血腥、猎奇等内容。', 'tea-setting-description');
         description.id = 'tea-gore-description';
         toggle.addEventListener('change', () => {
             state.settings.showGore = toggle.checked; actions.saveSettings();
             page = 0; selectedId = null; returnScroll = 0; expanded.clear(); render();
         });
-        preference.append(label, element('p', '血腥、猎奇等内容', 'tea-setting-description'), description); area.append(preference);
-        function choice(label, values, current, set, className = '') {
-            const row = element('div', undefined, `tea-setting-row ${className}`), buttons = element('div', undefined, 'tea-choice'); buttons.setAttribute('aria-label', label);
-            for (const [value, text] of values) { const button = textButton(text, () => { set(value); actions.saveSettings(); render(); }); button.setAttribute('aria-pressed', String(current === value)); buttons.append(button); }
-            row.append(element('strong', label), buttons); area.append(row);
+        preference.append(label, description); library.append(preference);
+        const help = textButton('随文剧场用法', () => { mode = 'help'; render(); }); help.className = 'tea-text-button'; library.append(help);
+        let captureRules;
+        if (actions.playground) {
+            const generation = group('小剧场生成');
+            apiSettings ??= createPlayApiSettings(ctx, state.settings, actions.saveSettings, actions.diagnostics);
+            generation.append(apiSettings.node);
+            renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
+            const display = group('回复显示');
+            display.classList.add('play-display-settings');
+            display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
+            captureRules = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
         }
-        const fontRow = element('label', '正文字号', 'tea-setting-row'), font = element('select');
-        font.setAttribute('aria-label', '正文字号');
-        const fontChoices = media.matches ? [[15, '标准 · 15'], [16, '适中 · 16'], [18, '较大 · 18']] : [[16, '标准 · 16'], [18, '较大 · 18']];
-        const fontKey = media.matches ? 'mobileFontSize' : 'fontSize';
-        for (const [n, label] of fontChoices) {
-            const option = element('option', label); option.value = String(n); font.append(option);
+        if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
+        const reading = group('阅读外观');
+        renderAppearanceSetting(reading);
+        renderFontSourceSetting(reading);
+        renderFontSizeSetting(reading, () => panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`));
+        const spacing = element('div', undefined, 'tea-setting-row tea-desktop-setting');
+        const choices = element('div', undefined, 'tea-choice'); choices.setAttribute('aria-label', '目录间距');
+        for (const [value, name] of [[false, '舒展'], [true, '紧凑']]) {
+            const button = textButton(name, () => { state.settings.compact = value; actions.saveSettings(); render(); });
+            button.setAttribute('aria-pressed', String((state.settings.compact !== false) === value)); choices.append(button);
         }
-        font.value = String(bodyFontSize());
-        font.addEventListener('change', () => { state.settings[fontKey] = Number(font.value); actions.saveSettings(); render(); });
-        fontRow.append(font); area.append(fontRow);
-        choice('目录间距', [[false,'舒展'],[true,'紧凑']], !!state.settings.compact, value => { state.settings.compact = value; }, 'tea-desktop-setting');
+        spacing.append(element('strong', '目录间距'), choices); reading.append(spacing);
         if (media.matches) {
-            const row = element('label', '每页篇数', 'tea-setting-row'), size = element('select'); size.setAttribute('aria-label', '每页篇数');
+            const row = element('label', undefined, 'tea-setting-row'), size = element('select'); size.setAttribute('aria-label', '每页篇数');
             for (const n of [5,10,20,50]) { const option = element('option', `${n} 篇`); option.value = String(n); size.append(option); } size.value = String(mobilePageSize());
-            size.addEventListener('change', () => { state.settings.pageSize = Number(size.value); actions.saveSettings(); page = 0; selectedId = null; returnScroll = 0; render(); }); row.append(size); area.append(row);
+            size.addEventListener('change', () => { state.settings.pageSize = Number(size.value); actions.saveSettings(); page = 0; selectedId = null; returnScroll = 0; render(); }); row.append(element('strong', '每页篇数'), size); reading.append(row);
         }
-        const help = textButton('随文剧场用法', () => { mode = 'help'; render(); }); help.className = 'tea-text-button'; area.append(help);
-        workspace.append(area, element('p', '设置自动保存在本地。', 'tea-settings-note'));
+        workspace.append(area);
+        settingsView = () => ({ scrollTop: area.scrollTop, rules: captureRules?.(), logs: diagnosticsView?.capture() });
+    }
+    function renderAppearanceSetting(area) {
+        const row = element('label', undefined, 'tea-setting-row'), select = element('select');
+        select.setAttribute('aria-label', '外观');
+        for (const [value, name] of [['default', '默认'], ['tavern', '跟随酒馆主题']]) {
+            const option = element('option', name); option.value = value; select.append(option);
+        }
+        select.value = state.settings.appearance === 'tavern' ? 'tavern' : 'default';
+        select.addEventListener('change', () => {
+            state.settings.appearance = select.value; actions.saveSettings();
+            appearance.apply(select.value); measureBodies();
+        });
+        row.append(element('strong', '外观'), select); area.append(row);
+    }
+    function renderFontSourceSetting(area) {
+        const row = element('label', undefined, 'tea-setting-row'), font = element('select');
+        font.setAttribute('aria-label', '字体');
+        const label = element('span'); label.append(element('strong', '字体'), element('small', '应用于正文和界面文字'));
+        for (const [value, name] of [['default', '默认字体'], ['tavern', '跟随酒馆字体']]) {
+            const option = element('option', name); option.value = value; font.append(option);
+        }
+        font.value = state.settings.fontSource === 'tavern' ? 'tavern' : 'default';
+        font.addEventListener('change', () => {
+            state.settings.fontSource = font.value; actions.saveSettings(); applyFontSource(); measureBodies();
+        });
+        row.append(label, font); area.append(row);
+    }
+    function renderFontSizeSetting(area, onChange = render) {
+        const row = element('label', undefined, 'tea-setting-row'), font = element('select');
+        font.setAttribute('aria-label', '正文字号');
+        const key = media.matches ? 'mobileFontSize' : 'fontSize';
+        for (const value of bodyFontSizes) { const option = element('option', String(value)); option.value = String(value); font.append(option); }
+        font.value = String(bodyFontSize());
+        font.addEventListener('change', () => { state.settings[key] = Number(font.value); actions.saveSettings(); onChange(); });
+        row.append(element('strong', '正文字号'), font); area.append(row);
     }
     function renderHelp(workspace) {
         const area = element('div', undefined, 'tea-scroll tea-help');
         for (const [title, macro, description] of [['所有随文剧场', '{{茶话会小剧场}}', '从所有随文剧场中随机抽取。'], ['收藏的随文剧场', '{{我收藏的小剧场}}', '从收藏的随文剧场中随机抽取，也包括收藏的亲笔手稿。']]) {
             area.append(element('h3', title)); const row = element('div', undefined, 'tea-macro'); row.append(element('code', macro));
-            row.append(iconButton('copy', '复制宏', async () => { try { await navigator.clipboard.writeText(macro); showMessage('宏已复制，可粘贴到预设中'); } catch { showMessage('浏览器未允许复制，请选中宏文字手动复制。'); } }));
+            row.append(iconButton('copy', '复制宏', async () => { try { await copyText(macro); showMessage('宏已复制，可粘贴到预设中'); } catch { showMessage('复制未成功，请选中宏文字手动复制。'); } }));
             area.append(row, element('p', description));
         }
         area.append(element('p', '把需要的宏放置在预设原先放小剧场的位置，宏会在向AI发送请求时被替换为随机的一个小剧场。通常仅放其中一个宏即可，两个不同种类宏同时被放入预设中时，会各自输出一条。'), element('p', '不要将一个宏多次放置，会输出多条同样内容。')); workspace.append(area);
     }
-    function onBreakpoint() { if (panel) { page = 0; selectedId = null; returnScroll = 0; render(); } }
+    function onBreakpoint() {
+        if (!panel) return;
+        if (scope === 'play' && mode === 'list') { panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`); playView?.layout(); return; }
+        if (isRecordFavorites()) { if (!media.matches && mode === 'record') mode = 'list'; render(); return; }
+        page = 0; selectedId = null; returnScroll = 0; render();
+    }
     return {
         async open() {
             if (popup || opening || !state.settings.enabled) return;
@@ -573,12 +774,14 @@ export function createTheatrePanel(ctx, state, actions) {
                 media = matchMedia('(max-width: 760px)'); media.addEventListener('change', onBreakpoint);
                 observer = new ResizeObserver(measureBodies);
                 mode = 'list'; message = ''; panel = element('div'); panel.id = 'teahouse-panel';
+                appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open]')) {
                         if (!menu.contains(event.target)) menu.open = false;
                     }
                 });
                 render();
+                if (isRecordFavorites()) void refreshFavoriteCatalog();
                 const context = ctx();
                 popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false, onClosing: canLeave,
                     onOpen: () => { measureBodies(); [...panel.querySelectorAll('button')].find(b => b.getClientRects().length && !b.disabled)?.focus({ preventScroll: true }); } });
@@ -586,23 +789,32 @@ export function createTheatrePanel(ctx, state, actions) {
                 resizeViewport = () => { const viewport = window.visualViewport; if (!viewport || !popup) return;
                     popup.dlg.style.setProperty('--tea-viewport-height', `${viewport.height}px`); popup.dlg.style.setProperty('--tea-viewport-top', `${viewport.offsetTop}px`); };
                 window.visualViewport?.addEventListener('resize', resizeViewport); window.visualViewport?.addEventListener('scroll', resizeViewport); resizeViewport();
+                actions.diagnostics?.info('打开剧场面板');
                 await popup.show();
+                actions.diagnostics?.info('关闭剧场面板');
             } finally {
+                apiSettings?.cancel();
+                diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;
                 clearTimeout(messageTimer);
+                playView?.deactivate(); playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
-                popup = null; panel = null; opening = false;
+                appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
                 searchComposing = false;
             }
         },
         refresh() {
             syncRandomOrders();
             if (!panel) return;
-            if (mode === 'editor') {
-                const status = panel.querySelector('.tea-status');
-                status.textContent = message || state.status; status.hidden = !status.textContent;
-            } else render();
+            if (scope === 'play' && mode === 'list') {
+                updateStatus();
+                void playView?.refresh();
+            } else if (isRecordFavorites() && ['list', 'record'].includes(mode)) void refreshFavoriteCatalog();
+            else if (mode === 'editor') {
+                updateStatus();
+            } else render({ preserveSettings: true });
         },
+        refreshStatus: updateStatus,
         close,
     };
 }

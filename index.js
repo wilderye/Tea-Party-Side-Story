@@ -3,11 +3,18 @@ import { createLibraryRequest } from './download-access.js';
 import { validateManifest, readPack, collectPacks, readManuscripts, pruneCommunityFavorites } from './library.js';
 import { createTheatrePanel, element, textButton } from './panel.js';
 import { syncQrEntry } from './qr-entry.js';
+import { createPlayRuntime } from './play-runtime.js';
+import { createPlayPromptFavorites } from './play-prompt-favorites.js';
+import { createDiagnostics, observePluginErrors } from './diagnostics.js';
 
+const diagnostics = createDiagnostics();
+observePluginErrors(diagnostics);
+diagnostics.info('插件开始初始化');
 const ctx = () => SillyTavern.getContext();
 const settings = ctx().extensionSettings.teahouse ??= { favorites: {}, pageSize: 5, lastId: null, libraryUrl: '' };
 settings.favorites ??= {};
 settings.enabled ??= true;
+settings.compact ??= true;
 settings.showGore = settings.showGore === true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
@@ -26,7 +33,7 @@ const personalFile = 'teahouse-manuscripts.json';
 let statusTimer;
 function notify(message, kind = '', duration = kind === 'update' ? 5000 : 0) {
     clearTimeout(statusTimer);
-    state.status = message; state.statusKind = kind; refreshSettings(); ui?.refresh();
+    state.status = message; state.statusKind = kind; refreshSettings(); ui?.refreshStatus();
     if (message && duration > 0) {
         statusTimer = setTimeout(() => notify(''), duration);
         statusTimer?.unref?.();
@@ -82,7 +89,8 @@ async function loadCommunity() {
             packs.push(await readPack(text, pack));
         }
         state.community = collectPacks(packs); manifest = current;
-    } catch (error) { notify(error.message); }
+        diagnostics.info('茶会选集读取完成', { count: state.community.size });
+    } catch (error) { diagnostics.error('读取茶会选集', error); notify(error.message); }
 }
 async function loadManuscripts() {
     try {
@@ -90,17 +98,24 @@ async function loadManuscripts() {
         if (response.status === 404) return;
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         state.manuscripts = readManuscripts(await response.json());
+        diagnostics.info('亲笔手稿读取完成', { count: state.manuscripts.size });
     } catch (error) {
+        diagnostics.error('读取亲笔手稿', error);
         state.personalError = `亲笔手稿读取失败：${error.message}。为保护原文件，暂不能保存或删除手稿，请刷新后重试。`;
     }
 }
 const loaded = Promise.all([loadCommunity(), loadManuscripts()]);
 
+// Lazy history reads keep a missing/corrupt play file from blocking the library.
+// The conversation view reads this service when the user opens it.
+export const playground = createPlayRuntime(ctx, settings, undefined, { diagnostics, onError: message => notify(message) });
+
 export async function updateLibrary() {
     if (!settings.enabled || state.updating) return;
     state.updating = true;
-    refreshSettings();
+    refreshSettings(); ui?.refreshStatus();
     const controller = updateController = new AbortController();
+    diagnostics.info('开始更新茶会选集');
     try {
         await loaded;
         if (controller.signal.aborted) return;
@@ -108,7 +123,9 @@ export async function updateLibrary() {
         notify('正在检查更新…', 'update', 0);
         const download = await createLibraryRequest(base, (url, options) => request(url, { ...options, signal: controller.signal }));
         const next = validateManifest(await (await download('manifest.json')).json());
-        if (manifest && JSON.stringify(next) === JSON.stringify(manifest)) { notify('茶会选集已是最新', 'update'); return; }
+        if (manifest && JSON.stringify(next) === JSON.stringify(manifest)) {
+            diagnostics.info('茶会选集已是最新'); notify('茶会选集已是最新', 'update'); return;
+        }
         const oldPaths = new Set(manifest?.packs.map(x => x.path) ?? []);
         const packs = [], downloaded = [];
         for (const [index, pack] of next.packs.entries()) {
@@ -139,10 +156,18 @@ export async function updateLibrary() {
         state.community = nextEntries; manifest = next;
         pruneCommunityFavorites(settings.favorites, state.community);
         saveSettings();
+        ui?.refresh();
+        diagnostics.info('茶会选集更新完成', { count: state.community.size });
         notify(`茶会选集更新完成，共 ${state.community.size} 条`, 'update');
     } catch (error) {
-        if (!controller.signal.aborted) notify(`更新未完成：${error.message}。${manifest ? '原有剧场保持可用。' : '请检查地址和网络后重试。'}`, 'update');
-    } finally { state.updating = false; updateController = null; refreshSettings(); ui?.refresh(); }
+        if (!controller.signal.aborted) {
+            diagnostics.error('更新茶会选集', error);
+            notify(`更新未完成：${error.message}。${manifest ? '原有剧场保持可用。' : '请检查地址和网络后重试。'}`, 'update');
+        }
+    } finally {
+        if (controller.signal.aborted) diagnostics.info('茶会选集更新已取消');
+        state.updating = false; updateController = null; refreshSettings(); ui?.refreshStatus();
+    }
 }
 
 async function writeManuscripts(next) {
@@ -182,13 +207,15 @@ function toggleFavorite(id) {
     else settings.favorites[id] = Date.now();
     saveSettings();
 }
+export const promptFavorites = createPlayPromptFavorites(state, { loaded, saveManuscript, toggleFavorite });
 
 const events = ctx().eventTypes;
 const generation = await registerTheatreGeneration(ctx, state, loaded, saveSettings);
 
 export function setEnabled(value) {
     settings.enabled = value;
-    if (!value) { updateController?.abort(); generation.reset(); notify('插件已停用'); }
+    diagnostics.info(value ? '插件已启用' : '插件已停用');
+    if (!value) { updateController?.abort(); generation.reset(); playground.stop(); notify('插件已停用'); }
     else notify('');
     saveSettings(); syncEntrances(); refreshSettings(); ui?.refresh();
 }
@@ -205,13 +232,20 @@ function syncEntrances() {
         document.body.append(edge);
     }
     qrTask = qrTask.catch(() => {}).then(() => syncQrEntry(globalThis.quickReplyApi, settings.enabled && settings.qrEnabled))
-        .catch(error => notify(error.message));
+        .catch(error => { diagnostics.error('更新快捷入口', error); notify(error.message); });
 }
 ui = createTheatrePanel(ctx, state, {
-    loaded, updateLibrary, saveManuscript, deleteManuscript, toggleFavorite, saveSettings,
+    loaded, updateLibrary, saveManuscript, deleteManuscript, toggleFavorite, saveSettings, playground, promptFavorites, diagnostics,
 });
 ctx().SlashCommandParser.addCommandObject(ctx().SlashCommand.fromProps({
-    name: 'teahouse', helpString: '打开茶话会小剧场', callback: async () => { if (settings.enabled) await ui.open(); return ''; },
+    name: 'teahouse', helpString: '打开茶话会小剧场', callback: () => {
+        // open() resolves when the panel closes; do not keep the command running that long.
+        if (settings.enabled) void ui.open().catch(error => {
+            diagnostics.error('打开剧场面板', error);
+            globalThis.toastr?.error(error?.message ?? String(error), '打开剧场失败', { escapeHtml: true });
+        });
+        return '';
+    },
 }));
 if (events.APP_READY) ctx().eventSource.on(events.APP_READY, syncEntrances);
 
@@ -274,9 +308,10 @@ if (settingsHost) {
         try {
             const config = await (await request(new URL('config.json', import.meta.url))).json();
             if (config.libraryUrl) { settings.libraryUrl = config.libraryUrl; address.value = config.libraryUrl; saveSettings(); }
-        } catch { notify('读取插件配置失败，请在扩展设置中填写剧场库地址。'); }
+        } catch (error) { diagnostics.error('读取插件配置', error); notify('读取插件配置失败，请在扩展设置中填写剧场库地址。'); }
     }
 }
 await loaded;
 syncEntrances();
+diagnostics.info('插件初始化完成');
 if (settings.enabled && settings.libraryUrl) void updateLibrary();

@@ -56,6 +56,39 @@ test('个人文件无法读取时不允许用空库覆盖它',async()=>withApp(a
     assert.equal(files.size,0);
 },true));
 
+test('用户消息收藏通过真实手稿保存流程写入，失败不点亮星标，取消后重收藏不重复保存', async () => withApp(async ({ app, files, settings, failWrites }) => {
+    const round = { prompt: '第一行标题\r\n正文保留 {{user}} 和 {{char}}。', origin: null };
+    const first = await app.promptFavorites.toggle(round);
+    const savedFile = files.get('teahouse-manuscripts.json');
+    const saved = readManuscripts(JSON.parse(savedFile)).get(first.id);
+    assert.equal(saved.body, round.prompt);
+    assert.equal(saved.title, '第一行标题');
+    assert.equal(Object.hasOwn(settings.favorites, first.id), true);
+    const edited = { ...round, prompt: `${round.prompt}\n修改后的补充。` };
+    failWrites(true);
+    await assert.rejects(app.promptFavorites.toggle(edited), /503/);
+    assert.equal(app.promptFavorites.isFavorite(edited), false);
+    assert.equal(files.get('teahouse-manuscripts.json'), savedFile);
+    assert.equal(app.promptFavorites.isFavorite(round), true);
+    failWrites(false);
+    await app.promptFavorites.toggle(round);
+    assert.equal(files.get('teahouse-manuscripts.json'), savedFile);
+    assert.equal((await app.promptFavorites.toggle(round)).id, first.id);
+    assert.equal(files.get('teahouse-manuscripts.json'), savedFile);
+    const second = await app.promptFavorites.toggle(edited);
+    assert.notEqual(second.id, first.id);
+    assert.equal(readManuscripts(JSON.parse(files.get('teahouse-manuscripts.json'))).get(first.id).body, round.prompt);
+    await app.deleteManuscript(second.id);
+    assert.equal(app.promptFavorites.isFavorite(edited), false);
+    assert.equal(app.promptFavorites.isFavorite(round), true);
+}));
+
+test('用户消息收藏遇到无法读取的手稿文件时不覆盖文件，也不记录收藏', async () => withApp(async ({ app, files, settings }) => {
+    await assert.rejects(app.promptFavorites.toggle({ prompt: '新消息', origin: null }), /读取失败/);
+    assert.equal(files.size, 0);
+    assert.deepEqual(settings.favorites, {});
+}, true));
+
 test('所有随文宏抽取未收藏手稿、排除独立剧场，同轮复用且续写保留原条',async()=>withApp(async({app,settings,macros,emit,context})=>{
     await app.saveManuscript({title:'独立稿',type:'standalone',body:'不应抽取'});
     const a=await app.saveManuscript({title:'随文甲',type:'preset',body:'甲正文'});

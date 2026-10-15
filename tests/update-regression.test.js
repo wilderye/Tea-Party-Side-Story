@@ -13,7 +13,11 @@ const hooks = registerHooks({ load(url, context, next) {
             globalThis.reviewNodes.push(node);return node;
         }
         export function textButton(text,action) {const node=element('button',text);node.addEventListener('click',action);return node;}
-        export function createTheatrePanel(ctx,state,actions) { globalThis.captureReview(state,actions); return {refresh(){},open(){}}; }
+        export function createTheatrePanel(ctx,state,actions) {
+            const view={refreshes:0,statuses:[],refresh(){this.refreshes++},
+                refreshStatus(){this.statuses.push({status:state.status,updating:state.updating})},open(){}};
+            globalThis.captureReview(state,actions,view);return view;
+        }
     `};
     return next(url,context);
 }});
@@ -23,7 +27,7 @@ async function pack(id, body='测试正文') {
     return {text,meta:{path:`packs/2026-10-1-${digest}.json`,sha256:digest,bytes:Buffer.byteLength(text),count:1}};
 }
 async function withApp(run, initial=[], settingsUI=false) {
-    const files=new Map(), calls=[]; let state, remote={format:1,packs:[]}, remoteTexts=new Map(), failUpload=false, gate;
+    const files=new Map(), calls=[]; let state, view, remote={format:1,packs:[]}, remoteTexts=new Map(), failUpload=false, gate;
     if(initial.length) {
         files.set('teahouse-index.json',JSON.stringify({format:1,packs:initial.map(p=>p.meta)}));
         for(const p of initial)files.set(`teahouse-${p.meta.sha256}.json`,p.text);
@@ -33,7 +37,7 @@ async function withApp(run, initial=[], settingsUI=false) {
         eventTypes:{},eventSource:{on(){}},SlashCommandParser:{addCommandObject(){}},SlashCommand:{fromProps:x=>x}};
     const previous={SillyTavern:globalThis.SillyTavern,document:globalThis.document,fetch:globalThis.fetch,captureReview:globalThis.captureReview,reviewNodes:globalThis.reviewNodes};
     globalThis.reviewNodes=[];
-    globalThis.captureReview=s=>{state=s;};globalThis.SillyTavern={getContext:()=>context};globalThis.document={querySelector:selector=>settingsUI && selector.startsWith('#extensions_settings') ? {append(){}} : null};
+    globalThis.captureReview=(s,_actions,v)=>{state=s;view=v;};globalThis.SillyTavern={getContext:()=>context};globalThis.document={querySelector:selector=>settingsUI && selector.startsWith('#extensions_settings') ? {append(){}} : null};
     globalThis.fetch=async(url,options={})=>{
         const u=String(url);calls.push(u);
         if(u==='/api/files/upload') {
@@ -52,7 +56,7 @@ async function withApp(run, initial=[], settingsUI=false) {
     };
     try {
         const app=await import(`../index.js?review=${randomUUID()}`);
-        await run({app,state,settings,files,calls,nodes:globalThis.reviewNodes,remote:p=>{remote={format:1,packs:p.map(x=>x.meta)};remoteTexts=new Map(p.map(x=>[x.meta.path,x.text]));},failWrites:()=>{failUpload=true;},block:p=>{gate=p;}});
+        await run({app,state,view,settings,files,calls,nodes:globalThis.reviewNodes,remote:p=>{remote={format:1,packs:p.map(x=>x.meta)};remoteTexts=new Map(p.map(x=>[x.meta.path,x.text]));},failWrites:()=>{failUpload=true;},block:p=>{gate=p;}});
     } finally {Object.assign(globalThis,previous);}
 }
 test('未填地址和无效地址给出中文提示；修改后清除旧错误并可成功重试',async()=>withApp(async({app,state,calls})=>{
@@ -65,6 +69,23 @@ test('未填地址和无效地址给出中文提示；修改后清除旧错误�
 test('修改地址不会清除其他功能的错误',async()=>withApp(async({app,state})=>{
     state.status='个人文件读取失败';state.statusKind='';app.setLibraryUrl('https://library.test/');assert.equal(state.status,'个人文件读取失败');
 }));
+test('更新进度、失败和重复检查只刷新状态；新内容保存成功后才刷新目录',async()=>{
+    const next=await pack('123456789012345678');
+    await withApp(async({app,state,view,remote,block})=>{
+        remote([next]);app.setLibraryUrl('https://library.test/');
+        let release;block(new Promise(resolve=>{release=resolve;}));
+        const pending=app.updateLibrary();await new Promise(resolve=>setImmediate(resolve));
+        assert.equal(view.refreshes,0);
+        assert.deepEqual(view.statuses.at(-1),{status:'正在检查更新…',updating:true});
+        release();await pending;
+        assert.equal(state.community.size,1);assert.equal(view.refreshes,1);
+        assert.deepEqual(view.statuses.at(-1),{status:'茶会选集更新完成，共 1 条',updating:false});
+        await app.updateLibrary();assert.equal(view.refreshes,1,'没有新内容不刷新目录');
+        app.setLibraryUrl('invalid');await app.updateLibrary();
+        assert.equal(view.refreshes,1,'错误提示也不刷新目录');
+        assert.equal(view.statuses.at(-1).updating,false);
+    });
+});
 test('重复点击只执行一次；更新中改地址取消旧请求且不留下旧错误',async()=>withApp(async({app,state,block,calls,files})=>{
     let release;block(new Promise(resolve=>{release=resolve;}));app.setLibraryUrl('https://library.test/');
     const pending=app.updateLibrary();await new Promise(resolve=>setImmediate(resolve));await app.updateLibrary();

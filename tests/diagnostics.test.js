@@ -1,0 +1,148 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createDiagnostics, observePluginErrors } from '../diagnostics.js';
+
+function fixture(options = {}) {
+    const files = new Map();
+    const storage = { getItem: key => files.get(key) ?? null, setItem: (key, value) => files.set(key, value) };
+    return { files, storage, logs: createDiagnostics({ storage, ...options }) };
+}
+
+test('保留错误文字、堆栈和原因，认证和无关请求内容不进入日志或导出', () => {
+    const { logs, files } = fixture();
+    const trace = logs.start('小剧场生成', { apiMode: 'custom', messages: ['不应记录的提示词'], settings: { key: 'hidden' } }, ['private-test-secret']);
+    trace.update({ phase: 'generating', endpoint: 'https://account:password@example.invalid/v1?token=url-secret', stream: true });
+    const cause = new Error('远端连接关闭'); cause.code = 'ECONNRESET';
+    const error = new Error('socket hang up\nAuthorization: Bearer private-test-secret\n接口返回的完整第二行', { cause });
+    error.request = { messages: ['不应记录的提示词'], key: 'private-test-secret' };
+    trace.finish('failed', error);
+    const exported = logs.export();
+    assert.match(exported, /socket hang up/); assert.match(exported, /完整第二行/);
+    assert.match(exported, /ECONNRESET/);
+    assert.ok(exported.includes(logs.read().entries.at(-1).error.stack));
+    assert.doesNotMatch(exported, /private-test-secret|url-secret|account:password|不应记录的提示词/);
+    assert.doesNotMatch([...files.values()].join(''), /private-test-secret|url-secret|不应记录的提示词/);
+});
+
+test('刷新保留原记录，不从残留状态推断失败；只保留指定数量', () => {
+    const { logs, storage } = fixture({ limit: 2 });
+    logs.error('旧错误', '旧内容'); logs.error('新错误', '新内容'); logs.start('还在生成');
+    const loaded = createDiagnostics({ storage, limit: 2 }).read().entries;
+    assert.equal(loaded.length, 2); assert.equal(loaded[1].message, '开始');
+    assert.equal(loaded[1].level, 'info'); assert.equal(loaded[0].error.message, '新内容');
+    assert.doesNotMatch(JSON.stringify(loaded), /上次未正常结束/);
+});
+
+test('清空后迟到的请求结束不会把旧日志重新加回来', () => {
+    const { logs } = fixture();
+    const pending = logs.start('进行中的请求'); logs.clear();
+    pending.update({ receivedCharacters: 10 }); pending.finish('failed', new Error('迟到错误'));
+    assert.equal(logs.read().entries.length, 0);
+});
+
+test('存储失败仍可查看和导出完整错误，循环原因不会阻断日志', () => {
+    const storage = { getItem: () => null, setItem: () => { throw Error('storage disabled'); } };
+    const logs = createDiagnostics({ storage }), error = new Error('完整错误'); error.cause = error;
+    logs.error('操作', error);
+    assert.match(logs.read().persistenceError, /导出/);
+    assert.match(logs.export(), /完整错误/); assert.match(logs.export(), /循环引用/);
+});
+
+test('普通操作、警告和生成节点按发生顺序记录，流式片段不刷屏', () => {
+    let tick = 0;
+    const { logs } = fixture({ now: () => new Date(Date.UTC(2026, 9, 13, 0, 0, tick++)).toISOString() });
+    logs.info('打开插件设置');
+    const pending = logs.start('小剧场生成', { phase: 'preparing' });
+    logs.warn('读取头像，已使用默认显示', new Error('头像不可用'));
+    pending.update({ phase: 'generating' });
+    pending.update({ firstContentAt: '2026-10-13T00:00:05Z', receivedCharacters: 1 });
+    for (let length = 2; length < 100; length++) pending.update({ receivedCharacters: length });
+    logs.error('保存亲笔手稿', new Error('HTTP 507', { cause: new Error('磁盘已满') }));
+    pending.finish('complete', null, { receivedCharacters: 100 });
+    const entries = logs.read().entries;
+    assert.deepEqual(entries.map(entry => [entry.operation, entry.level, entry.message]), [
+        ['打开插件设置', 'info', ''], ['小剧场生成', 'info', '开始'], ['读取头像，已使用默认显示', 'warn', ''],
+        ['小剧场生成', 'info', '已发出生成请求'], ['小剧场生成', 'info', '首次收到正文'],
+        ['保存亲笔手稿', 'error', ''], ['小剧场生成', 'info', '已完成'],
+    ]);
+    assert.deepEqual(entries.map(entry => entry.at), entries.map(entry => entry.at).toSorted());
+    assert.equal(entries.at(-1).receivedCharacters, 100);
+    assert.equal(entries.some(entry => entry.pending), false);
+});
+
+test('旧版生成记录转成时间日志，保留原错误与请求时间', () => {
+    const { files, storage } = fixture();
+    files.set('teahouse-diagnostics-v1', JSON.stringify([
+        { id: 'old-running', operation: '旧生成', startedAt: '2026-10-13T00:00:00Z', status: 'running' },
+        { id: 'old-error', operation: '读取手稿', startedAt: '2026-10-12T00:00:00Z',
+            finishedAt: '2026-10-12T00:00:01Z', status: 'failed', error: { message: '旧错误', stack: '旧调用位置' } },
+    ]));
+    const logs = createDiagnostics({ storage });
+    const entries = logs.read().entries;
+    assert.equal(entries[0].at, '2026-10-12T00:00:01Z'); assert.equal(entries[0].error.stack, '旧调用位置');
+    assert.equal(entries[1].message, 'running');
+    logs.info('新日志');
+    assert.equal(createDiagnostics({ storage }).read().entries[0].error.message, '旧错误');
+});
+
+test('错误直接显示原文和原堆栈，操作名称不包在外面，导出为连续文本', () => {
+    const { logs } = fixture({ now: () => '2026-10-13T12:00:00.000Z' });
+    logs.info('打开插件设置');
+    const error = new Error('request to https://EXAMPLE.invalid:443 failed, reason: socket hang up');
+    error.name = 'FetchError';
+    error.stack = `FetchError: ${error.message}\n    at ClientRequest.<anonymous> (index.js:123:45)\n\n完整的后续原文`;
+    error.code = 'ECONNRESET';
+    logs.error('不应该出现的分类标题', error);
+    assert.equal(logs.export(), '[2026-10-13T12:00:00.000Z] [info] 打开插件设置\n\n'
+        + `[2026-10-13T12:00:00.000Z] [error] ${error.stack}\ncode: ECONNRESET`);
+    assert.doesNotMatch(logs.export(), /不应该出现的分类标题|类型：|信息：|调用位置：|完整错误：|"entries"/);
+});
+
+test('原错误信息不在堆栈中时两者都完整保留，缺少文字时不编造解释', () => {
+    const { logs } = fixture();
+    logs.error('不会显示的外层标题', { message: '完整原始第一行\r\n  保留缩进和换行', stack: '自定义原始堆栈', code: 500 });
+    logs.error('另一个不会显示的外层标题', {});
+    const exported = logs.export();
+    assert.ok(exported.includes('完整原始第一行\r\n  保留缩进和换行\n自定义原始堆栈\ncode: 500'));
+    assert.match(exported, /\[error\] \{\}$/);
+    assert.doesNotMatch(exported, /不会显示的外层标题|错误未提供文字说明/);
+});
+
+test('正在进行的操作被较旧日志上限移出后仍能记录结果，清空后则不恢复旧操作', () => {
+    const { logs } = fixture({ limit: 2 });
+    const pending = logs.start('生成');
+    logs.info('其他操作一'); logs.info('其他操作二');
+    pending.finish('complete');
+    assert.equal(logs.read().entries.at(-1).message, '已完成');
+    const old = logs.start('旧操作'); logs.clear(); logs.info('清空后的新操作');
+    old.update({ phase: 'generating' }); old.finish('failed', new Error('旧错误'));
+    assert.equal(logs.read().entries.length, 1);
+});
+
+test('日志订阅可取消，查看器错误不会中断插件操作', () => {
+    const { logs } = fixture();
+    let calls = 0;
+    const stop = logs.subscribe(() => calls++);
+    logs.subscribe(() => { throw Error('查看器测试错误'); });
+    logs.info('开始'); logs.clear(); assert.equal(calls, 2);
+    stop(); logs.error('保存', new Error('失败')); assert.equal(calls, 2);
+});
+
+test('捕捉插件自己的意外错误与异步错误，不收集酒馆或其他插件错误', () => {
+    const { logs } = fixture(), target = new EventTarget();
+    const root = 'https://local.test/extensions/teahouse/';
+    const stop = observePluginErrors(logs, { target, root });
+    const dispatch = (type, fields) => target.dispatchEvent(Object.assign(new Event(type), fields));
+    const ownError = new Error('按钮运行失败'); ownError.stack = `Error: 按钮运行失败\n at ${root}panel.js:10:3`;
+    const hostError = new Error('其他插件失败'); hostError.stack = 'at https://local.test/extensions/other/index.js:10:3';
+    dispatch('error', { error: ownError, filename: root + 'panel.js', lineno: 10, colno: 3 });
+    dispatch('unhandledrejection', { reason: new Error('异步失败', { cause: ownError }) });
+    dispatch('error', { error: hostError, filename: 'https://local.test/script.js' });
+    dispatch('unhandledrejection', { reason: hostError });
+    dispatch('unhandledrejection', { reason: '无法确认来源的错误' });
+    assert.equal(logs.read().entries.length, 2);
+    assert.equal(logs.read().entries[0].file, root + 'panel.js');
+    assert.equal(logs.read().entries[1].error.cause.message, '按钮运行失败');
+    stop(); dispatch('unhandledrejection', { reason: ownError });
+    assert.equal(logs.read().entries.length, 2);
+});

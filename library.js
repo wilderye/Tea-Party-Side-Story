@@ -57,6 +57,10 @@ export function selectTheatre(entries, lastId, originalId, random = Math.random)
     return choices.length ? choices[Math.floor(random() * choices.length)] : null;
 }
 export const isManuscript = id => typeof id === 'string' && id.startsWith('local:');
+export function truncateTitle(title, limit = 28) {
+    const letters = [...title];
+    return letters.length > limit ? `${letters.slice(0, limit).join('')}...` : title;
+}
 export function readManuscripts(value) {
     if (value?.format !== 1 || !Array.isArray(value.entries)) throw new Error('亲笔手稿文件格式不正确');
     const result = new Map();

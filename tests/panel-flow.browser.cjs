@@ -59,7 +59,7 @@ async function verifyLayout(page,mobile) {
   for(const query of ['合成测试 0','没有匹配的标题','']){await panel.getByRole('searchbox').fill(query);await assertHeight('搜索：'+query);}
   if(mobile)await button('取消搜索').click();
   await button('设置').click();await assertHeight('设置');
-  await button('返回列表').click();
+  await button(mobile?'返回列表':'设置').click();
   for(const scope of ['我的收藏','亲笔手稿','茶会选集']){await button(scope).click();await assertHeight(scope);}
  }
  const code='  缩进与空行保留\n\n'+('合成测试文字。'.repeat(100))+'\n'+('unbroken'.repeat(100))+'\n**原样符号** <b>原样标签</b> {{user}}\n';
@@ -83,7 +83,7 @@ async function verifyLayout(page,mobile) {
  assert.equal(await panel.locator(mobile?'.tea-pagination':'.tea-reader-footer').evaluate(n=>n.getBoundingClientRect().top),footerTop,'滚动正文时底部操作位置固定');
  await assertHeight('长代码块');
  if(process.env.TEA_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.TEA_SCREENSHOT_DIR,mobile?'code-mobile.png':'code-desktop.png')});
- await button('填入输入框').click();
+ await button('在酒馆中游玩').click();
  assert.equal(await page.locator('#send_textarea').inputValue(),source,'填入酒馆的是原文，视觉换行不能改写原文');
  await page.reload();await panel.waitFor();
 }
@@ -98,8 +98,8 @@ async function verifyLayout(page,mobile) {
     const pathname=new URL(route.request().url()).pathname;
     if(pathname==='/')return route.fulfill({contentType:'text/html',body:harness});
     const relative=pathname.slice(1);
-    if(!['panel.js','library.js','sha256.js','markdown.js','vendor/markdown-it.js','style.css','assets/tea-party.svg'].includes(relative))return route.abort();
-    await route.fulfill({contentType:relative.endsWith('.css')?'text/css':relative.endsWith('.svg')?'image/svg+xml':'text/javascript',body:await fs.readFile(path.join(root,relative))});
+    if(!['panel.js','appearance.js','theme-styles.js','ui.js','diagnostics.js','diagnostics-view.js','play-preparation.js','play-view.js','play-editor.js','play-favorites-view.js','play-render.js','play-runtime.js','play-history.js','play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-preset.js','play-parameters.js','play-request.js','playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js','markdown.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2'].includes(relative))return route.abort();
+    await route.fulfill({contentType:relative.endsWith('.css')?'text/css':relative.endsWith('.svg')?'image/svg+xml':relative.endsWith('.woff2')?'font/woff2':'text/javascript',body:await fs.readFile(path.join(root,relative))});
    });
    await page.goto('http://tea.test/');
    const panel=page.locator('#teahouse-panel');
@@ -107,7 +107,10 @@ async function verifyLayout(page,mobile) {
    assert.equal(page.url(),'http://tea.test/');
    await verifyLayout(page,mobile);
    const visibleButton=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});
+   await page.evaluate(isMobile=>{window.fixture.settings[isMobile?'mobileFontSize':'fontSize']=isMobile?15:21;window.ui.refresh();},mobile);
    await visibleButton('设置').click();
+   assert.equal(await panel.getByRole('combobox',{name:'正文字号'}).inputValue(),mobile?'16':'22','原先保存的奇数字号显示为相邻偶数');
+   await panel.getByRole('combobox',{name:'正文字号'}).selectOption('16');
    const fontTop=()=>panel.getByRole('combobox',{name:'正文字号'}).evaluate(n=>n.getBoundingClientRect().top);
    const beforeUpdateTop=await fontTop();
    assert.equal(await panel.locator('.tea-update-status').innerText(),'');
@@ -126,7 +129,7 @@ async function verifyLayout(page,mobile) {
     assert.equal(await panel.locator('.tea-status').isVisible(),false,'设置内不重复显示更新浮动提示');
    }
    if(process.env.TEA_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.TEA_SCREENSHOT_DIR,mobile?'update-settings-mobile.png':'update-settings-desktop.png')});
-   await visibleButton('返回列表').click();
+   await visibleButton(mobile?'返回列表':'设置').click();
    assert.equal(await visibleButton('更新茶会选集').count(),0,'更新入口只保留在设置中');
    assert.equal(await visibleButton('重新打乱').count(),0,'按时间排序时隐藏重新打乱');
    await visibleButton('我的收藏').click();
@@ -167,13 +170,26 @@ async function verifyLayout(page,mobile) {
     assert.equal(await visibleButton('下一页').isDisabled(),true);
     await panel.getByRole('searchbox').fill('');
     await visibleButton('设置').click();
-    assert.equal(await panel.getByRole('combobox',{name:'正文字号'}).inputValue(),'15');
+    assert.equal(await panel.getByRole('combobox',{name:'正文字号'}).inputValue(),'16');
     await panel.getByRole('combobox',{name:'正文字号'}).selectOption('18');
     assert.equal(await page.evaluate(()=>window.fixture.settings.mobileFontSize),18);
     assert.equal(await page.evaluate(()=>window.fixture.settings.fontSize),undefined,'手机字号不修改电脑字号');
-    await panel.getByRole('combobox',{name:'正文字号'}).selectOption('15');
-    await visibleButton('返回列表').click();
-   } else assert.equal(await panel.locator('.tea-page-jump').count(),0,'电脑端保留原分页');
+    await panel.getByRole('combobox',{name:'正文字号'}).selectOption('16');
+    await visibleButton(mobile?'返回列表':'设置').click();
+   } else {
+    const jump=panel.getByRole('button',{name:'跳转到某页',exact:true});
+    assert.equal(await jump.locator('svg').isVisible(),true,'电脑目录页码显示下箭头');
+    await jump.click();
+    await panel.getByRole('textbox',{name:'跳转页码',exact:true}).fill('2');
+    await panel.getByRole('button',{name:'确认跳转',exact:true}).click();
+    assert.equal(await panel.locator('.tea-page-current').innerText(),'02');
+    await jump.click();
+    await panel.getByRole('textbox',{name:'跳转页码',exact:true}).fill('1');
+    await panel.getByRole('button',{name:'确认跳转',exact:true}).click();
+    assert.equal(await panel.locator('.tea-page-current').innerText(),'01');
+    await jump.click();await page.keyboard.press('Escape');
+    assert.equal(await panel.isVisible(),true,'关闭跳页框不会关闭面板');
+   }
    // Keep the original input connected while the IME owns its composition session.
    await panel.getByRole('searchbox').focus();
    await page.evaluate(()=>{
