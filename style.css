@@ -409,7 +409,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-character-browser { display:flex; flex:1; flex-direction:column; min-height:0; }
 #teahouse-panel .play-character-heading { display:none; }
 #teahouse-panel .play-character-search .tea-search-box:focus-within { border-color:var(--tea-sidebar-line,#8ca394); }
-#teahouse-panel .play-people { flex:1; min-height:0; margin-top:16px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--tea-scrollbar,#688c7b) transparent; }
+#teahouse-panel .play-people { flex:1; min-height:0; margin-top:16px; overflow:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--tea-scrollbar,#688c7b) transparent; }
 #teahouse-panel .play-people-empty { padding:20px 8px; font-size:14px; opacity:.7; }
 #teahouse-panel .play-person { display:flex; align-items:center; gap:12px; font-family:var(--tea-ui); }
 #teahouse-panel .play-avatar { display:block; width:44px; height:44px; border-radius:50%; object-fit:cover; flex:none; }

@@ -245,8 +245,23 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         button.append(avatar(character, 'play-avatar'), copy, time); return button;
     }
+    function measureCharactersPerPage() {
+        if (mobile.matches || !people.clientHeight || !people.clientWidth) return charactersPerPage;
+        const row = people.querySelector('.play-person');
+        const probe = !row && characters.length ? characterButton(characters[0]) : null;
+        // The first catalog read can finish after the empty view was measured.
+        // Measure a real row now, before exposing a page with the default count.
+        if (probe) people.append(probe);
+        const rowHeight = (row ?? probe)?.getBoundingClientRect().height;
+        probe?.remove();
+        return rowHeight ? Math.max(1, Math.floor(people.clientHeight / rowHeight)) : charactersPerPage;
+    }
     function renderPeople(resetScroll = false) {
         const position = resetScroll ? 0 : people.scrollTop;
+        const count = measureCharactersPerPage();
+        if (count !== charactersPerPage) {
+            characterPage = Math.floor(characterPage * charactersPerPage / count); charactersPerPage = count;
+        }
         const matches = matchingCharacters(), pages = Math.max(1, Math.ceil(matches.length / charactersPerPage));
         characterPage = Math.min(characterPage, pages - 1);
         const start = mobile.matches ? 0 : characterPage * charactersPerPage;
@@ -361,16 +376,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function layout() {
         cancelAnimationFrame(layoutFrame);
+        if (!visible) return;
+        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; renderPeople(); updateBrowser(); }
+        // ResizeObserver runs before paint; do not defer catalog pagination by a frame.
+        if (measureCharactersPerPage() !== charactersPerPage) renderPeople(true);
         layoutFrame = requestAnimationFrame(() => {
             if (!visible) return;
-            if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; renderPeople(); updateBrowser(); }
-            if (!mobile.matches && people.clientHeight && people.clientWidth) {
-                const rowHeight = people.querySelector('.play-person')?.getBoundingClientRect().height;
-                const count = rowHeight ? Math.max(1, Math.floor(people.clientHeight / rowHeight)) : charactersPerPage;
-                if (count !== charactersPerPage) {
-                    characterPage = Math.floor(characterPage * charactersPerPage / count); charactersPerPage = count; renderPeople(true);
-                }
-            }
             loadMoreCharacters();
             resizeInput();
             for (const [id, view] of views) {
