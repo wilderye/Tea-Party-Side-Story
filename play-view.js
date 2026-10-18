@@ -82,7 +82,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     let lastJob = playground.getState();
-    let displayedCharacter = '', restoringPosition = false;
+    let displayedCharacter = '', restoringPosition = false, cachedPosition = null, positionTimer = 0;
     const storageKey = 'teahouse-play-view-v1';
 
     try {
@@ -339,16 +339,36 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         return { bottom: false, scrollTop: feed.scrollTop };
     }
-    function rememberPosition(followBottom = true) {
-        const position = capturePosition(followBottom);
-        if (position) {
-            const key = characterKey(selected), previous = positions.get(key);
-            // scrollTop can round to whole pixels. Keep the intended offset so
-            // rounding after every inserted batch does not accumulate as drift.
-            if (position.anchor && position.anchor === previous?.anchor && Math.abs(position.offset - previous.offset) < 1) {
-                position.offset = previous.offset;
-            }
-            positions.set(key, position); scheduleSave();
+    function commitPosition(position) {
+        if (!position) return;
+        const key = characterKey(selected), previous = positions.get(key);
+        // scrollTop can round to whole pixels. Keep the intended offset so
+        // rounding after every inserted batch does not accumulate as drift.
+        if (position.anchor && position.anchor === previous?.anchor && Math.abs(position.offset - previous.offset) < 1) {
+            position.offset = previous.offset;
+        }
+        cachedPosition = { ...position, scrollTop: feed.scrollTop, key };
+        positions.set(key, position); scheduleSave();
+    }
+    function rememberPosition(followBottom = true, forceSync = false) {
+        if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return;
+        const key = characterKey(selected);
+        if (followBottom && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12) {
+            clearTimeout(positionTimer);
+            commitPosition({ bottom: true });
+            return;
+        }
+        if (!forceSync && cachedPosition && cachedPosition.key === key && Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) < 2) {
+            return;
+        }
+        clearTimeout(positionTimer);
+        if (forceSync) {
+            commitPosition(capturePosition(followBottom));
+        } else {
+            positionTimer = setTimeout(() => {
+                if (!visible || restoringPosition) return;
+                commitPosition(capturePosition(followBottom));
+            }, 80);
         }
     }
     function updateJump() {
@@ -363,22 +383,26 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (anchor) feed.scrollTop += anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top + (Number(position.offset) || 0);
             else feed.scrollTop = Number(position.scrollTop) || 0;
         }
+        cachedPosition = position ? { ...position, scrollTop: feed.scrollTop, key: characterKey(selected) } : null;
         updateJump();
     }
     function keepReading(change, followBottom = true) {
         // Editing keeps a visible anchor even when the feed was at the bottom.
         const position = capturePosition(followBottom) ?? positions.get(characterKey(selected));
-        change(); restorePosition(position); rememberPosition(followBottom);
+        change(); restorePosition(position); rememberPosition(followBottom, true);
     }
     function jumpToLatest() {
         if (!visible) return;
-        feed.scrollTop = feed.scrollHeight; positions.set(characterKey(selected), { bottom: true }); updateJump(); scheduleSave();
+        feed.scrollTop = feed.scrollHeight;
+        clearTimeout(positionTimer);
+        commitPosition({ bottom: true });
+        updateJump();
     }
     function jumpToMessage(id, role) {
         const view = views.get(id), message = view?.[role];
         if (!visible || !message?.getClientRects().length) return;
         feed.scrollTop += message.getBoundingClientRect().top - feed.getBoundingClientRect().top - 10;
-        rememberPosition(); updateJump();
+        rememberPosition(true, true); updateJump();
     }
     function resizeInput(force = false) {
         if (!visible || inputRow.hidden || !page.clientHeight) return;
@@ -443,7 +467,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         // A scroll event queued before opening the menu may arrive afterwards.
         // Only dismiss it if the content has moved since the menu was positioned.
         if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
-        updateJump(); rememberPosition();
+        updateJump(); rememberPosition(true, false);
         if (!restoringPosition && feed.scrollTop < 120 && feed.scrollHeight > feed.clientHeight) void loadEarlierHistory();
     }, { passive: true });
     input.addEventListener('input', () => {
@@ -1086,7 +1110,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (visible) void refreshUser();
     });
     if (events.PERSONA_CHANGED) ctx().eventSource.on(events.PERSONA_CHANGED, () => { if (visible) void refreshUser(); });
-    window.addEventListener('pagehide', () => { rememberPosition(); saveViewState(); });
+    window.addEventListener('pagehide', () => { rememberPosition(true, true); saveViewState(); });
     window.addEventListener('focus', () => {
         if (visible) { rememberPosition(); void refresh(); void refreshUser(); void refreshFavorites(); }
     });
@@ -1109,9 +1133,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
             renderPeople(); renderHistory(); updateComposer(); layout(); void refresh();
         },
-        deactivate() { rememberPosition(); visible = false; refreshId++; closeResults(false); pageJump.node.open = false; saveViewState(); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect(); },
+        deactivate() {
+            clearTimeout(positionTimer);
+            const key = characterKey(selected);
+            if (visible && (!cachedPosition || cachedPosition.key !== key || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
+                commitPosition(capturePosition(true));
+            }
+            visible = false; refreshId++; closeResults(false); pageJump.node.open = false; scheduleSave(); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
+        },
         refresh, layout,
-        prepareLayout() { if (visible) { closeResults(false); rememberPosition(); } },
+        prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
         async fillFromEntry(entry) {

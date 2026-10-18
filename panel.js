@@ -22,7 +22,7 @@ export function createTheatrePanel(ctx, state, actions) {
     let scope = 'community', type = '', query = '', page = 0, mode = 'list', selectedId = null;
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer, returnScroll = 0;
     let searchComposing = false, mobileSearchOpen = false, catalogCollapsed = false;
-    let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings;
+    let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings, playActive = false;
     let favoriteType = 'standalone', favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
     const favoriteReaders = new Map();
@@ -319,7 +319,11 @@ export function createTheatrePanel(ctx, state, actions) {
             diagnosticsView?.dispose(); diagnosticsView = null;
             settingsView = null;
         }
-        playView?.deactivate();
+        const enteringPlay = scope === 'play' && mode === 'list';
+        if (playActive && !enteringPlay) {
+            playView?.deactivate();
+            playActive = false;
+        }
         syncRandomOrders();
         const oldList = panel.querySelector('.tea-list'), scroll = oldList?.scrollTop ?? 0;
         const oldReading = panel.querySelector('.tea-reading');
@@ -350,7 +354,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (scope === 'play') {
             ensurePlayShell(); playCatalog.hidden = false;
             if (mode === 'list') {
-                playWorkspace.hidden = false; appendStatus(); getPlayView().activate(panel); return;
+                playWorkspace.hidden = false; appendStatus(); getPlayView().activate(panel); playActive = true; return;
             }
         }
         const result = scope === 'play' ? [] : matches();
@@ -800,7 +804,11 @@ export function createTheatrePanel(ctx, state, actions) {
                 apiSettings?.cancel();
                 diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;
                 clearTimeout(messageTimer);
-                playView?.deactivate(); playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
+                if (playActive) {
+                    playView?.deactivate();
+                    playActive = false;
+                }
+                playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
                 appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
