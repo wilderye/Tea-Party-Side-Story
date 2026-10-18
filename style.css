@@ -501,6 +501,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-empty-art { display:block; width:144px; height:108px; object-fit:contain; mix-blend-mode:multiply; opacity:.7; }
 #teahouse-panel .play-empty-title { font:400 20px/30px var(--tea-display); letter-spacing:1px; }
 #teahouse-panel .play-empty[data-state=loading] .play-empty-title { font:14px/24px var(--tea-ui); letter-spacing:0; }
+#teahouse-panel .play-earlier-bar { display:flex; justify-content:center; align-items:center; width:100%; max-width:var(--play-reading-width); margin:0 auto 16px; padding:10px 16px; font-size:13px; color:var(--tea-muted); background:none; border:0; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+#teahouse-panel .play-earlier-bar:hover { color:var(--tea-ink); }
+#teahouse-panel .play-earlier-bar:disabled { opacity:.6; cursor:default; text-decoration:none; }
 #teahouse-panel .play-load-error { display:flex; align-items:center; gap:12px; max-width:var(--play-reading-width); margin:0 auto; padding:16px 24px; color:var(--tea-error,var(--play-coral-ink)); font-size:12px; }
 #teahouse-panel .play-load-error button { flex:none; text-decoration:underline; text-underline-offset:3px; min-height:36px; }
 #teahouse-panel .play-result-menu { position:absolute; z-index:5; width:min(320px,calc(100% - 24px)); min-width:0; max-height:340px; margin:0; padding:6px; border:0; border-radius:8px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; background:var(--tea-paper); color:var(--tea-ink); box-shadow:0 6px 24px var(--tea-popup-shadow,#102f2826); }

@@ -55,7 +55,7 @@ async function checkHistory(page, mode, viewport) {
   const target = panel.locator(`[data-record="${targetId}"]`);
   await target.waitFor();
   assert.equal(await page.evaluate(() => progress.started[0]), targetId);
-  assert.equal(await panel.locator('.play-record').count(), 6, '第一批可直接阅读，不等待其余文件');
+  assert.equal(await panel.locator('.play-record').count(), mode === 'anchor' ? 90 : 10, '第一批仅按需展示最新10条或保存的锚点位置，不全量加载全部文件');
   const headOffset = record => record.locator('.play-assistant-meta').evaluate(node => node.getBoundingClientRect().top - document.querySelector('.play-feed').getBoundingClientRect().top);
   const before = await headOffset(target);
   if (mode === 'anchor') assert.ok(Math.abs(before) < 2, '优先恢复上次读到的消息位置');
@@ -80,6 +80,10 @@ async function checkHistory(page, mode, viewport) {
     return;
   }
   await page.evaluate(() => resumeHistoryReads());
+  while (await panel.locator('.play-earlier-bar:visible').count() > 0) {
+    await panel.locator('.play-earlier-bar').click();
+    await page.waitForTimeout(40);
+  }
   await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
   await page.waitForTimeout(100);
   const prompts = (await panel.locator('.play-record .play-user-text').allTextContents()).map(text => text.trim());
@@ -130,9 +134,13 @@ async function checkReopen(page, mode) {
       bottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12 };
   });
   await open(); await button('剧场演出').click();
-  await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 6);
+  await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 10);
   if (mode !== 'reopen-loading') {
     await page.evaluate(() => resumeHistoryReads());
+    while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
+      await page.locator('#teahouse-panel .play-earlier-bar').click();
+      await page.waitForTimeout(40);
+    }
     await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
   }
   await settle();
@@ -154,6 +162,10 @@ async function checkReopen(page, mode) {
     await page.waitForTimeout(100);
     if (mode === 'reopen-loading' && repeat === 1) {
       await page.evaluate(() => resumeHistoryReads());
+      while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
+        await page.locator('#teahouse-panel .play-earlier-bar').click();
+        await page.waitForTimeout(40);
+      }
       await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
       await settle();
     }

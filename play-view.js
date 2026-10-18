@@ -10,7 +10,7 @@ const activePhases = new Set(['preparing', 'generating']);
 const statusText = { preparing: '正在准备', generating: '正在生成', saving: '正在保存',
     stopped: '已停止', failed: '生成失败', unfinished: '未完成', 'save-failed': '尚未保存' };
 const characterBatchSize = 24;
-const historyBatchSize = 6;
+const historyPageSize = 10;
 
 function dateParts(value, now = new Date()) {
     const date = new Date(value);
@@ -52,6 +52,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const readingArea = element('div', undefined, 'play-reading-area');
     const feed = element('div', undefined, 'tea-scroll play-feed'); feed.setAttribute('aria-label', '小剧场对话历史');
     const content = element('div', undefined, 'play-feed-content');
+    const earlierBar = textButton('', () => void loadEarlierHistory()); earlierBar.className = 'play-earlier-bar'; earlierBar.hidden = true;
+    content.append(earlierBar);
     const empty = element('div', undefined, 'play-empty'); empty.setAttribute('role', 'status');
     const emptyArt = element('img', undefined, 'play-empty-art'); emptyArt.src = new URL('./assets/tea-party.svg', import.meta.url).href; emptyArt.alt = ''; emptyArt.hidden = true;
     const emptyTitle = element('p', '正在读取演出记录…', 'play-empty-title'); empty.append(emptyArt, emptyTitle);
@@ -70,9 +72,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
-    const records = new Map(), views = new Map(), rowsByCharacter = new Map();
+    const records = new Map(), views = new Map(), rowsByCharacter = new Map(), visibleCounts = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
-    let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false;
+    let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, loadingEarlier = false;
     let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, resultMenu, pendingSend, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
@@ -408,6 +410,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         // Only dismiss it if the content has moved since the menu was positioned.
         if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
         updateJump(); rememberPosition();
+        if (!restoringPosition && feed.scrollTop < 120 && feed.scrollHeight > feed.clientHeight) void loadEarlierHistory();
     }, { passive: true });
     input.addEventListener('input', () => {
         draftFor().text = input.value;
@@ -744,16 +747,76 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         output.box.append(view.error);
         syncMessageActions(round.id, view);
     }
+    function updateEarlierBar() {
+        if (!selected) { earlierBar.hidden = true; return; }
+        const ready = rowsByCharacter.has(selected?.id);
+        const rows = rowsByCharacter.get(selected?.id) ?? [];
+        const count = visibleCounts.get(characterKey(selected)) ?? historyPageSize;
+        const remaining = Math.max(0, rows.length - count);
+        const visibleRows = rows.slice(Math.max(0, rows.length - count));
+        const initialLoading = !loaded || (selected && !ready) || visibleRows.some(row => !records.has(row.id));
+        earlierBar.hidden = remaining <= 0 || initialLoading;
+        if (!earlierBar.hidden) {
+            earlierBar.textContent = loadingEarlier ? '正在加载更早记录…' : `加载更早记录（剩余 ${remaining} 条）`;
+            earlierBar.disabled = loadingEarlier;
+        }
+    }
+    async function loadEarlierHistory() {
+        if (!visible || loadingEarlier || !selected || restoringPosition) return;
+        const key = characterKey(selected);
+        const ready = rowsByCharacter.has(selected?.id);
+        const rows = rowsByCharacter.get(selected?.id) ?? [];
+        if (!rows.length) return;
+        const currentCount = visibleCounts.get(key) ?? historyPageSize;
+        if (currentCount >= rows.length) return;
+        const currentVisible = rows.slice(Math.max(0, rows.length - currentCount));
+        if (!loaded || !ready || currentVisible.some(row => !records.has(row.id))) return;
+        loadingEarlier = true;
+        updateEarlierBar();
+        const nextCount = Math.min(rows.length, currentCount + historyPageSize);
+        visibleCounts.set(key, nextCount);
+        const startIndex = Math.max(0, rows.length - nextCount);
+        const endIndex = rows.length - currentCount;
+        const batch = rows.slice(startIndex, endIndex);
+        const pending = batch.filter(row => {
+            const cached = records.get(row.id);
+            return cached?.revision !== row.revision || cached?.error;
+        });
+        try {
+            await Promise.all(pending.map(async row => {
+                try {
+                    const round = await playground.getRound(row.id);
+                    records.set(row.id, { round, revision: row.revision });
+                } catch {
+                    const cached = records.get(row.id);
+                    if (cached?.round) cached.error = true; else records.set(row.id, { error: true });
+                }
+            }));
+        } finally {
+            loadingEarlier = false;
+        }
+        if (!visible || characterKey(selected) !== key) return;
+        const oldScrollHeight = feed.scrollHeight;
+        const oldScrollTop = feed.scrollTop;
+        keepReading(renderHistory, false);
+        if (feed.scrollHeight > oldScrollHeight && feed.scrollTop === oldScrollTop) {
+            feed.scrollTop = oldScrollTop + (feed.scrollHeight - oldScrollHeight);
+        }
+        layout();
+        updateJump();
+    }
     function renderHistory() {
         if (!visible) return;
         const ready = rowsByCharacter.has(selected?.id);
         const rows = rowsByCharacter.get(selected?.id) ?? [];
-        const ids = new Set(rows.map(row => row.id));
-        for (const [id, view] of views) view.item.hidden = !ids.has(id);
+        const key = characterKey(selected);
+        const count = visibleCounts.get(key) ?? historyPageSize;
+        const startIndex = Math.max(0, rows.length - count);
+        const visibleRows = rows.slice(startIndex);
+        const visibleIds = new Set(visibleRows.map(row => row.id));
+        for (const [id, view] of views) view.item.hidden = !visibleIds.has(id);
         let shown = 0, next = null;
-        // New batches can arrive newest-first. Insert only newly created nodes
-        // in directory order; moving existing iframes would reset their state.
-        for (const row of [...rows].reverse()) {
+        for (const row of [...visibleRows].reverse()) {
             const cached = records.get(row.id); if (!cached?.round) continue;
             let view = views.get(row.id);
             if (!view) {
@@ -763,15 +826,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             next = view.item;
             view.item.hidden = false; renderRecord(cached.round, view); shown++;
         }
-        const failed = rows.filter(row => records.get(row.id)?.error);
-        empty.hidden = shown > 0 || (rows.length > 0 && failed.length === rows.length);
-        const loading = !loaded || (selected && !ready) || rows.some(row => !records.has(row.id));
+        content.prepend(earlierBar);
+        updateEarlierBar();
+        const failed = visibleRows.filter(row => records.get(row.id)?.error);
+        empty.hidden = shown > 0 || (rows.length > 0 && failed.length === visibleRows.length);
+        const loading = !loaded || (selected && !ready) || visibleRows.some(row => !records.has(row.id));
         empty.dataset.state = loading ? 'loading' : 'empty'; emptyArt.hidden = loading;
         emptyTitle.textContent = loading ? '正在读取演出记录…' : !selected ? '选择一个角色，查看演出记录。' : '没有演出记录';
         if (failed.length) showReadError(`${failed.length} 条演出记录暂时无法读取。`);
-        const key = characterKey(selected), anchorId = positions.get(key)?.anchor?.split('/')[0];
-        const awaitingAnchor = anchorId && ids.has(anchorId) && !records.has(anchorId);
-        // An empty first batch must not replace a saved reading position.
+        const anchorId = positions.get(key)?.anchor?.split('/')[0];
+        const awaitingAnchor = anchorId && visibleIds.has(anchorId) && !records.has(anchorId);
         displayedCharacter = ready && !awaitingAnchor && (shown || !rows.length) ? key : '';
         updateControls();
     }
@@ -899,18 +963,21 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                     rememberPosition(); layout();
                 }
             }
-            // Start around the saved reading position, or at the newest record.
-            // Each completed batch becomes usable while the remaining files load.
             const targetId = pendingReveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
             const targetIndex = rows.findIndex(row => row.id === targetId);
-            const center = targetIndex < 0 ? rows.length - 1 : targetIndex;
+            const needed = targetIndex >= 0 ? rows.length - targetIndex : historyPageSize;
+            const initialCount = Math.min(rows.length, Math.max(visibleCounts.get(key) ?? historyPageSize, needed, historyPageSize));
+            visibleCounts.set(key, initialCount);
+
+            const visibleRows = rows.slice(Math.max(0, rows.length - initialCount));
             const job = playground.getState();
-            const pending = rows.map((row, index) => ({ row, distance: Math.abs(index - center) }))
-                .filter(({ row }) => { const cached = records.get(row.id); return cached?.revision !== row.revision || cached?.error || row.id === job.roundId; })
-                .sort((a, b) => a.distance - b.distance);
+            const pending = visibleRows.filter(row => {
+                const cached = records.get(row.id);
+                return cached?.revision !== row.revision || cached?.error || row.id === job.roundId;
+            });
             showBatch();
-            for (let offset = 0; offset < pending.length; offset += historyBatchSize) {
-                await Promise.all(pending.slice(offset, offset + historyBatchSize).map(async ({ row }) => {
+            if (pending.length) {
+                await Promise.all(pending.map(async row => {
                     const cached = records.get(row.id);
                     try {
                         const round = await playground.getRound(row.id);
