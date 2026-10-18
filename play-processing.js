@@ -7,16 +7,40 @@ export function hidePlayTags(source, names) {
     const tags = [...new Set(names.split(/[,，\r\n]+/).map(name => name.trim()).filter(Boolean))];
     if (!tags.length || !source) return source;
     const pattern = new RegExp(`<(/?)(${tags.map(escapeRegex).join('|')})>`, 'g');
+    const matches = [...source.matchAll(pattern)];
+    if (!matches.length) return source;
+
+    const remainingCloses = {};
+    for (const tag of tags) remainingCloses[tag] = 0;
+    for (const m of matches) {
+        if (m[1]) remainingCloses[m[2]] = (remainingCloses[m[2]] || 0) + 1;
+    }
+
     const stack = [], parts = [];
-    let cursor = 0, start = 0;
-    for (const match of source.matchAll(pattern)) {
-        if (!match[1]) {
-            if (!stack.length) start = match.index;
-            stack.push(match[2]);
-        } else if (stack.at(-1) === match[2]) {
-            stack.pop();
-            if (!stack.length) {
-                parts.push(source.slice(cursor, start));
+    let cursor = 0, start = 0, lastClosedTag = null;
+
+    for (const match of matches) {
+        const isClose = Boolean(match[1]);
+        const tag = match[2];
+
+        if (!isClose) {
+            lastClosedTag = null;
+            const openInStack = stack.filter(t => t === tag).length;
+            if (!stack.length || remainingCloses[tag] > openInStack) {
+                if (!stack.length) start = match.index;
+                stack.push(tag);
+            }
+        } else {
+            remainingCloses[tag]--;
+            const idx = stack.lastIndexOf(tag);
+            if (idx !== -1) {
+                stack.length = idx;
+                if (!stack.length) {
+                    parts.push(source.slice(cursor, start));
+                    cursor = match.index + match[0].length;
+                    lastClosedTag = tag;
+                }
+            } else if (!stack.length && lastClosedTag === tag && /^\s*$/.test(source.slice(cursor, match.index))) {
                 cursor = match.index + match[0].length;
             }
         }

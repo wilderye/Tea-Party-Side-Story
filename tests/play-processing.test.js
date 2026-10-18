@@ -12,11 +12,23 @@ test('默认值实际生效，清空标签和提示词后不会恢复默认值',
 });
 
 test('标签未闭合时保留完整内容，最外层闭合后隐藏，后续正文原样保留', () => {
-    const open = '<thinking>甲<thinking>乙</thinking>丙';
+    const open = '<thinking>甲乙丙';
     assert.equal(hidePlayTags(open, DEFAULT_HIDDEN_TAGS), open);
     assert.equal(hidePlayTags(open + '</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
+    assert.equal(hidePlayTags('<thinking>甲提到<thinking>乙</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
+    assert.equal(hidePlayTags('<thinking>外层<thinking>内层</thinking>后续</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
+    assert.equal(hidePlayTags('<thinking>外层<status>状态</status>后续</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
     assert.equal(hidePlayTags('<status>状态</status>正文<update>更新</update>', DEFAULT_HIDDEN_TAGS), '正文');
     assert.equal(hidePlayTags('<thinking>正文也被包进去了</thinking>', DEFAULT_HIDDEN_TAGS), '');
+    assert.equal(hidePlayTags('<thinking>分析中提到<status>状态尚未闭合</thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
+    assert.equal(hidePlayTags('<thinking>思考中列出<status>与<update>标签</thinking>\n**小剧场正文**', DEFAULT_HIDDEN_TAGS), '\n**小剧场正文**');
+    assert.equal(hidePlayTags('<think>思考提到<status>标签</think>正文', DEFAULT_HIDDEN_TAGS), '正文');
+    assert.equal(hidePlayTags('<thinking>思考提到<status>与<thinking>未闭合', DEFAULT_HIDDEN_TAGS), '<thinking>思考提到<status>与<thinking>未闭合');
+    assert.equal(hidePlayTags('<thinking>思考提到<status>与<thinking>标签</thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
+    assert.equal(hidePlayTags('<thinking></thinking></thinking>', DEFAULT_HIDDEN_TAGS), '');
+    assert.equal(hidePlayTags('<thinking>思考</thinking></thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
+    assert.equal(hidePlayTags('<thinking>思考</thinking>\n</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
+    assert.equal(hidePlayTags('</thinking>孤立闭合开头的正文', DEFAULT_HIDDEN_TAGS), '</thinking>孤立闭合开头的正文');
 });
 
 test('隐藏名单支持中英文逗号、换行和空行，旧名单仍按原来的名称生效', () => {
