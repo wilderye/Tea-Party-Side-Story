@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readPlaySettings, DEFAULT_PLAY_PROMPT, DEFAULT_HIDDEN_TAGS } from '../play-settings.js';
-import { hidePlayTags, readTavernRegex, processPlayText, createPlayDisplay } from '../play-processing.js';
+import { hidePlayTags, readTavernRegex, processPlayText, createPlayDisplay, compileRegexGuard } from '../play-processing.js';
 
 test('默认值实际生效，清空标签和提示词后不会恢复默认值', () => {
     assert.equal(readPlaySettings({}).prompt, DEFAULT_PLAY_PROMPT);
@@ -135,3 +135,63 @@ test('规则来源名称跟随同一次读取，切换酒馆角色后在刷新�
     await assert.rejects(display.refresh(), /读取失败/);
     assert.deepEqual(display.sources, {}); assert.deepEqual(display.rules, []);
 });
+
+test('重复刷新或未改动配置时不递增 revision，配置与规则变更时才使缓存失效', async () => {
+    const f = fixture(), settings = { playHiddenTags: 'think', playRegexExclusions: [] };
+    const display = createPlayDisplay(() => f.ctx, settings, async () => f.engine);
+    assert.equal(display.revision, 0);
+
+    // 首次读取规则，revision 从 0 增至 1
+    await display.refresh();
+    assert.equal(display.revision, 1);
+
+    // 酒馆与插件配置均未改变，重复 refresh 不应递增 revision（保留界面输出缓存）
+    await display.refresh();
+    assert.equal(display.revision, 1);
+
+    // 未改变配置的 updateSettings 也不应递增 revision
+    display.updateSettings();
+    assert.equal(display.revision, 1);
+
+    // 修改隐藏标签配置后 updateSettings 递增 revision
+    settings.playHiddenTags = 'think,thinking';
+    display.updateSettings();
+    assert.equal(display.revision, 2);
+
+    // 修改酒馆规则后 refresh 递增 revision
+    f.groups[0][0].replaceString = '新替换文字';
+    await display.refresh();
+    assert.equal(display.revision, 3);
+});
+
+test('无锚点贪婪匹配在缺失触发词时快速短路跳过，包含触发词时正常执行', () => {
+    const dangerousRegex = '/([\\s\\S]*)(?:<\\/think>|<\\/thinking>|<\\/wave>|<\\/Fleur>|\\[[Pp]\\w*\\s+[Ww]\\w*:\\])/m';
+    const guard = compileRegexGuard(dangerousRegex);
+    assert.ok(guard, '成功提取无锚点通配规则的守卫');
+    assert.deepEqual(guard.literals, ['</think>', '</thinking>', '</wave>', '</Fleur>', ':]']);
+
+    // 正文缺少任意候选词时，canMatch 判定为 false
+    const cleanText = '这是一段正常的长篇正文，不包含任何特殊隐藏标签。'.repeat(100);
+    assert.equal(guard.canMatch(cleanText), false);
+
+    // 正文包含其一（例如 </think> 或 :]）时，canMatch 判定为 true
+    assert.equal(guard.canMatch('思考过程</think>正文'), true);
+    assert.equal(guard.canMatch('[Prompt Word:]正文'), true);
+
+    // processPlayText 实际集成测试：短路跳过后不调用 runRegex，存在触发词时调用 runRegex
+    const rule = { key: 'danger', script: { findRegex: dangerousRegex, replaceString: '' } };
+    let runCalls = 0;
+    const settings = readPlaySettings({ playRegexEnabled: true });
+
+    // 缺失触发词 -> 0 次调用 runRegex，直接返回
+    const resultSkipped = processPlayText(cleanText, settings, [rule], () => { runCalls++; return ''; });
+    assert.equal(runCalls, 0);
+    assert.equal(resultSkipped, cleanText);
+
+    // 存在触发词 -> 触发 runRegex
+    const textWithTag = '思考</think>正文';
+    const resultRun = processPlayText(textWithTag, settings, [rule], (_script, text) => { runCalls++; return text.replace(/[\s\S]*<\/think>/, ''); });
+    assert.equal(runCalls, 1);
+    assert.equal(resultRun, '正文');
+});
+
