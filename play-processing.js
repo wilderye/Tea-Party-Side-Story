@@ -6,8 +6,10 @@ const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function hidePlayTags(source, names) {
     const tags = [...new Set(names.split(/[,，\r\n]+/).map(name => name.trim()).filter(Boolean))];
     if (!tags.length || !source) return source;
-    const pattern = new RegExp(`<(/?)(${tags.map(escapeRegex).join('|')})>`, 'g');
-    const matches = [...source.matchAll(pattern)];
+    const pattern = new RegExp('(?<!`)`[^`\\r\\n]+`(?!`)|<(/?)(' + tags.map(escapeRegex).join('|') + ')>', 'g');
+    const rawMatches = [...source.matchAll(pattern)];
+    if (!rawMatches.length) return source;
+    const matches = rawMatches.filter(m => !m[0].startsWith('`'));
     if (!matches.length) return source;
 
     const remainingCloses = {};

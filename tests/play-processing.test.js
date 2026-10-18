@@ -29,6 +29,8 @@ test('标签未闭合时保留完整内容，最外层闭合后隐藏，后续�
     assert.equal(hidePlayTags('<thinking>思考</thinking></thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
     assert.equal(hidePlayTags('<thinking>思考</thinking>\n</thinking>\n**正文**', DEFAULT_HIDDEN_TAGS), '\n**正文**');
     assert.equal(hidePlayTags('</thinking>孤立闭合开头的正文', DEFAULT_HIDDEN_TAGS), '</thinking>孤立闭合开头的正文');
+    assert.equal(hidePlayTags('<thinking>闭合`</thinking>`后输出，仅输出`<thinking>`思维链</thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
+    assert.equal(hidePlayTags('<thinking>包含`<status>`代码</thinking>正文', DEFAULT_HIDDEN_TAGS), '正文');
 });
 
 test('隐藏名单支持中英文逗号、换行和空行，旧名单仍按原来的名称生效', () => {
