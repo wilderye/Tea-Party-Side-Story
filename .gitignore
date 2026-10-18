@@ -45,4 +45,5 @@ tests/*
 !tests/play-messages.browser.cjs
 !tests/play-prompt-favorites.test.js
 !tests/play-prompt-favorites.browser.cjs
+!tests/play-favorites.test.js
 README.md

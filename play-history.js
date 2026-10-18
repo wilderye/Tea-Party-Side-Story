@@ -40,7 +40,9 @@ function readFavoriteInfo(value) {
 
 function readFavorite(value) {
     assert(value?.format === 1 && isText(value.text) && isDate(value.updatedAt));
-    return { format: 1, ...readFavoriteInfo(value), text: value.text, updatedAt: value.updatedAt };
+    const result = { format: 1, ...readFavoriteInfo(value), text: value.text, updatedAt: value.updatedAt };
+    if (value.cleaned !== undefined) result.cleaned = Boolean(value.cleaned);
+    return result;
 }
 
 export function readPlayOrigin(value) {
@@ -268,9 +270,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             assert(isId(id));
             return readFavoriteFromRow((await index()).favorites.find(item => item.id === id));
         },
-        addFavorite({ roundId, resultId, startedAt, expectedText, firstLine }) {
+        addFavorite({ roundId, resultId, startedAt, expectedText, text, firstLine }) {
             const source = readFavoriteSource({ roundId, resultId, startedAt });
             assert(typeof expectedText === 'string' && typeof firstLine === 'string');
+            if (text !== undefined) assert(isText(text), '收藏内容不能为空。');
             return serialize(async () => {
                 const directory = await index();
                 const round = await readRoundFromRow(directory.rounds.find(item => item.id === roundId));
@@ -283,9 +286,11 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 const previous = directory.favorites.find(item => JSON.stringify(item.source) === JSON.stringify(source));
                 if (previous) return readFavoriteFromRow(previous);
                 const now = new Date().toISOString();
+                const favoriteText = text !== undefined ? text : result.text;
                 return commitFavorite(directory, { format: 1, id: uuid(), source,
                     characterName: directory.characters.find(item => item.id === round.characterId).name,
-                    title: round.origin?.title ?? '', firstLine, text: result.text, savedAt: now, updatedAt: now });
+                    title: round.origin?.title ?? '', firstLine, text: favoriteText,
+                    cleaned: text !== undefined, savedAt: now, updatedAt: now });
             });
         },
         editFavorite(id, update, expectedRevision) {
@@ -296,8 +301,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 const directory = await index();
                 const row = directory.favorites.find(item => item.id === id);
                 const current = await readFavoriteFromRow(row);
-                const next = readFavorite({ ...current, title: patch.title.trim(), text: patch.text, firstLine: patch.firstLine });
-                if (next.title === current.title && next.text === current.text && next.firstLine === current.firstLine) return current;
+                const next = readFavorite({ ...current, title: patch.title.trim(), text: patch.text, firstLine: patch.firstLine, cleaned: true });
+                if (next.title === current.title && next.text === current.text && next.firstLine === current.firstLine && next.cleaned === current.cleaned) return current;
                 if (row.revision !== expectedRevision) {
                     throw new PlayHistoryError('favorite_edit_conflict', '这份收藏已在其他窗口修改。请保留当前草稿，重新打开后核对内容。');
                 }

@@ -221,8 +221,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try {
             if (existing) { await playground.removeFavorite(existing.id); favoriteRows.delete(key); }
             else {
+                const cleanedText = playground.display?.process(result.text) ?? result.text;
+                if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
                 const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
-                    firstLine: favoriteFirstLine(result.text, playground.display) });
+                    text: cleanedText,
+                    firstLine: favoriteFirstLine(cleanedText, playground.display) });
                 favoriteRows.set(key, favorite);
             }
             // A read started before this completed write must not put the

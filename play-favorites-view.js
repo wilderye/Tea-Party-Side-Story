@@ -43,7 +43,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
         title.textContent = value.title; title.hidden = !value.title.trim();
         character.textContent = value.characterName;
         heading.replaceChildren(title, character); tools.replaceChildren(remove, edit);
-        const text = playground.display?.process(value.text) ?? value.text;
+        const text = value.cleaned ? value.text : (playground.display?.process(value.text) ?? value.text);
         if (signature === text) return;
         if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true);
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
@@ -56,7 +56,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
     function beginEdit() {
         if (!value || editor || removing) return;
         const original = value;
-        editor = createPlayEditor({ text: original.text, title: original.title, autoGrow: false, onCancel: finish,
+        const initialText = original.cleaned ? original.text : (playground.display?.process(original.text) ?? original.text);
+        editor = createPlayEditor({ text: initialText, title: original.title, autoGrow: false, onCancel: finish,
             async onSave({ text, title }) {
                 value = await playground.editFavorite(original.id,
                     { text, title, firstLine: favoriteFirstLine(text, playground.display) }, original.revision);
