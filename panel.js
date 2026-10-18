@@ -60,8 +60,11 @@ export function createTheatrePanel(ctx, state, actions) {
         // Themes can set body.fontFamily without changing Tavern's font variable.
         const family = state.settings.fontSource === 'tavern' ? getComputedStyle(document.body).fontFamily : '';
         for (const property of ['--tea-ui', '--tea-display']) {
-            if (family) panel.style.setProperty(property, family);
-            else panel.style.removeProperty(property);
+            if (family) {
+                if (panel.style.getPropertyValue(property) !== family) panel.style.setProperty(property, family);
+            } else if (panel.style.getPropertyValue(property)) {
+                panel.style.removeProperty(property);
+            }
         }
     }
     const pageStart = () => media?.matches ? page * mobilePageSize() : desktopStarts[page] ?? 0;
@@ -334,9 +337,10 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         if (playCatalog) { playCatalog.hidden = true; playWorkspace.hidden = true; }
         if (favoriteWorkspace) favoriteWorkspace.hidden = true;
-        panel.dataset.mode = mode;
+        if (panel.dataset.mode !== mode) panel.dataset.mode = mode;
         applyFontSource();
-        panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`);
+        const bodySize = `${bodyFontSize()}px`;
+        if (panel.style.getPropertyValue('--tea-body-size') !== bodySize) panel.style.setProperty('--tea-body-size', bodySize);
         panel.classList.toggle('tea-compact', state.settings.compact !== false);
         panel.classList.toggle('tea-searching', media.matches && (mobileSearchOpen || !!query));
         panel.classList.toggle('tea-play-mode', scope === 'play');

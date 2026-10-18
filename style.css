@@ -80,7 +80,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-star[aria-pressed=true] { color:var(--tea-accent,#b25442)!important; }
 #teahouse-panel .tea-star[aria-pressed=true] svg { fill:var(--tea-accent-fill,#ed80694a); }
 #teahouse-panel .tea-actions { display:flex; align-items:center; gap:8px; flex:none; }
-#teahouse-panel .tea-catalog { background:var(--tea-sidebar-paper,var(--tea-forest)); color:var(--tea-sidebar-ink,#f9f4e5); display:flex; flex-direction:column; min-height:0; min-width:0; padding:32px 24px 24px; }
+#teahouse-panel .tea-catalog { background:var(--tea-sidebar-paper,var(--tea-forest)); color:var(--tea-sidebar-ink,#f9f4e5); display:flex; flex-direction:column; min-height:0; min-width:0; padding:32px 24px 24px; contain:layout style; }
 #teahouse-panel .tea-catalog .tea-icon:hover:not(:disabled) { background:var(--tea-sidebar-hover,#ffffff10)!important; }
 #teahouse-panel .tea-brand { display:flex; align-items:center; gap:16px; margin:0 8px 32px; flex:none; }
 #teahouse-panel .tea-brand>.tea-glyph svg { width:40px; height:48px; color:var(--tea-accent,var(--tea-coral)); }
@@ -418,7 +418,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-person-time { display:flex; flex-direction:column; gap:1px; flex:none; text-align:right; color:var(--tea-sidebar-muted,#b6cabc); font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; }
 #teahouse-panel .play-person-time small { font:inherit; color:inherit; }
 #teahouse-panel .play-person[aria-pressed=true] .play-person-time { color:var(--tea-selected-muted,#354d3f); }
-#teahouse-panel .play-workspace { position:relative; }
+#teahouse-panel .play-workspace { position:relative; contain:layout style; }
 #teahouse-panel .play-page { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; position:relative; }
 #teahouse-panel .play-reading-area {
     --play-prose-font:var(--tea-ui); --play-prose-weight:400; --play-prose-ink:var(--tea-prose-ink,#334437);

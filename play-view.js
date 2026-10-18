@@ -78,6 +78,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, resultMenu, pendingSend, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
+    let cachedRowHeight = 0, lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     let lastJob = playground.getState();
@@ -249,17 +250,20 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function measureCharactersPerPage() {
         if (mobile.matches || !people.clientHeight || !people.clientWidth) return charactersPerPage;
-        const row = people.querySelector('.play-person');
-        const probe = !row && characters.length ? characterButton(characters[0]) : null;
-        // The first catalog read can finish after the empty view was measured.
-        // Measure a real row now, before exposing a page with the default count.
-        if (probe) people.append(probe);
-        const rowHeight = (row ?? probe)?.getBoundingClientRect().height;
-        probe?.remove();
-        return rowHeight ? Math.max(1, Math.floor(people.clientHeight / rowHeight)) : charactersPerPage;
+        if (!cachedRowHeight) {
+            const row = people.querySelector('.play-person');
+            const probe = !row && characters.length ? characterButton(characters[0]) : null;
+            // The first catalog read can finish after the empty view was measured.
+            // Measure a real row now, before exposing a page with the default count.
+            if (probe) people.append(probe);
+            cachedRowHeight = (row ?? probe)?.getBoundingClientRect().height || 0;
+            probe?.remove();
+        }
+        return cachedRowHeight ? Math.max(1, Math.floor(people.clientHeight / cachedRowHeight)) : charactersPerPage;
     }
     function renderPeople(resetScroll = false) {
-        const position = resetScroll ? 0 : people.scrollTop;
+        if (mobile.matches && !browsing) return;
+        const position = resetScroll ? 0 : peopleScroll;
         const count = measureCharactersPerPage();
         if (count !== charactersPerPage) {
             characterPage = Math.floor(characterPage * charactersPerPage / count); charactersPerPage = count;
@@ -268,12 +272,23 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         characterPage = Math.min(characterPage, pages - 1);
         const start = mobile.matches ? 0 : characterPage * charactersPerPage;
         const shown = matches.slice(start, mobile.matches ? mobileLimit : start + charactersPerPage);
+        const selectedKey = characterKey(selected);
+        const currentButtons = [...people.querySelectorAll('.play-person')];
+        if (shown.length && currentButtons.length === shown.length && shown.every((c, i) => characterKey(c) === currentButtons[i].dataset.character)) {
+            for (const button of currentButtons) {
+                button.setAttribute('aria-pressed', String(button.dataset.character === selectedKey));
+            }
+            pageJump.update();
+            previousPage.disabled = characterPage === 0; nextPage.disabled = characterPage >= pages - 1;
+            if (position > 0 && people.scrollTop !== position) people.scrollTop = position;
+            return;
+        }
         people.replaceChildren();
         people.append(...shown.map(characterButton));
         if (!shown.length) people.append(element('p', characterQuery.trim() ? '没有找到这个角色' : loaded ? '酒馆里还没有角色' : '正在读取角色…', 'play-people-empty'));
         pageJump.update();
         previousPage.disabled = characterPage === 0; nextPage.disabled = characterPage >= pages - 1;
-        people.scrollTop = position;
+        if (position > 0 && people.scrollTop !== position) people.scrollTop = position;
     }
     function turnCharacters(direction) {
         characterPage += direction; renderPeople(true);
@@ -296,7 +311,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         closeResults(false); rememberPosition();
         if (browsing) peopleScroll = people.scrollTop;
         browsing = value; updateBrowser();
-        if (browsing) { people.scrollTop = peopleScroll; browserBack.focus({ preventScroll: true }); }
+        if (browsing) { renderPeople(); people.scrollTop = peopleScroll; browserBack.focus({ preventScroll: true }); }
         else { chooseButton.focus({ preventScroll: true }); restorePosition(positions.get(characterKey(selected))); }
         layout();
     }
@@ -365,34 +380,53 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         feed.scrollTop += message.getBoundingClientRect().top - feed.getBoundingClientRect().top - 10;
         rememberPosition(); updateJump();
     }
-    function resizeInput() {
+    function resizeInput(force = false) {
         if (!visible || inputRow.hidden || !page.clientHeight) return;
+        const currentVal = input.value;
+        const currentWidth = input.clientWidth;
+        const currentPageHeight = page.clientHeight;
+        if (!force && currentVal === lastInputVal && currentWidth === lastInputClientWidth && currentPageHeight === lastPageHeight) {
+            return;
+        }
+        lastInputVal = currentVal;
+        lastInputClientWidth = currentWidth;
+        lastPageHeight = currentPageHeight;
+
         const previousScroll = input.scrollTop, style = getComputedStyle(input);
-        const line = parseFloat(style.lineHeight), padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        const line = parseFloat(style.lineHeight) || 20, padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
         const maxLines = matchMedia('(max-width: 760px)').matches ? 8 : 20;
         const footerStyle = getComputedStyle(compose);
-        const available = page.clientHeight - contextLine.offsetHeight - parseFloat(footerStyle.paddingTop) - parseFloat(footerStyle.paddingBottom) - 32;
+        const available = page.clientHeight - contextLine.offsetHeight - (parseFloat(footerStyle.paddingTop) || 0) - (parseFloat(footerStyle.paddingBottom) || 0) - 32;
         const maximum = Math.max(line + padding, Math.min(maxLines * line + padding, available));
-        input.style.height = '0px'; input.style.height = `${Math.max(line + padding, Math.min(input.scrollHeight, maximum))}px`;
+        input.style.height = 'auto';
+        const nextHeight = `${Math.max(line + padding, Math.min(input.scrollHeight, maximum))}px`;
+        if (input.style.height !== nextHeight) input.style.height = nextHeight;
         input.dataset.maxLines = String(maxLines); input.scrollTop = previousScroll;
     }
     function layout() {
         cancelAnimationFrame(layoutFrame);
         if (!visible) return;
-        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; renderPeople(); updateBrowser(); }
+        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; cachedRowHeight = 0; renderPeople(); updateBrowser(); }
         // ResizeObserver runs before paint; do not defer catalog pagination by a frame.
         if (measureCharactersPerPage() !== charactersPerPage) renderPeople(true);
         layoutFrame = requestAnimationFrame(() => {
             if (!visible) return;
             loadMoreCharacters();
             resizeInput();
+            const feedHeight = feed.clientHeight;
+            const updates = [];
             for (const [id, view] of views) {
                 if (view.item.hidden) continue;
-                view.userTop.hidden = view.userText.scrollHeight + view.userHead.offsetHeight <= feed.clientHeight;
-                view.assistantTop.hidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feed.clientHeight;
+                const userTopHidden = view.userText.scrollHeight + view.userHead.offsetHeight <= feedHeight;
+                const assistantTopHidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feedHeight;
+                updates.push({ view, id, userTopHidden, assistantTopHidden });
+            }
+            for (const { view, id, userTopHidden, assistantTopHidden } of updates) {
+                if (view.userTop.hidden !== userTopHidden) view.userTop.hidden = userTopHidden;
+                if (view.assistantTop.hidden !== assistantTopHidden) view.assistantTop.hidden = assistantTopHidden;
                 syncMessageActions(id, view);
             }
-            if (!feed.clientHeight || displayedCharacter !== characterKey(selected)) return;
+            if (!feedHeight || displayedCharacter !== characterKey(selected)) return;
             const activeJob = playground.getState();
             if (activePhases.has(activeJob.phase)) {
                 if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) feed.scrollTop = feed.scrollHeight;
@@ -414,7 +448,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }, { passive: true });
     input.addEventListener('input', () => {
         draftFor().text = input.value;
-        keepReading(() => { resizeInput(); updateControls(); }); scheduleSave();
+        keepReading(() => { resizeInput(true); updateControls(); }); scheduleSave();
     });
     input.addEventListener('keydown', event => {
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
@@ -435,7 +469,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (storageFailed) contextLine.append(element('span', '草稿和阅读位置暂未保存', 'play-storage-notice'));
         contextLine.hidden = !contextLine.childElementCount;
         compose.hidden = inputRow.hidden && contextLine.hidden;
-        updateControls(); resizeInput();
+        updateControls();
     }
     function updateControls() {
         const job = playground.getState(), active = activePhases.has(job.phase), available = playground.availability();
