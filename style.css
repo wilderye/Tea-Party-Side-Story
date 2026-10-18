@@ -419,6 +419,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-person-time small { font:inherit; color:inherit; }
 #teahouse-panel .play-person[aria-pressed=true] .play-person-time { color:var(--tea-selected-muted,#354d3f); }
 #teahouse-panel .play-workspace { position:relative; contain:layout style; }
+#teahouse-panel .play-workspace[hidden],
+#teahouse-panel .play-catalog[hidden] { display:none!important; }
 #teahouse-panel .play-page { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; position:relative; }
 #teahouse-panel .play-reading-area {
     --play-prose-font:var(--tea-ui); --play-prose-weight:400; --play-prose-ink:var(--tea-prose-ink,#334437);

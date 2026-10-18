@@ -792,7 +792,12 @@ export function createTheatrePanel(ctx, state, actions) {
                 if (isRecordFavorites()) void refreshFavoriteCatalog();
                 const context = ctx();
                 popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false, onClosing: canLeave,
-                    onOpen: () => { measureBodies(); [...panel.querySelectorAll('button')].find(b => b.getClientRects().length && !b.disabled)?.focus({ preventScroll: true }); } });
+                    onOpen: () => {
+                        measureBodies();
+                        const candidate = panel.querySelector('.tea-topbar button:not([disabled]), .tea-mobile-actions button:not([disabled]), .tea-brand button:not([disabled])');
+                        const target = (candidate && candidate.getClientRects().length) ? candidate : [...panel.querySelectorAll('button')].find(b => !b.disabled && b.getClientRects().length);
+                        target?.focus({ preventScroll: true });
+                    } });
                 popup.dlg.classList.add('teahouse-dialog');
                 resizeViewport = () => { const viewport = window.visualViewport; if (!viewport || !popup) return;
                     popup.dlg.style.setProperty('--tea-viewport-height', `${viewport.height}px`); popup.dlg.style.setProperty('--tea-viewport-top', `${viewport.offsetTop}px`); };

@@ -377,11 +377,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function restorePosition(position) {
         if (!visible || !feed.clientHeight) return;
-        if (!position || position.bottom) feed.scrollTop = feed.scrollHeight;
-        else {
+        if (!position || position.bottom) {
+            const target = feed.scrollHeight;
+            if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+        } else {
             const anchor = [...content.querySelectorAll('[data-read-anchor]')].find(node => node.dataset.readAnchor === position.anchor && node.getClientRects().length);
-            if (anchor) feed.scrollTop += anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top + (Number(position.offset) || 0);
-            else feed.scrollTop = Number(position.scrollTop) || 0;
+            if (anchor) {
+                const target = feed.scrollTop + (anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top) + (Number(position.offset) || 0);
+                if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+            } else {
+                const target = Number(position.scrollTop) || 0;
+                if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+            }
         }
         cachedPosition = position ? { ...position, scrollTop: feed.scrollTop, key: characterKey(selected) } : null;
         updateJump();
@@ -441,9 +448,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const updates = [];
             for (const [id, view] of views) {
                 if (view.item.hidden) continue;
-                const userTopHidden = view.userText.scrollHeight + view.userHead.offsetHeight <= feedHeight;
-                const assistantTopHidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feedHeight;
-                updates.push({ view, id, userTopHidden, assistantTopHidden });
+                const uHead = view.uHead ??= (view.userHead.offsetHeight || 44);
+                const aHead = view.aHead ??= (view.aiHead.offsetHeight || 44);
+                const userTopHidden = view.userText.scrollHeight + uHead <= feedHeight;
+                const assistantTopHidden = view.results.scrollHeight + aHead <= feedHeight;
+                if (view.userTop.hidden !== userTopHidden || view.assistantTop.hidden !== assistantTopHidden) {
+                    updates.push({ view, id, userTopHidden, assistantTopHidden });
+                }
             }
             for (const { view, id, userTopHidden, assistantTopHidden } of updates) {
                 if (view.userTop.hidden !== userTopHidden) view.userTop.hidden = userTopHidden;
@@ -457,7 +468,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 updateJump();
                 return;
             }
-            restorePosition(positions.get(characterKey(selected))); restoringPosition = false; rememberPosition();
+            restorePosition(positions.get(characterKey(selected)));
+            restoringPosition = false;
+            rememberPosition(true, false);
         });
     }
     const resizeObserver = new ResizeObserver(layout);
