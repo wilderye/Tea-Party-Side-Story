@@ -73,7 +73,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const records = new Map(), views = new Map(), rowsByCharacter = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false;
-    let refreshId = 0, saveTimer, layoutFrame, resultMenu, pendingSend, pendingReveal, storageFailed = false;
+    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, resultMenu, pendingSend, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
@@ -391,6 +391,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 syncMessageActions(id, view);
             }
             if (!feed.clientHeight || displayedCharacter !== characterKey(selected)) return;
+            const activeJob = playground.getState();
+            if (activePhases.has(activeJob.phase)) {
+                if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) feed.scrollTop = feed.scrollHeight;
+                updateJump();
+                return;
+            }
             restorePosition(positions.get(characterKey(selected))); restoringPosition = false; rememberPosition();
         });
     }
@@ -928,6 +934,24 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const result = round?.results.find(item => item.id === job.resultId);
         if (result && job.phase !== 'idle') { result.text = job.text; result.status = job.phase; result.error = job.error ?? undefined; }
     }
+    function renderStreamingJob(job) {
+        streamFrame = 0;
+        if (!visible) return;
+        applyJob(job);
+        const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
+        if (record && view && !view.item.hidden) {
+            renderRecord(record, view);
+            view.assistantTop.hidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feed.clientHeight;
+            syncMessageActions(job.roundId, view);
+        }
+        updateComposer();
+        const atBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24;
+        if (atBottom) {
+            feed.scrollTop = feed.scrollHeight;
+            positions.set(characterKey(selected), { bottom: true });
+        }
+        updateJump();
+    }
     playground.subscribe(job => {
         const previous = lastJob; lastJob = job;
         if (pendingSend && job.roundId && !pendingSend.accepted) {
@@ -938,13 +962,19 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         if (job.roundId && job.resultId !== previous.resultId) selections.set(job.roundId, job.resultId);
         if (job.roundId && !records.get(job.roundId)?.round?.results.some(result => result.id === job.resultId)) selections.set(job.roundId, job.resultId);
-        if (visible) keepReading(() => {
+        if (job.phase === 'generating' && visible) {
             applyJob(job);
-            const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
-            if (record && view && !view.item.hidden) renderRecord(record, view);
-            updateComposer();
-        });
-        else applyJob(job);
+            if (!streamFrame) streamFrame = requestAnimationFrame(() => renderStreamingJob(lastJob));
+        } else {
+            if (streamFrame) { cancelAnimationFrame(streamFrame); streamFrame = 0; }
+            if (visible) keepReading(() => {
+                applyJob(job);
+                const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
+                if (record && view && !view.item.hidden) renderRecord(record, view);
+                updateComposer();
+            });
+            else applyJob(job);
+        }
         if (job.roundId !== previous.roundId || job.phase === 'idle' || job.phase === 'save-failed') void refresh();
     });
     const events = ctx().eventTypes ?? {};
@@ -978,7 +1008,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
             renderPeople(); renderHistory(); updateComposer(); layout(); void refresh();
         },
-        deactivate() { rememberPosition(); visible = false; refreshId++; closeResults(false); pageJump.node.open = false; saveViewState(); cancelAnimationFrame(layoutFrame); resizeObserver.disconnect(); },
+        deactivate() { rememberPosition(); visible = false; refreshId++; closeResults(false); pageJump.node.open = false; saveViewState(); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect(); },
         refresh, layout,
         prepareLayout() { if (visible) { closeResults(false); rememberPosition(); } },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
