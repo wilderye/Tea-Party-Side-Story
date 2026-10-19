@@ -1090,6 +1090,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (atBottom) {
             feed.scrollTop = feed.scrollHeight;
             positions.set(characterKey(selected), { bottom: true });
+        } else {
+            pendingReveal = null;
+            rememberPosition(false);
         }
         updateJump();
     }
