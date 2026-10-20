@@ -151,16 +151,6 @@ export async function preparePlayPreset(context, modules, environment, options) 
         return { ...message, role, content, sameModel };
     }).reverse();
     let continueCollection = null;
-    if (options.type === 'continue' && options.cyclePrompt && settings.continue_prefill && history.length) {
-        // ST removes the real message before depth prompts are inserted.
-        const target = history.shift();
-        const prefill = target.role === 'assistant' && settings.chat_completion_source === 'claude' ? substitute(settings.assistant_prefill) : '';
-        const content = [prefill, target.content].filter(Boolean).join('\n\n');
-        const message = await messages.create(target.role, content, 'continuePrefill');
-        if (settings.names_behavior === 1 && target.name) await message.setName(manager.sanitizeName(target.name));
-        continueCollection = new MessageCollection('continuePrefill');
-        continueCollection.add(message); completion.reserveBudget(continueCollection);
-    }
     const depths = new Set(absolute.map(prompt => Number(prompt.injection_depth)));
     for (const prompt of Object.values(extensions)) if (prompt.position === core.extension_prompt_types.IN_CHAT) depths.add(Number(prompt.depth));
     let inserted = 0;
@@ -187,14 +177,16 @@ export async function preparePlayPreset(context, modules, environment, options) 
         completion.add(new MessageCollection('chatHistory'), prompts.index('chatHistory'));
         const header = await messages.create('system', substitute(settings.new_chat_prompt), 'newMainChat');
         completion.reserveBudget(header);
-        if (options.type === 'continue' && options.cyclePrompt && !settings.continue_prefill) {
+        // Theatre continuations always use a nudge, independent of Tavern's prefill setting.
+        if (options.type === 'continue' && options.cyclePrompt) {
             const lastIndex = history.findLastIndex(prompt => !prompt.injected);
             continueCollection = new MessageCollection('continueNudge');
             if (lastIndex >= 0) {
                 const target = history.splice(lastIndex, 1)[0];
                 continueCollection.add(await messages.create(target.role, substitute(target.content), 'continueAssistant'));
             }
-            const rawNudge = settings.continue_nudge_prompt ?? '[Continue your last message without repeating its original content.]';
+            const rawNudge = settings.continue_nudge_prompt?.trim()
+                ? settings.continue_nudge_prompt : '[Continue your last message without repeating its original content.]';
             const nudgeContent = substitute(rawNudge.replace(/\{\{lastChatMessage\}\}/gi, () => options.cyclePrompt.trim()));
             const continueNudgeMessage = await messages.create('system', nudgeContent, 'continueNudge');
             continueCollection.add(continueNudgeMessage);

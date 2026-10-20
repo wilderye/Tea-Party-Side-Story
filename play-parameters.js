@@ -43,7 +43,8 @@ export function legacyPlayParameters(settings, model, messages, { power, name1, 
     if (['claude', 'openrouter', 'makersuite', 'vertexai', 'cohere', 'perplexity', 'electronhub'].includes(source)) payload.top_k = Number(settings.top_k_openai);
     if (source === 'claude') {
         copy('claude_use_sysprompt'); payload.stop = stop();
-        if (type !== 'continue' || !settings.continue_prefill) payload.assistant_prefill = substitute(settings.assistant_prefill || '');
+        // Nudge continuations must not append a separate assistant prefill.
+        if (type !== 'continue') payload.assistant_prefill = substitute(settings.assistant_prefill || '');
     }
     if (source === 'openrouter') {
         Object.assign(payload, { min_p: Number(settings.min_p_openai), repetition_penalty: Number(settings.repetition_penalty_openai),

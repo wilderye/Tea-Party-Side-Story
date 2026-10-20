@@ -23,8 +23,11 @@ const root = path.resolve(__dirname, '..');
                 outbound.push(payload);
                 const isContinue = payload.type === 'continue';
                 const content = isContinue ? '【续写的后半部分台词】' : '这是初始的前半部分，';
+                const deltas = payload.chat_completion_source === 'claude'
+                    ? [{ type: 'content_block_delta', delta: { type: 'text_delta', text: content } }, { type: 'message_stop' }]
+                    : [{ choices: [{ delta: { content }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
                 return payload.stream
-                    ? route.fulfill({ contentType: 'text/event-stream', body: 'data: '+JSON.stringify({choices:[{delta:{content},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n' })
+                    ? route.fulfill({ contentType: 'text/event-stream', body: deltas.map(delta => 'data: ' + JSON.stringify(delta) + '\n\n').join('') + 'data: [DONE]\n\n' })
                     : route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content } }] }) });
             });
             await page.route('**/scripts/extensions/third-party/tea-review/**', async route => {
@@ -55,7 +58,9 @@ const root = path.resolve(__dirname, '..');
                     temp_openai: 0.7,
                     stream_openai: true,
                     n: 1,
-                    continue_prefill: false,
+                    // The theatre must use nudge even when Tavern's global
+                    // continuation setting asks for assistant prefill.
+                    continue_prefill: true,
                     continue_nudge_prompt: '[Continue your last message without repeating its original content.]',
                     assistant_prefill: '',
                     send_if_empty: '',
@@ -70,7 +75,8 @@ const root = path.resolve(__dirname, '..');
                     removeFile: async name => files.delete(name),
                 });
                 const ctx = () => SillyTavern.getContext();
-                const runtime = createPlayRuntime(ctx, { enabled: true }, history);
+                const runtimeSettings = { enabled: true };
+                const runtime = createPlayRuntime(ctx, runtimeSettings, history);
                 await runtime.initialize();
 
                 // 1. 发送初始生成
@@ -83,6 +89,15 @@ const root = path.resolve(__dirname, '..');
                 const continued = await runtime.continueResult(roundId, resultId);
                 const savedRound = await runtime.getRound(roundId);
 
+                // Claude and independent API continuations must also use
+                // nudge, including with a saved assistant prefill and no nudge text.
+                Object.assign(openai.oai_settings, { chat_completion_source: 'claude',
+                    assistant_prefill: '合成助手预填', continue_nudge_prompt: '' });
+                const claude = await runtime.continueResult(roundId, resultId);
+                runtimeSettings.playApi = { mode: 'custom', url: 'https://example.invalid/v1', model: 'synthetic-model', key: '' };
+                const custom = await runtime.continueResult(roundId, resultId);
+                const finalRound = await runtime.getRound(roundId);
+
                 return {
                     roundId,
                     resultId,
@@ -91,6 +106,16 @@ const root = path.resolve(__dirname, '..');
                     savedText: savedRound.results[0].text,
                     resultsCount: savedRound.results.length,
                     continuedStatus: continued.result.status,
+                    continuePrefill: openai.oai_settings.continue_prefill,
+                    assistantPrefill: openai.oai_settings.assistant_prefill,
+                    claudeText: claude.result.text,
+                    customText: custom.result.text,
+                    claudeStatus: claude.result.status,
+                    customStatus: custom.result.status,
+                    claudeError: claude.result.error,
+                    customError: custom.result.error,
+                    finalSavedText: finalRound.results[0].text,
+                    finalResultsCount: finalRound.results.length,
                 };
             });
 
@@ -99,9 +124,24 @@ const root = path.resolve(__dirname, '..');
             assert.equal(result.savedText, '这是初始的前半部分，【续写的后半部分台词】');
             assert.equal(result.resultsCount, 1, '续写必须原地更新，不能增加新结果');
             assert.equal(result.continuedStatus, 'complete');
+            assert.equal(result.continuePrefill, true, '小剧场不修改酒馆的预填开关');
+            assert.equal(result.assistantPrefill, '合成助手预填', '小剧场不修改酒馆的助手预填文字');
+            assert.equal(result.claudeStatus, 'complete', JSON.stringify(result.claudeError));
+            assert.equal(result.customStatus, 'complete', JSON.stringify(result.customError));
+            assert.equal(result.claudeText, result.continuedText + '【续写的后半部分台词】');
+            assert.equal(result.customText, result.claudeText + '【续写的后半部分台词】');
+            assert.equal(result.finalSavedText, result.customText);
+            assert.equal(result.finalResultsCount, 1);
 
             // 检查发往模型的请求
-            assert.equal(outbound.length, 2, '初始生成 1 次，续写 1 次');
+            assert.equal(outbound.length, 4, '初始生成 1 次，OpenAI、Claude 和独立 API 续写各 1 次');
+            assert.deepEqual(outbound.slice(1).map(payload => payload.chat_completion_source), ['openai', 'claude', 'custom']);
+            for (const payload of outbound.slice(1)) {
+                assert.equal(payload.type, 'continue');
+                assert.equal(Object.hasOwn(payload, 'assistant_prefill'), false, '续写请求不得携带助手预填');
+                assert.equal(payload.messages.at(-1).role, 'system');
+                assert.equal(payload.messages.at(-1).content, '[Continue your last message without repeating its original content.]');
+            }
             const continueRequest = outbound[1];
             // 待续写消息应作为末位 assistant
             const assistantMsg = continueRequest.messages.findLast(m => m.role === 'assistant');
@@ -143,7 +183,18 @@ const root = path.resolve(__dirname, '..');
                         const environment = { tavern: { settings: structuredClone(openai.oai_settings),
                             power: structuredClone(persona.power_user), name1: ctx.name1, name2: ctx.name2,
                             model: openai.getChatCompletionModel(), ...preparer.capture() } };
-                        const [native] = await openai.prepareOpenAIMessages({ ...options, messages: openai.setOpenAIMessages(history) }, false);
+                        // Compare with native nudge assembly, including the
+                        // theatre's default nudge when the preset leaves it empty.
+                        const savedNudge = openai.oai_settings.continue_nudge_prompt;
+                        openai.oai_settings.continue_prefill = false;
+                        if (!savedNudge.trim()) openai.oai_settings.continue_nudge_prompt = '[Continue your last message without repeating its original content.]';
+                        let native;
+                        try {
+                            [native] = await openai.prepareOpenAIMessages({ ...options, messages: openai.setOpenAIMessages(history) }, false);
+                        } finally {
+                            openai.oai_settings.continue_prefill = prefill;
+                            openai.oai_settings.continue_nudge_prompt = savedNudge;
+                        }
                         const [scoped] = await preparePlayPreset(ctx, { openai, core, persona, constants }, environment, options);
                         cases.push({ source, prefill, variant, native, scoped });
                     }
@@ -152,7 +203,7 @@ const root = path.resolve(__dirname, '..');
                 return cases;
             });
             for (const item of comparisons) assert.deepEqual(item.scoped, item.native,
-                `${port}: ${item.source}, prefill=${item.prefill}, ${item.variant} 与酒馆原生续写一致`);
+                `${port}: ${item.source}, prefill=${item.prefill}, ${item.variant} 与酒馆 nudge 续写一致`);
 
             console.log(JSON.stringify({ port, check: 'native continue verified', cases: comparisons.length,
                 status: result.continuedStatus, resultsCount: result.resultsCount, errors }));

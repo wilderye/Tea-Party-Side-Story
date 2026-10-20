@@ -42,7 +42,7 @@ function fixture(settings = {}) {
         history: [{ name: 'User', is_user: true, mes: '提示词', extra: {} },
             { name: 'Character', is_user: false, mes: '原回复，', extra: {} }], messageExamples: [], toolsData: {},
     };
-    return { async prepare() {
+    return { environment, async prepare() {
         return (await preparePlayPreset({ eventSource: { emit: async () => {} }, eventTypes: { CHAT_COMPLETION_PROMPT_READY: 'ready' } },
             modules, environment, options))[0];
     } };
@@ -54,12 +54,24 @@ test('普通续写跳过末尾插入的 assistant 指令，将原消息与续写
     assert.equal(chat.at(-2).name, undefined, '普通续写沿用酒馆省略消息 name 的处理');
 });
 
-test('续写预填在插入深度指令前取出原消息，Claude 前缀只拼接一次且不附加续写提示', async () => {
+test('续写固定使用 nudge，不受酒馆预填开关影响', async () => {
     for (const source of ['claude', 'openai']) {
-        const chat = await fixture({ continue_prefill: true, chat_completion_source: source, assistant_prefill: '预填前缀' }).prepare();
-        assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令',
-            source === 'claude' ? '预填前缀\n\n原回复，' : '原回复，']);
-        assert.equal(chat.at(-1).identifier, 'continuePrefill');
+        const chat = await fixture({ continue_prefill: true, chat_completion_source: source,
+            assistant_prefill: '预填前缀', continue_nudge_prompt: '接着写：{{lastChatMessage}}' }).prepare();
+        assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令', '原回复，', '接着写：原回复，']);
+        assert.equal(chat.at(-1).identifier, 'continueNudge');
+    }
+});
+
+test('未设置或清空续写提示词时仍附加默认 nudge，设置副本保持原值', async () => {
+    for (const continueNudge of [undefined, null, '', ' \n\t ']) {
+        const f = fixture({ continue_prefill: true, continue_nudge_prompt: continueNudge });
+        const originalSettings = structuredClone(f.environment.tavern.settings);
+        const chat = await f.prepare();
+        assert.equal(chat.at(-2).content, '原回复，');
+        assert.equal(chat.at(-1).role, 'system');
+        assert.equal(chat.at(-1).content, '[Continue your last message without repeating its original content.]');
+        assert.deepEqual(f.environment.tavern.settings, originalSettings);
     }
 });
 

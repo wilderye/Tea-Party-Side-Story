@@ -469,6 +469,32 @@ test('等主聊天准备期间仍可停止，停止后不偷偷发送', { timeou
     assert.equal(f.requests.length, 0); assert.equal(f.order.includes('world'), false);
 });
 
+for (const legacy of [false, true]) for (const prefill of [false, true]) {
+    test(`续写不发送助手预填，普通生成保留预填且不改酒馆设置：旧版=${legacy}，预填开关=${prefill}`, async () => {
+        const f = fixture();
+        Object.assign(f.context.chatCompletionSettings, { chat_completion_source: 'claude', continue_prefill: prefill,
+            assistant_prefill: '助手预填{{user}}' });
+        if (legacy) delete f.modules.openai.createGenerationParameters;
+        else {
+            const parameters = f.modules.openai.createGenerationParameters;
+            f.modules.openai.createGenerationParameters = async (...args) => {
+                const result = await parameters(...args);
+                result.generate_data.assistant_prefill = '原生参数助手预填';
+                return result;
+            };
+        }
+        const originalSettings = structuredClone(f.context.chatCompletionSettings);
+        const continued = await f.prepare({ ...f.options(), continueMessage: '待续写的旧正文' });
+        await continued.send({ signal: new AbortController().signal });
+        assert.equal(f.requests[0].payload.type, 'continue');
+        assert.equal(Object.hasOwn(f.requests[0].payload, 'assistant_prefill'), false);
+        const normal = await f.prepare(f.options());
+        await normal.send({ signal: new AbortController().signal });
+        assert.equal(f.requests[1].payload.assistant_prefill, '助手预填用户');
+        assert.deepEqual(f.context.chatCompletionSettings, originalSettings);
+    });
+}
+
 test('续写准备将待续写消息推入聊天并以 continue 模式拼装，不额外加空格', async () => {
     const f = fixture();
     const options = { ...f.options(), continueMessage: '待续写的旧正文' };
