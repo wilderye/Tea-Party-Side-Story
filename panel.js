@@ -19,15 +19,25 @@ const bodyFontSizes = Array.from({ length: 11 }, (_, index) => 12 + index * 2);
 
 export function createTheatrePanel(ctx, state, actions) {
     let panel, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
-    let scope = 'community', type = '', query = '', page = 0, mode = 'list', selectedId = null;
-    let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer, returnScroll = 0;
-    let searchComposing = false, mobileSearchOpen = false, catalogCollapsed = false;
+    let scope = 'community', mode = 'list';
+    let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
+    let searchComposing = false, catalogCollapsed = false, restoringCatalog = false;
     let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings, playActive = false;
-    let favoriteType = 'standalone', favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
+    let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
     const favoriteReaders = new Map();
-    const currentType = () => scope === 'favorites' ? favoriteType : type;
-    const isRecordFavorites = () => scope === 'favorites' && favoriteType === 'record';
+    const catalogs = new Map();
+    let catalog = catalogFor(scope);
+    function catalogFor(value) {
+        if (!catalogs.has(value)) catalogs.set(value, {
+            type: value === 'favorites' ? 'standalone' : '', query: '', page: 0, selectedId: null,
+            desktopStarts: [0], expanded: new Set(), mobileSearchOpen: false,
+            listScroll: 0, readingId: null, readingScroll: 0, recordOpen: false,
+        });
+        return catalogs.get(value);
+    }
+    const currentType = () => catalog.type;
+    const isRecordFavorites = () => scope === 'favorites' && catalog.type === 'record';
     const orderKey = () => isRecordFavorites() ? 'record-favorites' : scope;
     const recordEntries = () => new Map([...favoriteRows.values()].map(favorite => [favorite.id, {
         id: favorite.id, type: 'record', title: favorite.title.trim() || favorite.firstLine || '内容已隐藏', author: favorite.characterName,
@@ -36,7 +46,6 @@ export function createTheatrePanel(ctx, state, actions) {
     const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites);
-    const expanded = new Set();
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
     const scopeEntries = value => value === 'record-favorites'
@@ -48,7 +57,6 @@ export function createTheatrePanel(ctx, state, actions) {
         for (const value of scopes) randomOrders.set(value, reconcileRandomOrder(randomOrders.get(value), scopeEntries(value)));
     }
     const dirty = () => mode === 'editor' && JSON.stringify(draft) !== originalDraft;
-    let desktopStarts = [0];
     const mobilePageSize = () => [5, 10, 20, 50].includes(state.settings.pageSize) ? state.settings.pageSize : 5;
     const bodyFontSize = () => {
         const value = media?.matches ? state.settings.mobileFontSize : state.settings.fontSize;
@@ -67,12 +75,56 @@ export function createTheatrePanel(ctx, state, actions) {
             }
         }
     }
-    const pageStart = () => media?.matches ? page * mobilePageSize() : desktopStarts[page] ?? 0;
-    const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : desktopStarts.length;
-    const pageForIndex = index => media?.matches ? Math.max(0, Math.floor(index / mobilePageSize())) : Math.max(0, desktopStarts.findLastIndex(start => start <= index));
-    const matches = () => findEntries(isRecordFavorites() ? recordEntries() : state.entries, { scope, type: currentType(), query,
+    const pageStart = () => media?.matches ? catalog.page * mobilePageSize() : catalog.desktopStarts[catalog.page] ?? 0;
+    const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : catalog.desktopStarts.length;
+    const pageForIndex = index => media?.matches ? Math.max(0, Math.floor(index / mobilePageSize())) : Math.max(0, catalog.desktopStarts.findLastIndex(start => start <= index));
+    const matches = () => findEntries(isRecordFavorites() ? recordEntries() : state.entries, { scope, type: currentType(), query: catalog.query,
         favorites: isRecordFavorites() ? recordFavoriteTimes() : state.settings.favorites, showGore: state.settings.showGore,
         order: sortMode() === 'random' ? randomOrders.get(orderKey()) : undefined });
+    function catalogReader() {
+        return isRecordFavorites()
+            ? !favoriteWorkspace?.hidden && favoriteWorkspace?.querySelector('.play-favorite-reading:not([hidden])')
+            : panel?.querySelector('.tea-reading');
+    }
+    function captureCatalogPosition() {
+        // Reading two scroll offsets is enough; never inspect the conversation
+        // or persist data as part of closing the panel.
+        if (scope === 'play' || restoringCatalog) return;
+        const list = panel?.querySelector('.tea-list');
+        if (list?.dataset.scope !== scope) return;
+        const renderedMode = panel.dataset.mode;
+        if (!media.matches || renderedMode === 'list') catalog.listScroll = list.scrollTop;
+        const reading = catalogReader();
+        if (reading) {
+            catalog.readingId = reading.dataset.id;
+            catalog.readingScroll = reading.scrollTop;
+        }
+        if (['list', 'record'].includes(renderedMode)) catalog.recordOpen = renderedMode === 'record';
+    }
+    function restoreCatalogPosition() {
+        if (!restoringCatalog || !panel?.isConnected || scope === 'play') return;
+        const list = panel.querySelector('.tea-list');
+        if (list) list.scrollTop = catalog.listScroll;
+        const reading = catalogReader();
+        if (reading && reading.dataset.id === catalog.readingId) reading.scrollTop = catalog.readingScroll;
+    }
+    function resetCatalogPosition() {
+        catalog.listScroll = 0; catalog.readingId = null; catalog.readingScroll = 0; catalog.recordOpen = false;
+    }
+    function showScope(value) {
+        captureCatalogPosition();
+        scope = value;
+        if (scope !== 'play') catalog = catalogFor(scope);
+        mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
+        message = ''; render();
+        if (isRecordFavorites()) void refreshFavoriteCatalog();
+    }
+    async function navigateToScope(value) {
+        if (!await canLeave()) return;
+        if (mode === 'settings' && isRecordFavorites()) actions.playground?.display?.updateSettings();
+        showScope(value);
+        actions.diagnostics?.info(`打开${scopeLabel(scope)}`);
+    }
     async function confirm(text, actionLabel) {
         return await ctx().callGenericPopup(element('div', text, 'tea-confirm'), ctx().POPUP_TYPE.CONFIRM, '',
             { okButton: actionLabel, cancelButton: '取消' }) === ctx().POPUP_RESULT.AFFIRMATIVE;
@@ -91,7 +143,6 @@ export function createTheatrePanel(ctx, state, actions) {
         mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
         if (leavingSettings && isRecordFavorites()) actions.playground?.display?.updateSettings();
         message = ''; render();
-        const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = returnScroll;
     }
     function showMessage(text) {
         clearTimeout(messageTimer);
@@ -121,7 +172,9 @@ export function createTheatrePanel(ctx, state, actions) {
             if (!media.matches) {
                 const list = panel.querySelector('.tea-list');
                 const height = list.clientHeight;
-                if (!height || !list.clientWidth) return;
+                if (!height || !list.clientWidth) {
+                    restoreCatalogPosition(); restoringCatalog = false; return;
+                }
                 const result = matches();
                 const probe = element('div', undefined, 'tea-catalog-measure');
                 probe.style.width = `${list.clientWidth}px`;
@@ -134,25 +187,27 @@ export function createTheatrePanel(ctx, state, actions) {
                     used += rowHeight;
                 }
                 probe.remove();
-                if (JSON.stringify(starts) !== JSON.stringify(desktopStarts)) {
-                    const anchor = result.findIndex(item => item.id === selectedId);
-                    desktopStarts = starts;
-                    page = anchor >= 0 ? pageForIndex(anchor) : Math.min(page, starts.length - 1);
+                if (JSON.stringify(starts) !== JSON.stringify(catalog.desktopStarts)) {
+                    const anchor = result.findIndex(item => item.id === catalog.selectedId);
+                    catalog.desktopStarts = starts;
+                    catalog.page = anchor >= 0 ? pageForIndex(anchor) : Math.min(catalog.page, starts.length - 1);
                     render({ preserveSettings: true });
                 }
+                restoreCatalogPosition(); restoringCatalog = false;
                 return;
             }
             for (const article of panel.querySelectorAll('.tea-feed-entry')) {
                 const body = article.querySelector('.tea-body'), toggle = article.querySelector('.tea-fold');
                 const long = body.scrollHeight > 320;
                 article.classList.toggle('tea-long', long); toggle.hidden = !long;
-                const clipped = long && !expanded.has(article.dataset.id);
+                const clipped = long && !catalog.expanded.has(article.dataset.id);
                 for (const node of body.querySelectorAll('a, [tabindex]')) {
                     if (clipped) node.setAttribute('tabindex', '-1');
                     else if (node.tagName === 'A') node.removeAttribute('tabindex');
                     else node.setAttribute('tabindex', '0');
                 }
             }
+            restoreCatalogPosition(); restoringCatalog = false;
         });
     }
     function showCatalog(nextMode = 'list') {
@@ -164,9 +219,9 @@ export function createTheatrePanel(ctx, state, actions) {
         if (mode === 'settings' && !catalogOnly && isRecordFavorites()) actions.playground?.display?.updateSettings();
         change();
         if (catalogOnly) showCatalog(); else mode = 'list';
-        page = 0; selectedId = null; message = ''; returnScroll = 0;
+        catalog.page = 0; catalog.selectedId = null; message = '';
         actions.diagnostics?.info(`打开${scopeLabel(scope)}`);
-        render(); const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = 0;
+        render({ resetPosition: true });
         if (isRecordFavorites()) void refreshFavoriteCatalog();
     }
     function reshuffle() {
@@ -174,7 +229,6 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     async function beginEdit(item) {
         if (!await canLeave() || state.personalError || !state.settings.enabled) return;
-        returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
         draft = item ? { id: item.id, title: item.title, type: item.type, body: item.body }
             : { title: '', type: currentType() === 'preset' ? 'preset' : 'standalone', body: '' };
         originalDraft = JSON.stringify(draft); mode = 'editor'; message = ''; render();
@@ -182,7 +236,6 @@ export function createTheatrePanel(ctx, state, actions) {
     async function toggleSettings() {
         if (mode === 'settings') return back();
         if (!await canLeave()) return;
-        if (mode !== 'record') returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
         settingsReturnMode = mode;
         actions.diagnostics?.info('打开插件设置');
         mode = 'settings'; message = ''; render();
@@ -213,7 +266,7 @@ export function createTheatrePanel(ctx, state, actions) {
     function tabs() {
         const nav = element('nav', undefined, 'tea-tabs'); nav.setAttribute('aria-label', '内容栏目');
         for (const value of ['community', 'local', 'favorites', ...(actions.playground ? ['play'] : [])]) {
-            const button = textButton(scopeLabel(value), () => { if (scope !== value || mode !== 'list') void navigate(() => { scope = value; }); });
+            const button = textButton(scopeLabel(value), () => { if (scope !== value || mode !== 'list') void navigateToScope(value); });
             button.setAttribute('aria-pressed', String(scope === value)); nav.append(button);
         }
         return nav;
@@ -254,7 +307,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!state.settings.enabled || !actions.playground || !await canLeave()) return;
         const view = getPlayView();
         if (!await view.fillFromEntry(item)) return;
-        scope = 'play'; mode = 'list'; message = ''; render();
+        showScope('play');
         view.focusInput();
     }
     function brandHeader() {
@@ -285,7 +338,7 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         favoriteWorkspace.hidden = false;
         for (const reader of favoriteReaders.values()) reader.node.hidden = true;
-        const item = visible.find(item => item.id === selectedId);
+        const item = visible.find(item => item.id === catalog.selectedId);
         const show = item && (!media.matches || mode === 'record');
         if (show) {
             let reader = favoriteReaders.get(item.id);
@@ -295,11 +348,12 @@ export function createTheatrePanel(ctx, state, actions) {
                     onRemove(id) {
                         favoriteLoadId++;
                         favoriteRows.delete(id); favoriteReaders.get(id)?.node.remove(); favoriteReaders.delete(id);
-                        selectedId = null; mode = 'list'; render();
+                        catalog.selectedId = null; mode = 'list'; render();
                     },
                 });
                 favoriteReaders.set(item.id, reader);
             }
+            reader.node.dataset.id = item.id;
             if (reader.node.parentElement !== favoriteWorkspace) favoriteWorkspace.append(reader.node);
             reader.node.hidden = false; void reader.load(item.favorite);
         }
@@ -310,8 +364,10 @@ export function createTheatrePanel(ctx, state, actions) {
         const status = element('div', undefined, 'tea-status');
         status.setAttribute('role', 'status'); panel.append(status); updateStatus();
     }
-    function render({ preserveSettings = false } = {}) {
+    function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panel || searchComposing) return;
+        if (resetPosition) resetCatalogPosition(); else captureCatalogPosition();
+        restoringCatalog = scope !== 'play';
         if (mode !== 'settings') apiSettings?.cancel();
         const keptSettings = preserveSettings && mode === 'settings' ? panel.querySelector('.tea-settings')?.parentElement : null;
         const settingsPosition = mode === 'settings' ? settingsView?.() : null;
@@ -325,9 +381,6 @@ export function createTheatrePanel(ctx, state, actions) {
             playActive = false;
         }
         syncRandomOrders();
-        const oldList = panel.querySelector('.tea-list'), scroll = oldList?.scrollTop ?? 0;
-        const oldReading = panel.querySelector('.tea-reading');
-        const readingScroll = oldReading?.scrollTop ?? 0;
         const oldSearch = catalogSearch();
         const focused = oldSearch && document.activeElement === oldSearch;
         const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd, oldSearch.selectionDirection] : null;
@@ -346,7 +399,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const bodySize = `${bodyFontSize()}px`;
         if (panel.style.getPropertyValue('--tea-body-size') !== bodySize) panel.style.setProperty('--tea-body-size', bodySize);
         panel.classList.toggle('tea-compact', state.settings.compact !== false);
-        panel.classList.toggle('tea-searching', media.matches && (mobileSearchOpen || !!query));
+        panel.classList.toggle('tea-searching', scope !== 'play' && media.matches && (catalog.mobileSearchOpen || !!catalog.query));
         panel.classList.toggle('tea-play-mode', scope === 'play');
         panel.classList.toggle('tea-record-favorites', isRecordFavorites());
         panel.classList.toggle('tea-has-play', !!actions.playground);
@@ -358,10 +411,13 @@ export function createTheatrePanel(ctx, state, actions) {
             }
         }
         const result = scope === 'play' ? [] : matches();
-        page = Math.max(0, Math.min(page, pageCount(result.length) - 1));
-        const visible = result.slice(pageStart(), media.matches ? pageStart() + mobilePageSize() : desktopStarts[page + 1] ?? result.length);
-        if (!visible.some(item => item.id === selectedId)) selectedId = visible[0]?.id ?? null;
-        if (scope !== 'play') panel.insertBefore(renderCatalog(visible, result.length), favoriteWorkspace ?? keptSettings ?? null);
+        let visible = [];
+        if (scope !== 'play') {
+            catalog.page = Math.max(0, Math.min(catalog.page, pageCount(result.length) - 1));
+            visible = result.slice(pageStart(), media.matches ? pageStart() + mobilePageSize() : catalog.desktopStarts[catalog.page + 1] ?? result.length);
+            if (!visible.some(item => item.id === catalog.selectedId)) catalog.selectedId = visible[0]?.id ?? null;
+            panel.insertBefore(renderCatalog(visible, result.length), favoriteWorkspace ?? keptSettings ?? null);
+        }
         let workspace = keptSettings;
         if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible);
         else if (!workspace) {
@@ -371,7 +427,7 @@ export function createTheatrePanel(ctx, state, actions) {
             }
             if (mode === 'list') {
                 if (!state.settings.enabled) workspace.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
-                else if (selectedId) renderReader(workspace, visible.find(item => item.id === selectedId));
+                else if (catalog.selectedId) renderReader(workspace, visible.find(item => item.id === catalog.selectedId));
                 else workspace.append(art(), element('h2', '下一场故事，等你入座', 'tea-empty-title'), element('p', emptyText(), 'tea-empty'));
             } else {
                 if (mode !== 'settings' || media.matches) {
@@ -395,9 +451,8 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!keptSettings) diagnosticsView?.restore();
         if (settingsPosition && !keptSettings) workspace.querySelector('.tea-settings').scrollTop = settingsPosition.scrollTop;
         appendStatus();
-        const list = panel.querySelector('.tea-list'); if (list) list.scrollTop = scroll;
-        const reading = panel.querySelector('.tea-reading');
-        if (reading && oldReading?.dataset.id === selectedId) reading.scrollTop = readingScroll;
+        restoreCatalogPosition();
+        const list = panel.querySelector('.tea-list');
         const search = catalogSearch();
         if (focused && search) {
             search.focus({ preventScroll: true });
@@ -410,8 +465,8 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function emptyText() {
         if (isRecordFavorites()) return favoriteLoadError || (!favoriteLoaded ? '正在读取收藏…'
-            : query.trim() ? '没有找到符合条件的演出记录。' : '还没有收藏演出记录。');
-        return query.trim() ? '没有找到符合条件的小剧场，换个词试试。' : scope === 'favorites' ? '这里还没有符合分类的收藏。'
+            : catalog.query.trim() ? '没有找到符合条件的演出记录。' : '还没有收藏演出记录。');
+        return catalog.query.trim() ? '没有找到符合条件的小剧场，换个词试试。' : scope === 'favorites' ? '这里还没有符合分类的收藏。'
             : scope === 'local' ? '点击上方加号，写下你的第一份手稿。\n亲笔手稿仅保存在本地，不会上传至茶会选集分享。' : '当前分类和内容偏好下没有可显示的剧场。';
     }
     function catalogItem(item, number = 1) {
@@ -476,28 +531,28 @@ export function createTheatrePanel(ctx, state, actions) {
         details.append(summary, menu); return details;
     }
     function renderCatalog(visible, total) {
-        const catalog = element('aside', undefined, 'tea-catalog'); catalog.id = 'tea-catalog'; catalog.setAttribute('aria-label', '小剧场目录');
-        catalog.append(brandHeader());
-        const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs'); catalog.append(mobileTabs);
+        const catalogNode = element('aside', undefined, 'tea-catalog'); catalogNode.id = 'tea-catalog'; catalogNode.setAttribute('aria-label', '小剧场目录');
+        catalogNode.append(brandHeader());
+        const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs'); catalogNode.append(mobileTabs);
         const searchLine = element('div', undefined, 'tea-search-line'), label = element('label', undefined, 'tea-search-box');
         const input = element('input'); input.type = 'search'; input.placeholder = isRecordFavorites() ? '搜索标题或角色…'
-            : media.matches && currentType() ? `搜索${typeLabel(currentType())}…` : '找一场故事…'; input.value = query;
+            : media.matches && currentType() ? `搜索${typeLabel(currentType())}…` : '找一场故事…'; input.value = catalog.query;
         input.setAttribute('aria-label', isRecordFavorites() ? '搜索标题或角色名字' : '搜索标题、正文或署名'); input.disabled = !state.settings.enabled;
-        const applySearch = (value = input.value) => { query = value; page = 0; selectedId = null; render(); panel.querySelector('.tea-list').scrollTop = 0; };
+        const applySearch = (value = input.value) => { catalog.query = value; catalog.page = 0; catalog.selectedId = null; render({ resetPosition: true }); };
         input.addEventListener('compositionstart', () => { searchComposing = true; });
         input.addEventListener('compositionend', () => { searchComposing = false; applySearch(); });
         input.addEventListener('input', event => { if (!searchComposing && !event.isComposing) applySearch(); });
         label.append(glyph('search'), input); searchLine.append(label);
         if (media.matches) {
             searchLine.id = 'tea-mobile-search';
-            input.addEventListener('focus', () => { mobileSearchOpen = true; });
+            input.addEventListener('focus', () => { catalog.mobileSearchOpen = true; });
             const clear = iconButton('close', '清空搜索', () => {
-                mobileSearchOpen = true; searchComposing = false; applySearch('');
+                catalog.mobileSearchOpen = true; searchComposing = false; applySearch('');
                 catalogSearch()?.focus({ preventScroll: true });
             });
-            clear.classList.add('tea-search-clear'); clear.hidden = !query; label.append(clear);
+            clear.classList.add('tea-search-clear'); clear.hidden = !catalog.query; label.append(clear);
             const cancelSearch = () => {
-                mobileSearchOpen = false; searchComposing = false; input.blur(); applySearch('');
+                catalog.mobileSearchOpen = false; searchComposing = false; input.blur(); applySearch('');
                 panel.querySelector('.tea-search-toggle')?.focus({ preventScroll: true });
             };
             const cancel = textButton('取消', cancelSearch); cancel.className = 'tea-search-cancel'; cancel.setAttribute('aria-label', '取消搜索'); searchLine.append(cancel);
@@ -510,30 +565,30 @@ export function createTheatrePanel(ctx, state, actions) {
             const reshuffleSlot = element('span', undefined, 'tea-reshuffle-slot');
             const shuffle = iconButton('refresh', '重新打乱', reshuffle);
             shuffle.hidden = sortMode() !== 'random'; shuffle.disabled = !state.settings.enabled;
-            reshuffleSlot.append(shuffle); searchLine.append(reshuffleSlot); catalog.append(searchLine);
+            reshuffleSlot.append(shuffle); searchLine.append(reshuffleSlot); catalogNode.append(searchLine);
         }
         const kinds = element('nav', undefined, 'tea-kinds'); kinds.setAttribute('aria-label', scope === 'favorites' ? '收藏分类' : '剧场分类');
         kinds.classList.toggle('tea-favorite-kinds', scope === 'favorites');
         const types = scope === 'favorites' ? [['standalone', '独立剧场'], ['preset', '随文剧场'], ['record', '演出记录']]
             : [['', '全部'], ['standalone', '独立剧场'], ['preset', '随文剧场']];
         for (const [value, label] of types) {
-            const button = textButton(label, () => navigate(() => { if (scope === 'favorites') favoriteType = value; else type = value; }, true));
+            const button = textButton(label, () => navigate(() => { catalog.type = value; }, true));
             button.setAttribute('aria-pressed', String(currentType() === value)); kinds.append(button);
         }
         const kindBar = element('div', undefined, 'tea-kind-bar'); kindBar.append(kinds);
         if (media.matches) {
             const search = iconButton('search', '搜索剧场', () => {
-                mobileSearchOpen = true; panel.classList.add('tea-searching'); search.setAttribute('aria-expanded', 'true');
+                catalog.mobileSearchOpen = true; panel.classList.add('tea-searching'); search.setAttribute('aria-expanded', 'true');
                 input.focus({ preventScroll: true });
             });
             search.classList.add('tea-search-toggle'); search.disabled = !state.settings.enabled;
-            search.setAttribute('aria-expanded', String(mobileSearchOpen || !!query)); search.setAttribute('aria-controls', searchLine.id); kindBar.append(search);
+            search.setAttribute('aria-expanded', String(catalog.mobileSearchOpen || !!catalog.query)); search.setAttribute('aria-controls', searchLine.id); kindBar.append(search);
         }
         kindBar.append(sortControl());
         if (media.matches) {
-            const tools = element('div', undefined, 'tea-mobile-tools'); tools.append(searchLine, kindBar); catalog.append(tools);
-        } else catalog.append(kindBar);
-        const list = element('div', undefined, 'tea-list tea-scroll');
+            const tools = element('div', undefined, 'tea-mobile-tools'); tools.append(searchLine, kindBar); catalogNode.append(tools);
+        } else catalogNode.append(kindBar);
+        const list = element('div', undefined, 'tea-list tea-scroll'); list.dataset.scope = scope;
         const showCatalogEmpty = scope === 'local' || media.matches || mode !== 'list';
         if (state.personalError && scope !== 'community' && !isRecordFavorites()) list.append(element('p', state.personalError, 'tea-error'));
         if (isRecordFavorites() && favoriteLoadError) list.append(iconButton('refresh', '重新读取收藏列表', () => void refreshFavoriteCatalog()));
@@ -545,30 +600,31 @@ export function createTheatrePanel(ctx, state, actions) {
             else {
                 const button = textButton('', async () => {
                     if (!await canLeave()) return;
-                    returnScroll = panel.querySelector('.tea-list')?.scrollTop ?? 0;
-                    selectedId = item.id; showCatalog(media.matches && isRecordFavorites() ? 'record' : 'list'); message = ''; render();
-                    const reading = panel.querySelector('.tea-reading'); if (reading) reading.scrollTop = 0;
+                    captureCatalogPosition();
+                    catalog.selectedId = item.id; catalog.readingId = null; catalog.readingScroll = 0;
+                    showCatalog(media.matches && isRecordFavorites() ? 'record' : 'list'); message = '';
+                    restoringCatalog = true; render();
                 });
                 const row = catalogItem(item, pageStart() + i + 1);
                 button.className = row.className; button.dataset.id = item.id;
-                button.setAttribute('aria-current', String(selectedId === item.id)); button.setAttribute('aria-label', item.title); button.title = item.title;
+                button.setAttribute('aria-current', String(catalog.selectedId === item.id)); button.setAttribute('aria-label', item.title); button.title = item.title;
                 button.append(...row.childNodes); list.append(button);
             }
         }
-        if (!total && state.settings.enabled && showCatalogEmpty) list.append(element('p', emptyText(), 'tea-empty')); catalog.append(list);
-        catalog.append(renderPagination(total));
-        return catalog;
+        if (!total && state.settings.enabled && showCatalogEmpty) list.append(element('p', emptyText(), 'tea-empty')); catalogNode.append(list);
+        catalogNode.append(renderPagination(total));
+        return catalogNode;
     }
     function renderPagination(total) {
         const footer = element('nav', undefined, 'tea-pagination'); footer.setAttribute('aria-label', '剧场分页');
         const pages = pageCount(total);
         const turnTo = async target => {
             if (!await canLeave()) return;
-            page = target; selectedId = null; showCatalog(); render(); panel.querySelector('.tea-list').scrollTop = 0;
+            catalog.page = target; catalog.selectedId = null; showCatalog(); render({ resetPosition: true });
         };
-        const prev = iconButton('left', '上一页', () => turnTo(page - 1)); prev.disabled = page === 0;
-        const next = iconButton('right', '下一页', () => turnTo(page + 1)); next.disabled = page + 1 >= pages;
-        const jump = createPageJump({ getPage: () => page, getPages: () => pages, onSelect: async target => {
+        const prev = iconButton('left', '上一页', () => turnTo(catalog.page - 1)); prev.disabled = catalog.page === 0;
+        const next = iconButton('right', '下一页', () => turnTo(catalog.page + 1)); next.disabled = catalog.page + 1 >= pages;
+        const jump = createPageJump({ getPage: () => catalog.page, getPages: () => pages, onSelect: async target => {
             await turnTo(target); panel?.querySelector('.tea-page-jump summary')?.focus({ preventScroll: true });
         } });
         jump.update();
@@ -608,19 +664,19 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function renderFeedEntry(item, number) {
         const article = element('article', undefined, 'tea-feed-entry'); article.dataset.id = item.id; article.setAttribute('aria-label', item.title);
-        article.classList.toggle('tea-expanded', expanded.has(item.id)); article.append(articleHeader(item, number, number === 1));
+        article.classList.toggle('tea-expanded', catalog.expanded.has(item.id)); article.append(articleHeader(item, number, number === 1));
         const excerpt = element('div', undefined, 'tea-excerpt'); excerpt.id = `tea-body-${item.id.replaceAll(':', '-')}`; excerpt.append(markdownBody(item)); article.append(excerpt);
-        const fold = iconButton(expanded.has(item.id) ? 'up' : 'down', `${expanded.has(item.id) ? '收起' : '展开全文'}：${item.title}`, () => {
-            const list = panel.querySelector('.tea-list'), closing = expanded.has(item.id), above = article.getBoundingClientRect().top < list.getBoundingClientRect().top;
-            if (closing) expanded.delete(item.id); else expanded.add(item.id);
+        const fold = iconButton(catalog.expanded.has(item.id) ? 'up' : 'down', `${catalog.expanded.has(item.id) ? '收起' : '展开全文'}：${item.title}`, () => {
+            const list = panel.querySelector('.tea-list'), closing = catalog.expanded.has(item.id), above = article.getBoundingClientRect().top < list.getBoundingClientRect().top;
+            if (closing) catalog.expanded.delete(item.id); else catalog.expanded.add(item.id);
             article.classList.toggle('tea-expanded', !closing); fold.replaceChildren(glyph(closing ? 'down' : 'up'));
             if (!closing) fold.append(element('span', '收起'));
             fold.title = `${closing ? '展开全文' : '收起'}：${item.title}`; fold.setAttribute('aria-label', fold.title); fold.setAttribute('aria-expanded', String(!closing));
             if (closing && above) list.scrollTop += article.getBoundingClientRect().top - list.getBoundingClientRect().top;
             measureBodies();
         });
-        fold.classList.add('tea-fold'); fold.setAttribute('aria-controls', excerpt.id); fold.setAttribute('aria-expanded', String(expanded.has(item.id)));
-        if (expanded.has(item.id)) fold.append(element('span', '收起')); article.append(fold);
+        fold.classList.add('tea-fold'); fold.setAttribute('aria-controls', excerpt.id); fold.setAttribute('aria-expanded', String(catalog.expanded.has(item.id)));
+        if (catalog.expanded.has(item.id)) fold.append(element('span', '收起')); article.append(fold);
         const footer = element('footer', undefined, 'tea-entry-footer'); footer.append(articleActions(item)); article.append(footer); return article;
     }
     function renderEditor(workspace) {
@@ -655,12 +711,11 @@ export function createTheatrePanel(ctx, state, actions) {
             try {
                 const item = await actions.saveManuscript(draft);
                 actions.diagnostics?.info('手稿已保存');
-                if (draft.id) selectedId = item.id;
+                if (draft.id) catalog.selectedId = item.id;
                 mode = 'list'; showMessage(draft.id ? '手稿已保存' : '手稿已保存到亲笔手稿');
             } catch (error) { actions.diagnostics?.error('保存亲笔手稿', error); showMessage(error.message); }
             finally {
                 busy = false; render();
-                if (mode === 'list') panel.querySelector('.tea-list').scrollTop = returnScroll;
             }
         }); workspace.append(form, footer);
     }
@@ -688,7 +743,8 @@ export function createTheatrePanel(ctx, state, actions) {
         description.id = 'tea-gore-description';
         toggle.addEventListener('change', () => {
             state.settings.showGore = toggle.checked; actions.saveSettings();
-            page = 0; selectedId = null; returnScroll = 0; expanded.clear(); render();
+            if (scope !== 'play') { catalog.page = 0; catalog.selectedId = null; catalog.expanded.clear(); }
+            render({ resetPosition: scope !== 'play' });
         });
         preference.append(label, description); library.append(preference);
         const help = textButton('随文剧场用法', () => { mode = 'help'; render(); }); help.className = 'tea-text-button'; library.append(help);
@@ -718,7 +774,11 @@ export function createTheatrePanel(ctx, state, actions) {
         if (media.matches) {
             const row = element('label', undefined, 'tea-setting-row'), size = element('select'); size.setAttribute('aria-label', '每页篇数');
             for (const n of [5,10,20,50]) { const option = element('option', `${n} 篇`); option.value = String(n); size.append(option); } size.value = String(mobilePageSize());
-            size.addEventListener('change', () => { state.settings.pageSize = Number(size.value); actions.saveSettings(); page = 0; selectedId = null; returnScroll = 0; render(); }); row.append(element('strong', '每页篇数'), size); reading.append(row);
+            size.addEventListener('change', () => {
+                state.settings.pageSize = Number(size.value); actions.saveSettings();
+                if (scope !== 'play') { catalog.page = 0; catalog.selectedId = null; }
+                render({ resetPosition: scope !== 'play' });
+            }); row.append(element('strong', '每页篇数'), size); reading.append(row);
         }
         workspace.append(area);
         settingsView = () => ({ scrollTop: area.scrollTop, rules: captureRules?.(), logs: diagnosticsView?.capture() });
@@ -771,7 +831,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!panel) return;
         if (scope === 'play' && mode === 'list') { panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`); playView?.layout(); return; }
         if (isRecordFavorites()) { if (!media.matches && mode === 'record') mode = 'list'; render(); return; }
-        page = 0; selectedId = null; returnScroll = 0; render();
+        catalog.page = 0; catalog.selectedId = null; render({ resetPosition: true });
     }
     return {
         async open() {
@@ -781,7 +841,8 @@ export function createTheatrePanel(ctx, state, actions) {
                 await actions.loaded; if (!state.settings.enabled) return;
                 media = matchMedia('(max-width: 760px)'); media.addEventListener('change', onBreakpoint);
                 observer = new ResizeObserver(measureBodies);
-                mode = 'list'; message = ''; panel = element('div'); panel.id = 'teahouse-panel';
+                mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
+                message = ''; panel = element('div'); panel.id = 'teahouse-panel';
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open]')) {
@@ -791,8 +852,13 @@ export function createTheatrePanel(ctx, state, actions) {
                 render();
                 if (isRecordFavorites()) void refreshFavoriteCatalog();
                 const context = ctx();
-                popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false, onClosing: canLeave,
+                popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false,
+                    onClosing: async () => {
+                        if (!await canLeave()) return false;
+                        captureCatalogPosition(); return true;
+                    },
                     onOpen: () => {
+                        restoreCatalogPosition();
                         measureBodies();
                         const candidate = panel.querySelector('.tea-topbar button:not([disabled]), .tea-mobile-actions button:not([disabled]), .tea-brand button:not([disabled])');
                         const target = (candidate && candidate.getClientRects().length) ? candidate : [...panel.querySelectorAll('button')].find(b => !b.disabled && b.getClientRects().length);
@@ -818,6 +884,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
                 appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
                 searchComposing = false;
+                restoringCatalog = false;
             }
         },
         refresh() {

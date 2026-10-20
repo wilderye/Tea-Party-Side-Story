@@ -16,6 +16,7 @@ tests/*
 !tests/update-regression.test.js
 !tests/macro-empty.test.js
 !tests/panel-flow.browser.cjs
+!tests/panel-progress.browser.cjs
 !tests/settings-navigation.browser.cjs
 !tests/play-api.browser.cjs
 !tests/qr-entry.test.js
