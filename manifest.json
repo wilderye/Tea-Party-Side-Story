@@ -1,6 +1,6 @@
 {
   "display_name": "茶话会小剧场", "loading_order": 100,
   "requires": [], "optional": [], "js": "index.js", "css": "style.css",
-  "author": "荒行", "version": "0.4.2",
+  "author": "荒行", "version": "0.4.3",
   "hooks": { "delete": "onUninstall" }
 }
