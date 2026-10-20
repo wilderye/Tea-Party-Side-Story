@@ -33,9 +33,11 @@ tests/*
 !tests/play-request.test.js
 !tests/play-runtime.test.js
 !tests/play-prompt.test.js
+!tests/play-preset.test.js
 !tests/play-fixture.js
 !tests/play-flow.browser.cjs
 !tests/play-native.browser.cjs
+!tests/play-native-continue.browser.cjs
 !tests/play-native-state.browser.cjs
 !tests/play-processing.test.js
 !tests/play-processing.browser.cjs

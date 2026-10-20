@@ -323,13 +323,14 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 }
             });
         },
-        begin({ roundId, replaceResultId, characterId, character, prompt, origin = null, resultId, startedAt, context }, { signal } = {}) {
+        begin({ roundId, replaceResultId, continueResultId, expectedText, characterId, character, prompt, origin = null, resultId, startedAt, context }, { signal } = {}) {
             // Copy caller-owned values before waiting for any other write.
-            const input = clone({ roundId, replaceResultId, characterId, character, prompt, origin, resultId, startedAt, context: readPlayContext(context) });
+            const input = clone({ roundId, replaceResultId, continueResultId, expectedText, characterId, character, prompt, origin, resultId, startedAt, context: readPlayContext(context) });
             assert(isText(input.character?.avatar) && isText(input.character?.name));
             assert(isId(input.resultId) && isDate(input.startedAt));
             if (input.roundId !== undefined) assert(isId(input.roundId));
             if (input.replaceResultId !== undefined) assert(isId(input.replaceResultId) && isId(input.roundId));
+            if (input.continueResultId !== undefined) assert(isId(input.continueResultId) && isId(input.roundId));
             if (!input.roundId) assert(isText(input.prompt), '请先输入小剧场提示词');
             return serialize(async () => {
                 const directory = await index();
@@ -353,6 +354,18 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                         origin: readPlayOrigin(input.origin), createdAt: input.startedAt, results: [] };
                 }
                 owner.name = input.character.name;
+                if (input.continueResultId) {
+                    const target = round.results.findIndex(item => item.id === input.continueResultId);
+                    if (target < 0) throw new PlayHistoryError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
+                    const existing = round.results[target];
+                    if (!existing.text.trim()) throw new PlayHistoryError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
+                    if (input.expectedText !== undefined && existing.text !== input.expectedText) {
+                        throw new PlayHistoryError('edit_conflict', '这份结果已在其他窗口修改，请重新读取后再续写。');
+                    }
+                    round.results[target] = { ...existing, status: 'unfinished', finishedAt: null, context: input.context };
+                    delete round.results[target].error;
+                    return commitRound(directory, round);
+                }
                 assert(!round.results.some(result => result.id === input.resultId), '生成编号重复，请重新发送');
                 const result = { id: input.resultId, startedAt: input.startedAt, finishedAt: null,
                     status: 'unfinished', text: '', context: input.context };

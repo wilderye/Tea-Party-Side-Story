@@ -16,6 +16,13 @@ const server = http.createServer(async (request, response) => {
   } catch (error) { response.statusCode = 500; response.end(error.message); }
 });
 
+function readingPosition(feed) {
+  const top = feed.getBoundingClientRect().top;
+  const anchor = [...feed.querySelectorAll('[data-read-anchor]')].find(node => node.getClientRects().length && node.getBoundingClientRect().height && node.getBoundingClientRect().bottom > top + 1);
+  return { anchor: anchor?.dataset.readAnchor, offset: anchor ? top - anchor.getBoundingClientRect().top : null,
+    bottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12 };
+}
+
 async function seedLongHistory(page, mode) {
   return page.evaluate(async mode => {
     const original = await runtime.getRound(seed.a), records = new Map();
@@ -35,12 +42,12 @@ async function seedLongHistory(page, mode) {
     runtime.getRound = async id => {
       if (!records.has(id)) return read(id);
       progress.started.push(id);
-      if (progress.started.length > 6) await gate;
+      if (['slow', 'states', 'switch', 'reopen-loading'].includes(mode) && id === rows.at(-10).id) await gate;
       await new Promise(resolve => setTimeout(resolve, 40)); progress.completed++;
       return structuredClone(records.get(id));
     };
     const ids = rows.map(row => row.id);
-    if (mode === 'anchor') localStorage.setItem('teahouse-play-view-v1', JSON.stringify({ format: 1,
+    if (['anchor', 'jump', 'automatic'].includes(mode)) localStorage.setItem('teahouse-play-view-v1', JSON.stringify({ format: 1,
       positions: [[original.characterId, { bottom: false, anchor: `${ids[90]}/assistant/head`, offset: 0 }]], selections: [], drafts: [] }));
     return ids;
   }, mode);
@@ -51,14 +58,42 @@ async function checkHistory(page, mode, viewport) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   await button('剧场演出').click();
-  const targetId = mode === 'anchor' ? ids[90] : ids.at(-1);
+  const targetId = ['anchor', 'jump', 'automatic'].includes(mode) ? ids[90] : ids.at(-1);
   const target = panel.locator(`[data-record="${targetId}"]`);
   await target.waitFor();
   assert.equal(await page.evaluate(() => progress.started[0]), targetId);
-  assert.equal(await panel.locator('.play-record').count(), mode === 'anchor' ? 90 : 10, '第一批仅按需展示最新10条或保存的锚点位置，不全量加载全部文件');
+  const firstCount = ['slow', 'states', 'switch'].includes(mode) ? 9 : 10;
+  await page.waitForFunction(count => document.querySelectorAll('.play-record:not([hidden])').length === count, firstCount);
+  assert.equal(await panel.locator('.play-record:not([hidden])').count(), firstCount, '首屏只读取附近10条，一条慢记录不阻挡其余记录显示');
+  assert.equal(await panel.locator('.play-record:not([hidden])').last().locator('.play-message:not([hidden])').last()
+    .evaluate(node => getComputedStyle(node).marginBottom), '0px', '加载按钮和隐藏记录不增加末尾消息的留白');
   const headOffset = record => record.locator('.play-assistant-meta').evaluate(node => node.getBoundingClientRect().top - document.querySelector('.play-feed').getBoundingClientRect().top);
   const before = await headOffset(target);
   if (mode === 'anchor') assert.ok(Math.abs(before) < 2, '优先恢复上次读到的消息位置');
+  if (mode === 'automatic') {
+    for (const [direction, count] of [['earlier', 20], ['later', 30]]) {
+      await page.locator('.play-feed').evaluate((feed, direction) => {
+        feed.scrollTop = direction === 'earlier' ? 80 : feed.scrollHeight - feed.clientHeight - 80;
+      }, direction);
+      const position = await page.locator('.play-feed').evaluate(readingPosition);
+      await page.waitForFunction(count => document.querySelectorAll('.play-record:not([hidden])').length === count, count);
+      const after = await page.locator('.play-feed').evaluate(readingPosition);
+      assert.equal(after.anchor, position.anchor, `滚动后自动补入 ${direction} 记录，保留阅读段落`);
+      assert.ok(Math.abs(after.offset - position.offset) < 2, `自动补入 ${direction} 记录保留段落位置`);
+    }
+    return;
+  }
+  if (mode === 'jump') {
+    await button('跳到最新消息').click();
+    await panel.locator(`[data-record="${ids.at(-1)}"]`).getByText('第 180 场的正文', { exact: false }).waitFor();
+    await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 10);
+    await page.waitForFunction(() => {
+      const feed = document.querySelector('.play-feed');
+      return feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 1;
+    });
+    assert.equal(await panel.locator('.play-record:not([hidden])').count(), 10, '从旧位置跳到最新消息只显示末尾10条');
+    return;
+  }
   let editor;
   if (mode === 'states') {
     await target.frameLocator('iframe').getByRole('button', { name: '继续', exact: true }).click();
@@ -81,12 +116,16 @@ async function checkHistory(page, mode, viewport) {
   }
   await page.evaluate(() => resumeHistoryReads());
   while (await panel.locator('.play-earlier-bar:visible').count() > 0) {
-    await panel.locator('.play-earlier-bar').click();
+    await panel.locator('.play-earlier-bar').evaluate(node => node.click());
     await page.waitForTimeout(40);
   }
-  await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
+  while (await panel.locator('.play-later-bar:visible').count() > 0) {
+    await panel.locator('.play-later-bar').evaluate(node => node.click());
+    await page.waitForTimeout(40);
+  }
+  await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 180);
   await page.waitForTimeout(100);
-  const prompts = (await panel.locator('.play-record .play-user-text').allTextContents()).map(text => text.trim());
+  const prompts = (await panel.locator('.play-record:not([hidden]) .play-user-text').allTextContents()).map(text => text.trim());
   assert.deepEqual(prompts, Array.from({ length: 180 }, (_, index) => `第 ${index + 1} 场的提示词`), '相同创建时间也保持目录顺序');
   if (mode === 'anchor') {
     const after = await headOffset(target);
@@ -127,21 +166,16 @@ async function checkReopen(page, mode) {
   const open = () => page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   const button = name => page.locator('#teahouse-panel').getByRole('button', { name, exact: true }).filter({ visible: true });
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  const capture = () => page.locator('.play-feed').evaluate(feed => {
-    const top = feed.getBoundingClientRect().top;
-    const anchor = [...feed.querySelectorAll('[data-read-anchor]')].find(node => node.getClientRects().length && node.getBoundingClientRect().height && node.getBoundingClientRect().bottom > top + 1);
-    return { anchor: anchor?.dataset.readAnchor, offset: anchor ? top - anchor.getBoundingClientRect().top : null,
-      bottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12 };
-  });
+  const capture = () => page.locator('.play-feed').evaluate(readingPosition);
   await open(); await button('剧场演出').click();
-  await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 10);
+  await page.waitForFunction(count => document.querySelectorAll('.play-record:not([hidden])').length === count, mode === 'reopen-loading' ? 9 : 10);
   if (mode !== 'reopen-loading') {
     await page.evaluate(() => resumeHistoryReads());
     while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
-      await page.locator('#teahouse-panel .play-earlier-bar').click();
+      await page.locator('#teahouse-panel .play-earlier-bar').evaluate(node => node.click());
       await page.waitForTimeout(40);
     }
-    await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
+    await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 180);
   }
   await settle();
   if (mode === 'reopen-bottom') await page.locator('.play-feed').evaluate(feed => { feed.scrollTop = feed.scrollHeight; });
@@ -156,6 +190,9 @@ async function checkReopen(page, mode) {
   const before = await capture();
   assert.equal(before.bottom, mode === 'reopen-bottom', '分别验证中间的段落和底部位置');
   for (let repeat = 0; repeat < 3; repeat++) {
+    if (repeat === 2) {
+      await button('茶会选集').click(); await button('剧场演出').click(); await settle();
+    }
     await button('关闭面板').click();
     await page.locator('#teahouse-panel').waitFor({ state: 'detached' });
     await open(); await settle();
@@ -163,19 +200,81 @@ async function checkReopen(page, mode) {
     if (mode === 'reopen-loading' && repeat === 1) {
       await page.evaluate(() => resumeHistoryReads());
       while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
-        await page.locator('#teahouse-panel .play-earlier-bar').click();
+        await page.locator('#teahouse-panel .play-earlier-bar').evaluate(node => node.click());
         await page.waitForTimeout(40);
       }
-      await page.waitForFunction(() => document.querySelectorAll('.play-record').length === 180);
+      await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 180);
       await settle();
     }
     const after = await capture();
     if (before.bottom) assert.equal(after.bottom, true, '离开时在底部，重新打开仍在底部');
     else {
       assert.equal(after.anchor, before.anchor, `第 ${repeat + 1} 次重开保留同一个阅读段落`);
-      assert.ok(Math.abs(after.offset - before.offset) < 2, '重开及补入旧记录后，段落在屏幕上的位置保持不变');
+      assert.ok(Math.abs(after.offset - before.offset) < 2, `第 ${repeat + 1} 次重开及补入旧记录后，段落在屏幕上的位置保持不变：${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     }
   }
+}
+
+async function checkStreaming(page) {
+  await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+  await page.locator('#teahouse-panel').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 2);
+  await page.evaluate(() => { window.streamingTask = runtime.send({ prompt: '大段流式正文的位置验证' }); });
+  await page.waitForFunction(() => typeof emitGeneration === 'function' && document.querySelectorAll('.play-record:not([hidden])').length === 3);
+  await page.evaluate(() => emitGeneration('第一段流式正文'));
+  await page.getByText('第一段流式正文', { exact: true }).waitFor();
+  const firstHeight = await page.locator('.play-feed').evaluate(feed => { feed.scrollTop = feed.scrollHeight; return feed.scrollHeight; });
+  await page.evaluate(() => {
+    window.streamBody = Array.from({ length: 40 }, (_, index) => `流式正文第 ${index} 段。`).join('\n\n');
+    emitGeneration(streamBody);
+  });
+  await page.getByText('流式正文第 39 段。', { exact: true }).waitFor();
+  const follow = await page.locator('.play-feed').evaluate(feed => ({ height: feed.scrollHeight, distance: feed.scrollHeight - feed.clientHeight - feed.scrollTop }));
+  assert.ok(follow.height - firstHeight > 24);
+  assert.ok(follow.distance <= 1, '一次新增超过24像素的流式正文仍跟随到底部');
+  const movement = await page.locator('.play-feed').evaluate(async feed => {
+    feed.scrollTop = feed.scrollHeight * 0.5;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    feed.scrollTop += 160;
+    const requested = feed.scrollTop, added = document.createElement('p');
+    added.textContent = '合成尺寸变化'; document.querySelector('.play-feed-content').append(added);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    return { requested, actual: feed.scrollTop };
+  });
+  assert.ok(Math.abs(movement.actual - movement.requested) < 2, '滚动通知尚未到达时发生尺寸变化，不把用户拉回旧位置');
+  await page.evaluate(async () => { finishGeneration(streamBody); await streamingTask; });
+}
+
+async function checkFavoriteProcessing(page, viewport) {
+  const id = await page.evaluate(async () => {
+    const round = await runtime.getRound(seed.a), result = round.results.at(-1);
+    await runtime.editResult(round.id, result.id, 'A', result.text);
+    rules.globalRules.push({ id: 'double-a', scriptName: '合成字母替换', findRegex: 'A', replaceString: 'AA', placement: [2] });
+    return round.id;
+  });
+  await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+  const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+  await button('剧场演出').click();
+  const record = panel.locator(`[data-record="${id}"]`);
+  await record.getByText('AA', { exact: true }).waitFor();
+  await record.locator('.play-assistant-meta .tea-star').click();
+  await page.waitForFunction(async () => (await runtime.listFavorites()).length === 1);
+  const saved = await page.evaluate(async () => runtime.getFavorite((await runtime.listFavorites())[0].id));
+  assert.equal(saved.text, 'AA'); assert.equal(saved.firstLine, 'AA', '收藏正文与列表文字只经过一次显示规则');
+  if (viewport.width <= 760) await button('选择角色').click();
+  await page.evaluate(() => { ctx.characters[0].name = '测试甲改名'; window.dispatchEvent(new Event('focus')); });
+  await panel.locator('.play-people').getByRole('button', { name: '测试甲改名', exact: true }).waitFor();
+  assert.equal(await panel.locator('.play-people').getByRole('button', { name: '测试甲', exact: true }).count(), 0, '复用角色目录时也更新名字');
+  if (viewport.width <= 760) await button('返回演出记录').click();
+  await button('我的收藏').click(); await button('演出记录').click();
+  await panel.locator(`.tea-story[data-id="${saved.id}"]`).getByText('AA', { exact: true }).click();
+  const reader = panel.locator('.play-favorite-reading');
+  await reader.getByRole('button', { name: '编辑演出记录收藏', exact: true }).click();
+  await reader.getByRole('textbox', { name: '收藏内容', exact: true }).fill('AAA');
+  await reader.getByRole('button', { name: '保存', exact: true }).click();
+  await reader.getByText('AAA', { exact: true }).waitFor();
+  const edited = await page.evaluate(id => runtime.getFavorite(id), saved.id);
+  assert.equal(edited.text, 'AAA'); assert.equal(edited.firstLine, 'AAA', '修改收藏也不重复处理列表文字');
 }
 
 (async () => {
@@ -183,14 +282,17 @@ async function checkReopen(page, mode) {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }]) {
-      for (const mode of ['reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'states', 'switch', 'favorite']) {
+      for (const mode of ['reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'jump', 'automatic', 'slow', 'states', 'switch', 'favorite', 'favorite-processing', 'stream']) {
         const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
         await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.waitForFunction(() => window.ready);
         assert.equal(await page.title(), '小剧场设置与原文编辑验证');
         if (mode.startsWith('reopen')) await checkReopen(page, mode);
-        else if (mode === 'favorite') await checkFavorite(page); else await checkHistory(page, mode, viewport);
+        else if (mode === 'favorite') await checkFavorite(page);
+        else if (mode === 'favorite-processing') await checkFavoriteProcessing(page, viewport);
+        else if (mode === 'stream') await checkStreaming(page);
+        else await checkHistory(page, mode, viewport);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ viewport, mode, passed: true, errors }));
         await context.close();

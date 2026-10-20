@@ -116,7 +116,7 @@ function fixture() {
                 assert.equal(dryRun, false);
                 assert.equal(max, 32000);
                 assert.equal(scan.characterDescription, '角色说明');
-                assert.match(chat[0], /用户: /);
+                assert.ok(chat.some(message => /用户: /.test(message)));
                 return { worldInfoBefore: '<%= 世界书内容 %>', worldInfoAfter: '',
                     worldInfoDepth: [{ depth: 2, role: 0, entries: ['本次深度世界书'] }],
                     outletEntries: { place: ['本次指定位置世界书'] },
@@ -467,4 +467,18 @@ test('等主聊天准备期间仍可停止，停止后不偷偷发送', { timeou
     await assert.rejects(task, error => error.name === 'AbortError');
     await f.source.emit(f.events.GENERATION_ENDED);
     assert.equal(f.requests.length, 0); assert.equal(f.order.includes('world'), false);
+});
+
+test('续写准备将待续写消息推入聊天并以 continue 模式拼装，不额外加空格', async () => {
+    const f = fixture();
+    const options = { ...f.options(), continueMessage: '待续写的旧正文' };
+    const request = await f.prepare(options);
+    const result = await request.send({ signal: new AbortController().signal });
+    assert.equal(f.assemblies[0].type, 'continue');
+    assert.equal(f.assemblies[0].cyclePrompt, '待续写的旧正文');
+    const messages = f.requests[0].payload.messages;
+    const lastMessage = messages.at(-1);
+    assert.equal(lastMessage.role, 'assistant');
+    assert.equal(lastMessage.content, '待续写的旧正文');
+    assert.ok(result.startsWith('待续写的旧正文'));
 });

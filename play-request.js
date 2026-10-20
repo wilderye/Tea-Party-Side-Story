@@ -43,7 +43,7 @@ export async function fetchCustomApiModels(context, api, signal) {
  * those would assemble prompts again or notify third-party reply handlers.
  * Both ST 1.14 and 1.19 expose ChatCompletionService.sendRequest.
  */
-export function createPreparedPlayRequest(context, data) {
+export function createPreparedPlayRequest(context, data, { prefix = '' } = {}) {
     if (!Array.isArray(data?.messages) || !data.messages.length
         || typeof data.chat_completion_source !== 'string' || !data.chat_completion_source
         || typeof data.model !== 'string' || !data.model) {
@@ -78,8 +78,9 @@ export function createPreparedPlayRequest(context, data) {
                 if (!payload.stream) {
                     const text = extract(result, 'openai');
                     if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的正文格式不正确');
-                    onText(text);
-                    return text;
+                    const fullText = prefix + text;
+                    onText(fullText);
+                    return fullText;
                 }
                 if (typeof result !== 'function') throw new PlaygroundError('invalid_response', '酒馆没有返回可读取的流式回复');
                 iterator = result();
@@ -88,10 +89,10 @@ export function createPreparedPlayRequest(context, data) {
                     controller.signal.throwIfAborted();
                     if (typeof chunk?.text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的流式正文格式不正确');
                     text = chunk.text;
-                    onText(text);
+                    onText(prefix + text);
                 }
                 controller.signal.throwIfAborted();
-                return text;
+                return prefix + text;
             } finally {
                 controller.abort();
                 signal?.removeEventListener('abort', abort);

@@ -114,7 +114,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         }, checkpointMs);
         job.timer?.unref?.();
     }
-    async function start({ roundId, replaceResultId, characterId, prompt, origin }) {
+    async function start({ roundId, replaceResultId, continueResultId, characterId, prompt, origin }) {
         const available = availability();
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
@@ -124,9 +124,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         try { environment = clone(captureEnvironment()); }
         catch (error) { diagnostics?.error('读取小剧场生成环境', error); throw error; }
         const context = readPlayContext(environment.context);
-        const job = { resultId: uuid(), phase: 'preparing', controller: new AbortController(),
+        const resultId = continueResultId || uuid();
+        let baseText = '';
+        const job = { resultId, phase: 'preparing', controller: new AbortController(),
             characterName: environment.character.name, text: '', closed: false, checkpoint: Promise.resolve() };
-        const diagnostic = diagnostics?.start('小剧场生成', { phase: 'preparing', apiMode: environment.api?.mode },
+        const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成', { phase: 'preparing', apiMode: environment.api?.mode },
             [environment.api?.key, environment.tavern?.settings?.proxy_password]);
         let generationError;
         active = job;
@@ -134,13 +136,24 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let finalStatus = 'complete';
         let resultContext = context;
         try {
-            job.round = await history.begin({ roundId, replaceResultId, characterId, character: environment.character,
-                prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context }, { signal: job.controller.signal });
+            if (continueResultId) {
+                const currentRound = await abortable(() => history.getRound(roundId), job.controller.signal);
+                const target = currentRound?.results?.find(result => result.id === continueResultId);
+                if (!target) throw new PlaygroundError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
+                if (!target.text.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
+                baseText = target.text;
+                job.text = baseText;
+                assertCurrent(environment);
+            }
+            job.round = await history.begin({ roundId, replaceResultId, continueResultId, characterId, character: environment.character,
+                prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
+                ...(continueResultId ? { expectedText: baseText } : {}) }, { signal: job.controller.signal });
             notify();
             job.controller.signal.throwIfAborted();
             assertCurrent(environment);
             const request = await abortable(() => prepareRequest({
                 generationId: job.resultId, prompt: job.round.prompt, environment,
+                continueMessage: continueResultId ? baseText : undefined,
                 signal: job.controller.signal,
             }), job.controller.signal);
             if (typeof request?.send !== 'function') throw new PlaygroundError('invalid_prepared_request', '提示词处理没有返回可发送的请求，本次没有发送到模型。');
@@ -165,7 +178,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 },
             }), job.controller.signal);
             const text = typeof result === 'string' ? result : result?.text;
-            if (typeof text !== 'string' || !text.trim()) throw new PlaygroundError('empty_response', '模型没有返回正文，已保留收到的内容。');
+            if (typeof text !== 'string' || !(continueResultId ? text.slice(baseText.length) : text).trim()) {
+                throw new PlaygroundError('empty_response', '模型没有返回正文，已保留收到的内容。');
+            }
             job.text = text;
         } catch (error) {
             generationError = error;
@@ -213,6 +228,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         regenerate(roundId, resultId) {
             if (!resultId) throw new PlaygroundError('result_missing', '请先选择要重新生成的结果');
             return start({ roundId, replaceResultId: resultId });
+        },
+        continueResult(roundId, resultId) {
+            if (!resultId) throw new PlaygroundError('result_missing', '请先选择要续写的结果');
+            return start({ roundId, continueResultId: resultId });
         },
         stop() {
             if (!active || active.closed) return false;

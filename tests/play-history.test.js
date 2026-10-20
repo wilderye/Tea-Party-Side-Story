@@ -227,3 +227,26 @@ test('文件名只从内部编号生成；拒绝路径注入和重复结果编�
     const f = memoryFiles(), round = await f.begin();
     assert.throws(() => readPlayRound({ ...round, results: [round.results[0], round.results[0]] }));
 });
+
+test('续写开始时重置状态为 unfinished，保留已有正文并允许后续完成保存', async () => {
+    const f = memoryFiles(), round = await f.begin();
+    const resultId = round.results[0].id;
+    await f.store.saveResult(round.id, resultId, { text: '前文片段', status: 'complete', finishedAt: time(1) });
+    const continued = await f.begin({ roundId: round.id, continueResultId: resultId, resultId });
+    assert.equal(continued.results.length, 1);
+    assert.equal(continued.results[0].id, resultId);
+    assert.equal(continued.results[0].status, 'unfinished');
+    assert.equal(continued.results[0].text, '前文片段');
+    assert.equal(continued.results[0].finishedAt, null);
+    await f.store.saveResult(round.id, resultId, { text: '前文片段接续后文', status: 'complete', finishedAt: time(2) });
+    const finalRound = await f.store.getRound(round.id);
+    assert.equal(finalRound.results[0].text, '前文片段接续后文');
+    assert.equal(finalRound.results[0].status, 'complete');
+});
+
+test('续写拒绝不存在的结果和空正文结果', async () => {
+    const f = memoryFiles(), round = await f.begin();
+    const resultId = round.results[0].id;
+    await assert.rejects(f.begin({ roundId: round.id, continueResultId: randomUUID(), resultId: randomUUID() }), /已在其他窗口删除或替换/);
+    await assert.rejects(f.begin({ roundId: round.id, continueResultId: resultId, resultId }), /没有正文，无法续写/);
+});

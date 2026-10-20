@@ -9,7 +9,7 @@ export function playStoppingStrings(power, substitute, limit) {
     return limit > 0 ? strings.slice(0, limit) : strings;
 }
 
-export function legacyPlayParameters(settings, model, messages, { power, name1, name2, modern = false }, substitute) {
+export function legacyPlayParameters(settings, model, messages, { power, name1, name2, modern = false, type = 'normal' }, substitute) {
     const source = settings.chat_completion_source;
     const isOpenAI = ['openai', 'azure_openai'].includes(source);
     const stop = limit => playStoppingStrings(power, substitute, limit);
@@ -19,7 +19,7 @@ export function legacyPlayParameters(settings, model, messages, { power, name1, 
         if (effort === 'min' && !(isOpenAI && /^gpt-5/.test(model))) effort = 'low';
         if (effort === 'max') effort = 'high';
     }
-    const payload = { type: 'normal', messages, model, chat_completion_source: source,
+    const payload = { type, messages, model, chat_completion_source: source,
         stream: !!settings.stream_openai && !(isOpenAI && ['o1', 'o1-2024-12-17'].includes(model)),
         temperature: Number(settings.temp_openai), frequency_penalty: Number(settings.freq_pen_openai),
         presence_penalty: Number(settings.pres_pen_openai), top_p: Number(settings.top_p_openai),
@@ -42,7 +42,8 @@ export function legacyPlayParameters(settings, model, messages, { power, name1, 
     }
     if (['claude', 'openrouter', 'makersuite', 'vertexai', 'cohere', 'perplexity', 'electronhub'].includes(source)) payload.top_k = Number(settings.top_k_openai);
     if (source === 'claude') {
-        copy('claude_use_sysprompt'); payload.stop = stop(); payload.assistant_prefill = substitute(settings.assistant_prefill || '');
+        copy('claude_use_sysprompt'); payload.stop = stop();
+        if (type !== 'continue' || !settings.continue_prefill) payload.assistant_prefill = substitute(settings.assistant_prefill || '');
     }
     if (source === 'openrouter') {
         Object.assign(payload, { min_p: Number(settings.min_p_openai), repetition_penalty: Number(settings.repetition_penalty_openai),

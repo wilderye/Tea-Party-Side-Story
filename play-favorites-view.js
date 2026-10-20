@@ -3,8 +3,8 @@ import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { truncateTitle } from './library.js';
 
-export function favoriteFirstLine(text, display) {
-    return [...playTextPreview(display?.process(text) ?? text, true)].slice(0, 160).join('');
+export function favoriteFirstLine(text) {
+    return [...playTextPreview(text, true)].slice(0, 160).join('');
 }
 
 export function favoriteTitle(item, limit = 28) {
@@ -60,7 +60,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
         editor = createPlayEditor({ text: initialText, title: original.title, autoGrow: false, onCancel: finish,
             async onSave({ text, title }) {
                 value = await playground.editFavorite(original.id,
-                    { text, title, firstLine: favoriteFirstLine(text, playground.display) }, original.revision);
+                    { text, title, firstLine: favoriteFirstLine(text) }, original.revision);
                 requestedRevision = value.revision;
                 finish(); onChange(value);
             },

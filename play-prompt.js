@@ -144,7 +144,7 @@ function customSettings(settings, api) {
     };
 }
 
-async function preparePayload(context, modules, messages, environment, signal, toolsData, emit) {
+async function preparePayload(context, modules, messages, environment, signal, toolsData, emit, type = 'normal') {
     const { openai } = modules;
     const { api, tavern } = environment;
     let settings = structuredClone(tavern.settings);
@@ -154,7 +154,7 @@ async function preparePayload(context, modules, messages, environment, signal, t
     settings.stream_openai = true;
     const model = api.mode === 'custom' ? settings.custom_model : tavern.model ?? openai.getChatCompletionModel(settings);
     const modern = typeof openai.createGenerationParameters === 'function';
-    const baseline = legacyPlayParameters(settings, model, messages, { ...tavern, modern }, text => modules.core.substituteParams(text));
+    const baseline = legacyPlayParameters(settings, model, messages, { ...tavern, modern, type }, text => modules.core.substituteParams(text));
     const bias = settings.bias_presets?.[settings.bias_preset_selected];
     let payload;
     if (modern) {
@@ -163,7 +163,7 @@ async function preparePayload(context, modules, messages, environment, signal, t
         settings.bias_preset_selected = '';
         settings.reverse_proxy = '';
         settings.function_calling = false;
-        const { generate_data } = await openai.createGenerationParameters(settings, model, 'normal', messages);
+        const { generate_data } = await openai.createGenerationParameters(settings, model, type, messages);
         payload = generate_data;
         for (const key of ['stop', 'logprobs', 'reverse_proxy', 'proxy_password', 'assistant_prefill', 'user_name', 'char_name', 'group_names']) {
             if (Object.hasOwn(baseline, key)) payload[key] = baseline[key];
@@ -185,7 +185,7 @@ async function preparePayload(context, modules, messages, environment, signal, t
     return payload;
 }
 
-async function prepareNativeRequest(ctx, modules, { prompt, environment, signal }, prepareMessages, emit, isInterrupted) {
+async function prepareNativeRequest(ctx, modules, { prompt, environment, signal, continueMessage }, prepareMessages, emit, isInterrupted) {
     const { core, openai, world, notes, constants, extensions } = modules;
     const context = ctx(), events = context.eventTypes;
     const guard = () => {
@@ -203,7 +203,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
     try {
         // Same preparation notification used by independent generators.
         // Do not emit GENERATION_STARTED or any main-chat message/reply event.
-        await emit(events.GENERATION_AFTER_COMMANDS, 'normal', {}, false);
+        await emit(events.GENERATION_AFTER_COMMANDS, continueMessage ? 'continue' : 'normal', {}, false);
         guard();
         const fields = core.getCharacterCardFields();
         const character = context.characters[context.characterId];
@@ -225,10 +225,13 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
         }
         if (chat[0]) chat[0].mes = core.substituteParams(chat[0].mes);
         chat.push({ name: context.name1, is_user: true, is_system: false, mes: core.substituteParams(prompt), extra: {} });
+        if (continueMessage) {
+            chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: {} });
+        }
         const history = await formatHistory(modules, chat, environment);
         guard();
         const maxContext = environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens;
-        const aborted = await extensions.runGenerationInterceptors(history, maxContext, 'normal');
+        const aborted = await extensions.runGenerationInterceptors(history, maxContext, continueMessage ? 'continue' : 'normal');
         guard();
         if (aborted) throw new PlaygroundError('generation_cancelled', '酒馆的发送前处理已取消本次请求。');
 
@@ -260,7 +263,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
             if (example.position === world.wi_anchor_position.before) examples.unshift(...parsed);
             else examples.push(...parsed);
         }
-        const { promptBias } = core.getBiasStrings(prompt, 'normal');
+        const { promptBias } = core.getBiasStrings(prompt, continueMessage ? 'continue' : 'normal');
         const toolsData = {};
         const { tavern } = environment;
         const multiSwipe = tavern.settings.n > 1 && ['openai', 'azure_openai', 'custom', 'xai', 'aimlapi', 'moonshot'].includes(tavern.settings.chat_completion_source);
@@ -270,8 +273,11 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
             name2: context.name2, charDescription: fields.description, charPersonality: fields.personality,
             scenario: fields.scenario, personaDescription: fields.persona,
             worldInfoBefore: info.worldInfoBefore, worldInfoAfter: info.worldInfoAfter,
-            extensionPrompts: core.extension_prompts, bias: promptBias, type: 'normal',
-            quietPrompt: '', quietImage: null, cyclePrompt: '', systemPromptOverride: fields.system,
+            extensionPrompts: core.extension_prompts, bias: promptBias,
+            type: continueMessage ? 'continue' : 'normal',
+            quietPrompt: '', quietImage: null,
+            cyclePrompt: continueMessage || '',
+            systemPromptOverride: fields.system,
             jailbreakPromptOverride: fields.jailbreak, history,
             messageExamples: openai.setOpenAIMessageExamples(examples), toolsData, signal, leadingSystemPrompt,
         });
@@ -279,7 +285,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
         const data = { prompt: messages };
         await emit(events.GENERATE_AFTER_DATA, data, false);
         guard();
-        const payload = await preparePayload(context, modules, data.prompt, environment, signal, toolsData, emit);
+        const payload = await preparePayload(context, modules, data.prompt, environment, signal, toolsData, emit, continueMessage ? 'continue' : 'normal');
         guard();
         // Its budget was reserved before preset assembly. Insert only after all
         // host callbacks, so a callback cannot move another prompt ahead of it.
@@ -291,7 +297,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal 
                 payload.messages.unshift({ role: 'system', content: leadingSystemPrompt });
             }
         }
-        return createPreparedPlayRequest(context, payload);
+        return createPreparedPlayRequest(context, payload, { prefix: continueMessage || '' });
     } finally {
         scope.remember();
         scope.restore();

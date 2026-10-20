@@ -493,3 +493,147 @@ test('开始写文件后再停止，会完成这次保存并记录停止，不�
     assert.equal(saved.results[0].status, 'stopped');
     assert.equal(f.service.getState().phase, 'idle');
 });
+
+test('续写在原有结果上原地更新，不增加新结果，流式增量无缝追加', async () => {
+    const f = fixture();
+    f.control.response = async () => '初始剧场正文';
+    const first = await f.service.send({ prompt: '用户提示词' });
+    assert.equal(first.result.text, '初始剧场正文');
+    assert.equal((await f.service.getRound(first.roundId)).results.length, 1);
+
+    f.control.prepare = async request => {
+        const prefix = request.continueMessage || '';
+        return {
+            context: { model: 'test-model' },
+            send: async ({ onText }) => {
+                onText(prefix + '，续写的精彩段落');
+                return prefix + '，续写的精彩段落';
+            },
+        };
+    };
+
+    const continued = await f.service.continueResult(first.roundId, first.result.id);
+    assert.equal(continued.roundId, first.roundId);
+    assert.equal(continued.result.id, first.result.id, '保持原有结果编号');
+    assert.equal(continued.result.text, '初始剧场正文，续写的精彩段落');
+    assert.equal(continued.result.status, 'complete');
+    assert.equal(f.prepared.at(-1).continueMessage, '初始剧场正文');
+
+    const savedRound = await f.service.getRound(first.roundId);
+    assert.equal(savedRound.results.length, 1, '不生成新分支');
+    assert.equal(savedRound.results[0].text, '初始剧场正文，续写的精彩段落');
+});
+
+test('续写中途停止保留已收到增量并标记 stopped', async () => {
+    const f = fixture();
+    f.control.response = async () => '初始正文';
+    const first = await f.service.send({ prompt: '提示词' });
+    const started = deferred();
+    f.control.prepare = async request => {
+        const prefix = request.continueMessage || '';
+        return {
+            context: { model: 'test-model' },
+            send: async ({ onText, signal }) => {
+                onText(prefix + '，已收到的半截片段');
+                started.resolve();
+                return new Promise((_, reject) => {
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                });
+            },
+        };
+    };
+    const task = f.service.continueResult(first.roundId, first.result.id);
+    await started.promise;
+    assert.equal(f.service.getState().text, '初始正文，已收到的半截片段');
+    assert.equal(f.service.stop(), true);
+    await task;
+    const saved = await f.service.getRound(first.roundId);
+    assert.equal(saved.results.length, 1);
+    assert.equal(saved.results[0].text, '初始正文，已收到的半截片段');
+    assert.equal(saved.results[0].status, 'stopped');
+});
+
+test('续写返回空增量时报错 empty_response 并保留原正文', async () => {
+    const f = fixture();
+    f.control.response = async () => '完整前文';
+    const first = await f.service.send({ prompt: '提示词' });
+    f.control.prepare = async request => {
+        const prefix = request.continueMessage || '';
+        return {
+            context: { model: 'test-model' },
+            send: async () => prefix, // delta 为空
+        };
+    };
+    const outcome = await f.service.continueResult(first.roundId, first.result.id);
+    assert.equal(outcome.result.status, 'failed');
+    assert.equal(outcome.result.error.code, 'empty_response');
+    const saved = await f.service.getRound(first.roundId);
+    assert.equal(saved.results[0].text, '完整前文');
+});
+
+test('生成、追加结果、重新生成和续写在准备阶段均先通知 roundId=null，落库后才通知 roundId', async () => {
+    const f = fixture();
+    const roundIdTransitions = [];
+    f.service.subscribe(job => {
+        roundIdTransitions.push({ phase: job.phase, roundId: job.roundId });
+    });
+    // 1. send
+    const first = await f.service.send({ prompt: '第一条' });
+    // 2. generateAnother
+    const second = await f.service.generateAnother(first.roundId);
+    // 3. regenerate
+    const replaced = await f.service.regenerate(first.roundId, second.result.id);
+    // 4. continueResult
+    await f.service.continueResult(first.roundId, replaced.result.id);
+
+    // 每次操作开始时处于 preparing 且 roundId 必须为 null，等 history.begin 落库后才转为真实的 roundId
+    const preparingEvents = roundIdTransitions.filter(e => e.phase === 'preparing');
+    // 每个操作都有 2 个 preparing 事件：第一个 roundId 为 null，第二个 roundId 为有效 ID
+    assert.equal(preparingEvents.length, 8);
+    for (let i = 0; i < 4; i++) {
+        assert.equal(preparingEvents[i * 2].roundId, null, `第 ${i + 1} 个操作在落库前 roundId 必须为 null`);
+        assert.equal(preparingEvents[i * 2 + 1].roundId, first.roundId, `第 ${i + 1} 个操作在落库后 roundId 必须为真实 ID`);
+    }
+});
+
+test('续写读取前文期间立即阻止重复请求，停止后不发送也不改变原结果', async () => {
+    const f = fixture(), first = await f.service.send({ prompt: '提示词' });
+    const before = await f.store.getRound(first.roundId), entered = deferred(), gate = deferred();
+    f.io.beforeRead = async () => { entered.resolve(); await gate.promise; };
+    const task = f.service.continueResult(first.roundId, first.result.id);
+    await entered.promise;
+    assert.equal(f.service.getState().phase, 'preparing');
+    assert.equal(f.service.availability().available, false);
+    await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'busy');
+    await assert.rejects(f.service.send({ prompt: '重复发送' }), error => error.code === 'busy');
+    assert.equal(f.service.stop(), true);
+    assert.equal(await task, null);
+    f.io.beforeRead = null; gate.resolve(); await nextTurn();
+    assert.equal(f.sent.length, 1, '只有最初的生成请求');
+    assert.deepEqual(await f.store.getRound(first.roundId), before);
+    assert.equal(f.service.getState().phase, 'idle');
+});
+
+test('续写等待读取时切换聊天或另一窗口编辑，均不会发送过期前文', async () => {
+    for (const change of ['chat', 'text']) {
+        const f = fixture(), first = await f.service.send({ prompt: '提示词' });
+        if (change === 'chat') {
+            const read = f.store.getRound.bind(f.store);
+            f.store.getRound = async id => {
+                const round = await read(id);
+                f.current.chatId = 'changed-main-chat'; return round;
+            };
+            await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'chat_changed');
+        } else {
+            const begin = f.store.begin.bind(f.store);
+            f.store.begin = async (input, options) => {
+                await f.store.editResult(first.roundId, first.result.id, '另一窗口的新正文', first.result.text);
+                return begin(input, options);
+            };
+            await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'edit_conflict');
+            assert.equal((await f.store.getRound(first.roundId)).results[0].text, '另一窗口的新正文');
+        }
+        assert.equal(f.sent.length, 1);
+        assert.equal(f.service.getState().phase, 'idle');
+    }
+});

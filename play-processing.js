@@ -68,108 +68,79 @@ export function readTavernRegex(engine, context) {
 
 const WILDCARD_PREFIX = /^\s*(?:\((?:\?:)?(?:\[\\(?:s\\S|S\\s|d\\D|D\\d|w\\W|W\\w)\]|\.)[*+]\??\)|(?:\[\\(?:s\\S|S\\s|d\\D|D\\d|w\\W|W\\w)\]|\.)[*+]\??)/;
 
-export function splitAlternatives(str) {
-    const parts = [];
-    let depthParen = 0, inClass = false, escaped = false, start = 0;
-    for (let i = 0; i < str.length; i++) {
-        const ch = str[i];
-        if (escaped) { escaped = false; continue; }
-        if (ch === '\\') { escaped = true; continue; }
-        if (ch === '[' && !inClass) { inClass = true; continue; }
-        if (ch === ']' && inClass) { inClass = false; continue; }
-        if (inClass) continue;
-        if (ch === '(') depthParen++;
-        else if (ch === ')') { if (depthParen > 0) depthParen--; }
-        else if (ch === '|' && depthParen === 0) {
-            parts.push(str.slice(start, i));
-            start = i + 1;
-        }
+// A guard may reject text only when every possible match needs one of these
+// literal strings. Unsupported syntax falls back to the host regex unchanged.
+function regexRequirements(pattern) {
+    let index = 0;
+    const choose = candidates => candidates.filter(Boolean).sort((a, b) =>
+        Math.min(...b.map(text => text.length)) - Math.min(...a.map(text => text.length)) || a.length - b.length)[0] ?? null;
+    function expression(depth = 0) {
+        if (depth > 32) throw Error();
+        const alternatives = [];
+        do {
+            const candidates = [];
+            let run = '';
+            const flush = () => { if (run) candidates.push([run]); run = ''; };
+            while (index < pattern.length && !['|', ')'].includes(pattern[index])) {
+                let literal = null, required = null;
+                const ch = pattern[index++];
+                if (ch === '(') {
+                    if (pattern.slice(index, index + 2) === '?:') index += 2;
+                    else if (pattern[index] === '?') throw Error();
+                    required = expression(depth + 1);
+                    if (pattern[index++] !== ')') throw Error();
+                } else if (ch === '[') {
+                    let closed = false;
+                    while (index < pattern.length) {
+                        const item = pattern[index++];
+                        if (item === '\\') index++;
+                        else if (item === ']') { closed = true; break; }
+                    }
+                    if (!closed) throw Error();
+                } else if (ch === '\\') {
+                    const escaped = pattern[index++];
+                    if (!escaped) throw Error();
+                    if (/[dDsSwWbB]/.test(escaped)) { /* Class or boundary: no required literal. */ }
+                    else if (escaped === 'x' || escaped === 'u') {
+                        const length = escaped === 'x' ? 2 : 4;
+                        const digits = pattern.slice(index, index + length);
+                        if (digits.length !== length || !/^[0-9a-f]+$/i.test(digits)) throw Error();
+                        literal = String.fromCharCode(parseInt(digits, 16)); index += length;
+                    } else if (Object.hasOwn({ n: 1, r: 1, t: 1, f: 1, v: 1 }, escaped)) {
+                        literal = { n: '\n', r: '\r', t: '\t', f: '\f', v: '\v' }[escaped];
+                    } else if (/[a-z0-9]/i.test(escaped)) throw Error();
+                    else literal = escaped;
+                } else if (!['.', '^', '$'].includes(ch)) {
+                    if (['*', '+', '?'].includes(ch)) throw Error();
+                    literal = ch;
+                }
+                if (literal !== null) required = [literal];
+                let quantified = false, minimum = 1;
+                if (['*', '+', '?'].includes(pattern[index])) {
+                    quantified = true; minimum = pattern[index++] === '+' ? 1 : 0;
+                } else {
+                    const quantifier = pattern.slice(index).match(/^\{(\d+)(?:,\d*)?\}/);
+                    if (quantifier) { quantified = true; minimum = Number(quantifier[1]); index += quantifier[0].length; }
+                }
+                if (quantified && pattern[index] === '?') index++;
+                if (!quantified && literal !== null) run += literal;
+                else {
+                    flush();
+                    if (minimum > 0 && required) candidates.push(required);
+                }
+            }
+            flush(); alternatives.push(choose(candidates));
+            if (pattern[index] !== '|') break;
+            index++;
+        } while (true);
+        if (alternatives.some(item => !item)) return null;
+        const result = [...new Set(alternatives.flat())];
+        if (result.length > 100) throw Error();
+        return result;
     }
-    parts.push(str.slice(start));
-    return parts;
-}
-
-export function extractLiteralsFromAlternative(alt) {
-    const tokens = [];
-    let i = 0;
-    while (i < alt.length) {
-        const ch = alt[i];
-        if (ch === '\\') {
-            i++;
-            if (i >= alt.length) break;
-            const next = alt[i];
-            if (/[dswbDSWB]/.test(next)) {
-                tokens.push({ type: 'other' });
-                i++;
-            } else if (next === 'n') {
-                tokens.push({ type: 'lit', char: '\n' });
-                i++;
-            } else if (next === 't') {
-                tokens.push({ type: 'lit', char: '\t' });
-                i++;
-            } else if (next === 'r') {
-                tokens.push({ type: 'lit', char: '\r' });
-                i++;
-            } else if (next === 'x' && /^[0-9a-fA-F]{2}/.test(alt.slice(i + 1, i + 3))) {
-                tokens.push({ type: 'lit', char: String.fromCharCode(parseInt(alt.slice(i + 1, i + 3), 16)) });
-                i += 3;
-            } else if (next === 'u' && /^[0-9a-fA-F]{4}/.test(alt.slice(i + 1, i + 5))) {
-                tokens.push({ type: 'lit', char: String.fromCharCode(parseInt(alt.slice(i + 1, i + 5), 16)) });
-                i += 5;
-            } else {
-                tokens.push({ type: 'lit', char: next });
-                i++;
-            }
-        } else if (ch === '[') {
-            let j = i + 1;
-            while (j < alt.length) {
-                if (alt[j] === '\\') j += 2;
-                else if (alt[j] === ']') { j++; break; }
-                else j++;
-            }
-            tokens.push({ type: 'other' });
-            i = j;
-        } else if (ch === '(' || ch === ')') {
-            tokens.push({ type: 'other' });
-            i++;
-        } else if (ch === '{') {
-            const end = alt.indexOf('}', i + 1);
-            if (tokens.length > 0 && end !== -1 && /^\{\d+(?:,\d*)?\}/.test(alt.slice(i))) {
-                if (/^\{0\b/.test(alt.slice(i))) tokens[tokens.length - 1].optional = true;
-                i = end + 1;
-                if (alt[i] === '?') i++;
-            } else {
-                tokens.push({ type: 'lit', char: '{' });
-                i++;
-            }
-        } else if (/[*+?]/.test(ch)) {
-            if (tokens.length > 0) {
-                if (ch === '*' || ch === '?') tokens[tokens.length - 1].optional = true;
-            }
-            i++;
-            if (alt[i] === '?') i++;
-        } else if (/[.^$|]/.test(ch)) {
-            tokens.push({ type: 'other' });
-            i++;
-        } else {
-            tokens.push({ type: 'lit', char: ch });
-            i++;
-        }
-    }
-    const runs = [];
-    let current = '';
-    for (const token of tokens) {
-        if (token.type === 'lit' && !token.optional) {
-            current += token.char;
-        } else {
-            if (current) runs.push(current);
-            current = '';
-        }
-    }
-    if (current) runs.push(current);
-    if (!runs.length) return null;
-    runs.sort((a, b) => b.length - a.length);
-    return runs[0];
+    const result = expression();
+    if (index !== pattern.length) throw Error();
+    return result;
 }
 
 export function compileRegexGuard(findRegex) {
@@ -177,54 +148,19 @@ export function compileRegexGuard(findRegex) {
     const match = findRegex.match(/^(\/?)(.+)\1([a-z]*)$/i);
     if (!match) return null;
     const [, , pattern, flags] = match;
-    const ignoreCase = flags.includes('i');
-
-    const prefixMatch = pattern.match(WILDCARD_PREFIX);
-    if (!prefixMatch) return null;
-
-    let rest = pattern.slice(prefixMatch[0].length).trim();
-    if (!rest) return null;
-
-    while ((rest.startsWith('(?:') && rest.endsWith(')')) || (rest.startsWith('(') && rest.endsWith(')'))) {
-        const offset = rest.startsWith('(?:') ? 3 : 1;
-        let depth = 0, wrapsAll = true;
-        for (let i = 0; i < rest.length - 1; i++) {
-            if (rest[i] === '\\') { i++; continue; }
-            if (rest[i] === '(') depth++;
-            else if (rest[i] === ')') {
-                depth--;
-                if (depth === 0) { wrapsAll = false; break; }
-            }
-        }
-        if (wrapsAll && depth === 1) {
-            rest = rest.slice(offset, -1).trim();
-        } else {
-            break;
-        }
-    }
-
-    const alternatives = splitAlternatives(rest);
-    if (!alternatives.length) return null;
-
-    const literals = [];
-    for (const alt of alternatives) {
-        const lit = extractLiteralsFromAlternative(alt.trim());
-        if (!lit) return null;
-        literals.push(ignoreCase ? lit.toLowerCase() : lit);
-    }
-
-    return {
-        ignoreCase,
-        literals,
-        canMatch(text) {
-            if (!text) return false;
-            const target = ignoreCase ? text.toLowerCase() : text;
-            for (let i = 0; i < literals.length; i++) {
-                if (target.includes(literals[i])) return true;
-            }
-            return false;
-        },
-    };
+    if (!WILDCARD_PREFIX.test(pattern) || flags.includes('v')) return null;
+    if (flags.includes('u') && (/[\uD800-\uDFFF]/.test(pattern) || /\\u(?:d[89ab][0-9a-f]{2})/i.test(pattern))) return null;
+    try {
+        // Validate syntax before using any inference, including raw patterns.
+        new RegExp(pattern, flags);
+        const literals = regexRequirements(pattern);
+        if (!literals?.length) return null;
+        const ignoreCase = flags.includes('i');
+        const checks = ignoreCase ? literals.map(text => new RegExp(escapeRegex(text), flags.includes('u') ? 'iu' : 'i')) : null;
+        return { ignoreCase, literals,
+            canMatch(text) { return checks ? checks.some(check => check.test(text)) : literals.some(literal => text.includes(literal)); },
+        };
+    } catch { return null; }
 }
 
 const ruleGuardCache = new WeakMap();

@@ -62,14 +62,14 @@ async function verifyFavoriteReads(page, viewport) {
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click();
     const id = await page.evaluate(() => seed.a), record = panel.locator(`[data-record="${id}"]`);
-    const star = record.locator('.tea-star');
+    const star = record.locator('.play-assistant-meta .tea-star');
     await star.waitFor();
-    await page.waitForFunction(id => !document.querySelector(`[data-record="${id}"] .tea-star`)?.disabled, id);
+    await page.waitForFunction(id => !document.querySelector(`[data-record="${id}"] .play-assistant-meta .tea-star`)?.disabled, id);
     for (const selected of [true, false]) {
         await holdFavoriteRead(page);
         await star.click();
         await page.waitForFunction(async selected => (await testHistory.listFavorites()).length === Number(selected), selected);
-        await page.waitForFunction(({ id, selected }) => document.querySelector(`[data-record="${id}"] .tea-star`)
+        await page.waitForFunction(({ id, selected }) => document.querySelector(`[data-record="${id}"] .play-assistant-meta .tea-star`)
             ?.getAttribute('aria-pressed') === String(selected), { id, selected });
         await releaseFavoriteRead(page);
         assert.equal(await star.getAttribute('aria-pressed'), String(selected), '旧目录不能恢复点击前的星标');

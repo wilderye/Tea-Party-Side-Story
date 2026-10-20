@@ -209,3 +209,26 @@ test('无锚点贪婪匹配在缺失触发词时快速短路跳过，包含触�
     assert.equal(resultRun, '正文');
 });
 
+test('预检查只排除确实不可能匹配的正文，分组选择、可选分组和 Unicode 大小写不误判', () => {
+    for (const [pattern, flags, text] of [
+        [String.raw`[\s\S]*?(?:<content>|<正文>)([\s\S]*)`, '', '前言<正文>真正的正文'],
+        [String.raw`[\s\S]*?(foo)?bar`, '', '前言bar'],
+        [String.raw`[\s\S]*?(?:foo|bar)?baz`, '', 'baz'],
+        [String.raw`[\s\S]*(?:foo|bar)tail`, '', 'bartail'],
+        [String.raw`[\s\S]*?(?!secret)foo`, '', '前言foo'],
+        [String.raw`[\s\S]*?(?<named>foo)\k<named>`, '', 'foofoo'],
+        [String.raw`[\s\S]*k`, 'iu', 'K'],
+        [String.raw`[\s\S]*(?:|foo)`, '', '正文'],
+    ]) {
+        const regex = new RegExp(pattern, flags);
+        assert.equal(regex.test(text), true, pattern);
+        const guard = compileRegexGuard(`/${pattern}/${flags}`);
+        assert.ok(!guard || guard.canMatch(text), `${pattern} 不得跳过实际能匹配的正文`);
+    }
+    const pattern = String.raw`[\s\S]*?(?:<content>|<正文>)([\s\S]*)`;
+    const rule = { key: 'extract', script: { findRegex: pattern, replaceString: '$1' } };
+    const actual = processPlayText('前言<正文>真正的正文', readPlaySettings({ playHiddenTags: '' }), [rule],
+        (script, text) => text.replace(new RegExp(script.findRegex), script.replaceString));
+    assert.equal(actual, '真正的正文');
+});
+

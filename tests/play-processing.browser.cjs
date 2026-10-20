@@ -548,7 +548,9 @@ if (require.main === module) (async()=>{
    await page.waitForTimeout(50);
    dialog=await openSettings();await closeSettings(dialog);
    await page.waitForFunction(top=>Math.abs(document.querySelector('.play-feed').scrollTop-top)<2,scrollTop);
-   assert.equal(await panel.locator('.play-people').getByRole('button',{name:'测试甲',exact:true,includeHidden:true}).getAttribute('aria-pressed'),'true','退出整页设置仍回到原角色记录');
+   if(viewport.width<=760) await panel.getByRole('button',{name:'选择角色',exact:true}).filter({visible:true}).click();
+   assert.equal(await panel.locator('.play-people').getByRole('button',{name:'测试甲',exact:true}).getAttribute('aria-pressed'),'true','退出整页设置仍回到原角色记录');
+   if(viewport.width<=760) await panel.getByRole('button',{name:'返回演出记录',exact:true}).click();
 
    await hidden.getByRole('button',{name:'编辑回复原文'}).click();
    let edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true}), editor=edit.getByRole('textbox',{name:'回复原文'});

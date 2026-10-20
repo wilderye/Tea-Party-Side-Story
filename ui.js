@@ -83,6 +83,7 @@ const paths = {
     top: '<path d="M5 4h14M12 20V8m-5 5 5-5 5 5"/>',
     bottom: '<path d="M5 20h14M12 4v12m-5-5 5 5 5-5"/>',
     send: '<path d="M12 20V4m-6 6 6-6 6 6"/>', stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+    forward: '<path d="m13 17 5-5-5-5M6 17l5-5-5-5"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
     settings: '<path d="M5 4v16M12 4v16M19 4v16M2 8h6M9 16h6M16 9h6"/>',
     edit: '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/>',

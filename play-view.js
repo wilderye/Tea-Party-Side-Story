@@ -53,7 +53,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const feed = element('div', undefined, 'tea-scroll play-feed'); feed.setAttribute('aria-label', '小剧场对话历史');
     const content = element('div', undefined, 'play-feed-content');
     const earlierBar = textButton('', () => void loadEarlierHistory()); earlierBar.className = 'play-earlier-bar'; earlierBar.hidden = true;
-    content.append(earlierBar);
+    const laterBar = textButton('', () => void loadHistory('later')); laterBar.className = 'play-later-bar'; laterBar.hidden = true;
+    content.append(earlierBar, laterBar);
     const empty = element('div', undefined, 'play-empty'); empty.setAttribute('role', 'status');
     const emptyArt = element('img', undefined, 'play-empty-art'); emptyArt.src = new URL('./assets/tea-party.svg', import.meta.url).href; emptyArt.alt = ''; emptyArt.hidden = true;
     const emptyTitle = element('p', '正在读取演出记录…', 'play-empty-title'); empty.append(emptyArt, emptyTitle);
@@ -72,17 +73,17 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
-    const records = new Map(), views = new Map(), rowsByCharacter = new Map(), visibleCounts = new Map();
+    const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
-    let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, loadingEarlier = false;
-    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, resultMenu, pendingSend, pendingReveal, storageFailed = false;
+    let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
+    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, pendingSend, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
     let cachedRowHeight = 0, lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     let lastJob = playground.getState();
-    let displayedCharacter = '', restoringPosition = false, cachedPosition = null, positionTimer = 0;
+    let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
     const storageKey = 'teahouse-play-view-v1';
 
     try {
@@ -225,7 +226,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
                 const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
                     text: cleanedText,
-                    firstLine: favoriteFirstLine(cleanedText, playground.display) });
+                    firstLine: favoriteFirstLine(cleanedText) });
                 favoriteRows.set(key, favorite);
             }
             // A read started before this completed write must not put the
@@ -242,6 +243,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function characterButton(character) {
         const button = textButton('', () => void chooseCharacter(character)); button.className = 'play-person';
         button.dataset.character = characterKey(character); button.setAttribute('aria-label', character.name); button.title = character.name;
+        button.dataset.signature = characterSignature(character);
         button.setAttribute('aria-pressed', String(characterKey(selected) === characterKey(character)));
         const copy = element('span', undefined, 'play-person-copy'); copy.append(element('span', character.name, 'play-person-name'));
         const time = element('time', undefined, 'play-person-time');
@@ -250,6 +252,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             time.append(element('span', recent.day, 'play-person-date'), element('small', recent.time, 'play-person-clock'));
         }
         button.append(avatar(character, 'play-avatar'), copy, time); return button;
+    }
+    function characterSignature(character) {
+        return JSON.stringify([character.name, character.avatar, character.lastPlayedAt, character.lastPlayedAt ? recentTime(character.lastPlayedAt) : null]);
     }
     function measureCharactersPerPage() {
         if (mobile.matches || !people.clientHeight || !people.clientWidth) return charactersPerPage;
@@ -278,8 +283,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const selectedKey = characterKey(selected);
         const currentButtons = [...people.querySelectorAll('.play-person')];
         if (shown.length && currentButtons.length === shown.length && shown.every((c, i) => characterKey(c) === currentButtons[i].dataset.character)) {
-            for (const button of currentButtons) {
-                button.setAttribute('aria-pressed', String(button.dataset.character === selectedKey));
+            for (const [index, button] of currentButtons.entries()) {
+                if (button.dataset.signature !== characterSignature(shown[index])) button.replaceWith(characterButton(shown[index]));
+                else button.setAttribute('aria-pressed', String(button.dataset.character === selectedKey));
             }
             pageJump.update();
             previousPage.disabled = characterPage === 0; nextPage.disabled = characterPage >= pages - 1;
@@ -333,14 +339,40 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     people.addEventListener('scroll', () => { peopleScroll = people.scrollTop; loadMoreCharacters(); }, { passive: true });
     function capturePosition(followBottom = true) {
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return null;
-        if (followBottom && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12) return { bottom: true };
-        const top = feed.getBoundingClientRect().top;
-        for (const anchor of content.querySelectorAll('[data-read-anchor]')) {
-            if (!anchor.getClientRects().length) continue;
-            const box = anchor.getBoundingClientRect();
-            if (box.height && box.bottom > top + 1) return { bottom: false, anchor: anchor.dataset.readAnchor, offset: top - box.top, scrollTop: feed.scrollTop };
+        const key = characterKey(selected), saved = positions.get(key);
+        const distanceToBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+        let res = null;
+        const rows = rowsByCharacter.get(selected.id) ?? [];
+        if (followBottom && historyRange(rows).end === rows.length && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) res = { bottom: true };
+        else {
+            const top = feed.getBoundingClientRect().top;
+            const items = [...content.querySelectorAll(':scope > .play-record:not([hidden])')];
+            let low = 0, high = items.length;
+            while (low < high) {
+                const middle = (low + high) >>> 1;
+                if (items[middle].getBoundingClientRect().bottom > top + 1) high = middle;
+                else low = middle + 1;
+            }
+            for (const item of items.slice(low, low + 2)) {
+                const anchors = [...item.querySelectorAll('[data-read-anchor]')].filter(node => !node.closest('[hidden]'));
+                let start = 0, end = anchors.length;
+                while (start < end) {
+                    const middle = (start + end) >>> 1;
+                    if (anchors[middle].getBoundingClientRect().bottom > top + 1) end = middle;
+                    else start = middle + 1;
+                }
+                for (const anchor of anchors.slice(start)) {
+                    const box = anchor.getBoundingClientRect();
+                    if (box.height && box.bottom > top + 1) {
+                        res = { bottom: false, anchor: anchor.dataset.readAnchor, offset: top - box.top, scrollTop: feed.scrollTop };
+                        break;
+                    }
+                }
+                if (res) break;
+            }
+            if (!res) res = { bottom: false, scrollTop: feed.scrollTop };
         }
-        return { bottom: false, scrollTop: feed.scrollTop };
+        return res;
     }
     function commitPosition(position) {
         if (!position) return;
@@ -350,32 +382,27 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (position.anchor && position.anchor === previous?.anchor && Math.abs(position.offset - previous.offset) < 1) {
             position.offset = previous.offset;
         }
-        cachedPosition = { ...position, scrollTop: feed.scrollTop, key };
+        cachedPosition = { scrollTop: feed.scrollTop, key };
         positions.set(key, position); scheduleSave();
     }
     function rememberPosition(followBottom = true, forceSync = false) {
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return;
-        const key = characterKey(selected);
-        if (followBottom && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12) {
-            clearTimeout(positionTimer);
+        const key = characterKey(selected), saved = positions.get(key);
+        const distanceToBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
+        const rows = rowsByCharacter.get(selected.id) ?? [];
+        if (followBottom && historyRange(rows).end === rows.length && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) {
             commitPosition({ bottom: true });
             return;
         }
         if (!forceSync && cachedPosition && cachedPosition.key === key && Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) < 2) {
             return;
         }
-        clearTimeout(positionTimer);
-        if (forceSync) {
-            commitPosition(capturePosition(followBottom));
-        } else {
-            positionTimer = setTimeout(() => {
-                if (!visible || restoringPosition) return;
-                commitPosition(capturePosition(followBottom));
-            }, 80);
-        }
+        commitPosition(capturePosition(followBottom));
     }
     function updateJump() {
-        jump.hidden = !visible || feed.clientHeight <= 0 || feed.scrollHeight - feed.clientHeight - feed.scrollTop <= feed.clientHeight;
+        const rows = rowsByCharacter.get(selected?.id) ?? [];
+        const hasLater = historyRange(rows).end < rows.length;
+        jump.hidden = !visible || feed.clientHeight <= 0 || (!hasLater && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= feed.clientHeight);
         jump.disabled = jump.hidden;
     }
     function restorePosition(position) {
@@ -384,16 +411,17 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const target = feed.scrollHeight;
             if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
         } else {
-            const anchor = [...content.querySelectorAll('[data-read-anchor]')].find(node => node.dataset.readAnchor === position.anchor && node.getClientRects().length);
+            const item = views.get(position.anchor?.split('/')[0])?.item;
+            const anchor = item && !item.hidden && [...item.querySelectorAll('[data-read-anchor]')].find(node => node.dataset.readAnchor === position.anchor && !node.closest('[hidden]'));
             if (anchor) {
                 const target = feed.scrollTop + (anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top) + (Number(position.offset) || 0);
-                if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+                if (Math.abs(feed.scrollTop - target) > 0.5) feed.scrollTop = target;
             } else {
                 const target = Number(position.scrollTop) || 0;
                 if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
             }
         }
-        cachedPosition = position ? { ...position, scrollTop: feed.scrollTop, key: characterKey(selected) } : null;
+        cachedPosition = position ? { scrollTop: feed.scrollTop, key: characterKey(selected) } : null;
         updateJump();
     }
     function keepReading(change, followBottom = true) {
@@ -403,10 +431,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function jumpToLatest() {
         if (!visible) return;
-        feed.scrollTop = feed.scrollHeight;
-        clearTimeout(positionTimer);
-        commitPosition({ bottom: true });
-        updateJump();
+        positions.set(characterKey(selected), { bottom: true });
+        const rows = rowsByCharacter.get(selected?.id) ?? [];
+        if (historyRange(rows).end < rows.length) {
+            resetHistoryWindow(rows);
+            renderHistory(); void refresh();
+        }
+        restorePosition({ bottom: true }); rememberPosition(); updateJump();
     }
     function jumpToMessage(id, role) {
         const view = views.get(id), message = view?.[role];
@@ -445,6 +476,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (measureCharactersPerPage() !== charactersPerPage) renderPeople(true);
         layoutFrame = requestAnimationFrame(() => {
             if (!visible) return;
+            // A user scroll can arrive before its scroll event. Never restore
+            // an older anchor over a new position from the browser compositor.
+            if (!restoringPosition && cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2) {
+                rememberPosition(true, true);
+            }
             loadMoreCharacters();
             resizeInput();
             const feedHeight = feed.clientHeight;
@@ -480,11 +516,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
     feed.addEventListener('scroll', () => {
         if (!visible) return;
+        const moved = cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2;
         // A scroll event queued before opening the menu may arrive afterwards.
         // Only dismiss it if the content has moved since the menu was positioned.
         if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
-        updateJump(); rememberPosition(true, false);
-        if (!restoringPosition && feed.scrollTop < 120 && feed.scrollHeight > feed.clientHeight) void loadEarlierHistory();
+        rememberPosition(true, false); updateJump();
+        if (moved && !restoringPosition && feed.scrollHeight > feed.clientHeight) {
+            if (feed.scrollTop < 120) void loadEarlierHistory();
+            else if (feed.scrollHeight - feed.clientHeight - feed.scrollTop < 120) void loadHistory('later');
+        }
     }, { passive: true });
     input.addEventListener('input', () => {
         draftFor().text = input.value;
@@ -534,6 +574,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.again.title = retry ? '重试保存' : '重新生成';
             view.again.setAttribute('aria-label', view.again.title);
             view.again.setAttribute('aria-busy', String(!!retry && job.phase === 'saving'));
+            const currentSelected = round && selectedResult(round);
+            const canCont = canContinue(round, currentSelected);
+            view.continueBtn.hidden = !(own && round?.prompt !== null && currentSelected?.text?.trim());
+            view.continueBtn.disabled = !canCont;
             if (round) { updateResultNavigation(round, view); updateFavoriteStar(round, view); updatePromptFavoriteStar(round, view); }
             syncMessageActions(id, view);
         }
@@ -541,6 +585,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function canGenerate(round) {
         return !!round && round.prompt !== null && canWrite() && round.characterId === selected?.id
             && playground.availability().available && !isEditing(round.id) && !views.get(round.id)?.removing;
+    }
+    function canContinue(round, result) {
+        return canGenerate(round) && !!result?.text?.trim() && !pendingSaveFor(result, playground.getState());
     }
     function updateResultNavigation(round, view) {
         const index = round.results.indexOf(selectedResult(round)), atEnd = index === round.results.length - 1;
@@ -551,7 +598,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function syncMessageActions(id, view) {
         view.userActions.hidden = !!view.userEditor || (view.userTop.hidden && view.generate.hidden);
-        view.actions.hidden = isEditing(id) || [view.swipes, view.again, view.assistantTop].every(node => node.hidden);
+        view.actions.hidden = isEditing(id) || [view.swipes, view.again, view.continueBtn, view.assistantTop].every(node => node.hidden);
     }
     function replaceDraft(next) {
         const key = characterKey(selected), previous = draftFor();
@@ -643,6 +690,17 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         catch (error) { notifyRequestError(error); }
         finally { await refresh(); }
     }
+    async function continueReply(round) {
+        const result = selectedResult(round);
+        if (!canContinue(round, result)) return;
+        pendingReveal = null;
+        if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 32) {
+            positions.set(characterKey(selected), { bottom: true });
+        }
+        try { await playground.continueResult(round.id, result.id); }
+        catch (error) { notifyRequestError(error); }
+        finally { await refresh(); }
+    }
     async function advanceResult(id) {
         const round = records.get(id)?.round;
         if (!round || isEditing(id) || views.get(id)?.removing) return;
@@ -728,16 +786,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const next = iconButton('right', '下一个结果', () => void advanceResult(round.id));
         const count = textButton('', () => showResults(round.id)); count.className = 'play-count'; swipes.append(prev, count, next);
         count.setAttribute('aria-haspopup', 'listbox'); count.setAttribute('aria-expanded', 'false');
+        const actionGroup = element('div', undefined, 'play-action-group');
         const again = iconButton('refresh', '重新生成', () => {
             const currentRound = records.get(round.id).round;
             if (pendingSaveFor(selectedResult(currentRound))) void playground.retrySave().catch(notifyRequestError);
             else void regenerate(currentRound);
         }); again.classList.add('play-again');
+        const continueBtn = iconButton('forward', '续写', () => {
+            const currentRound = records.get(round.id).round;
+            void continueReply(currentRound);
+        }); continueBtn.classList.add('play-continue');
+        actionGroup.append(again, continueBtn);
         const assistantTop = iconButton('top', '回到这条消息开头', () => jumpToMessage(round.id, 'assistant')); assistantTop.hidden = true;
-        actions.append(again, swipes, assistantTop);
+        actions.append(actionGroup, swipes, assistantTop);
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, userFavorite, favorite, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, swipes, prev, count, next, outputs: new Map() };
+            userTools, replyTools, userFavorite, favorite, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) { return round.results.find(result => result.id === selections.get(round.id)) ?? round.results.at(-1); }
     function createOutput(round, result) {
@@ -821,72 +885,89 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         output.box.append(view.error);
         syncMessageActions(round.id, view);
     }
+    function historyRange(rows, key = characterKey(selected)) {
+        const saved = historyWindows.get(key);
+        const first = saved ? rows.findIndex(row => row.id === saved.first) : -1;
+        const last = saved ? rows.findIndex(row => row.id === saved.last) : -1;
+        return first >= 0 && last >= first ? { start: first, end: last + 1 }
+            : { start: Math.max(0, rows.length - historyPageSize), end: rows.length };
+    }
+    function setHistoryRange(rows, start, end, key = characterKey(selected)) {
+        historyWindows.set(key, { first: rows[start]?.id, last: rows[end - 1]?.id });
+    }
+    function resetHistoryWindow(rows, targetId, key = characterKey(selected)) {
+        const target = targetId ?? (positions.get(key)?.bottom ? null : positions.get(key)?.anchor?.split('/')[0]);
+        const index = rows.findIndex(row => row.id === target);
+        const start = index < 0 ? Math.max(0, rows.length - historyPageSize)
+            : Math.max(0, Math.min(index - Math.floor(historyPageSize / 2), rows.length - historyPageSize));
+        setHistoryRange(rows, start, Math.min(rows.length, start + historyPageSize), key);
+    }
     function updateEarlierBar() {
-        if (!selected) { earlierBar.hidden = true; return; }
-        const ready = rowsByCharacter.has(selected?.id);
         const rows = rowsByCharacter.get(selected?.id) ?? [];
-        const count = visibleCounts.get(characterKey(selected)) ?? historyPageSize;
-        const remaining = Math.max(0, rows.length - count);
-        const visibleRows = rows.slice(Math.max(0, rows.length - count));
-        const initialLoading = !loaded || (selected && !ready) || visibleRows.some(row => !records.has(row.id));
-        earlierBar.hidden = remaining <= 0 || initialLoading;
-        if (!earlierBar.hidden) {
-            earlierBar.textContent = loadingEarlier ? '正在加载更早记录…' : `加载更早记录（剩余 ${remaining} 条）`;
-            earlierBar.disabled = loadingEarlier;
+        const { start, end } = historyRange(rows);
+        for (const [bar, direction, remaining, label] of [
+            [earlierBar, 'earlier', start, '更早'], [laterBar, 'later', rows.length - end, '后续'],
+        ]) {
+            bar.hidden = !selected || remaining <= 0;
+            if (bar.hidden) continue;
+            bar.textContent = historyLoad?.direction === direction ? '正在加载记录…' : `加载${label}记录（剩余 ${remaining} 条）`;
+            bar.disabled = !!historyLoad;
         }
     }
-    async function loadEarlierHistory() {
-        if (!visible || loadingEarlier || !selected || restoringPosition) return;
-        const key = characterKey(selected);
-        const ready = rowsByCharacter.has(selected?.id);
-        const rows = rowsByCharacter.get(selected?.id) ?? [];
-        if (!rows.length) return;
-        const currentCount = visibleCounts.get(key) ?? historyPageSize;
-        if (currentCount >= rows.length) return;
-        const currentVisible = rows.slice(Math.max(0, rows.length - currentCount));
-        if (!loaded || !ready || currentVisible.some(row => !records.has(row.id))) return;
-        loadingEarlier = true;
-        updateEarlierBar();
-        const nextCount = Math.min(rows.length, currentCount + historyPageSize);
-        visibleCounts.set(key, nextCount);
-        const startIndex = Math.max(0, rows.length - nextCount);
-        const endIndex = rows.length - currentCount;
-        const batch = rows.slice(startIndex, endIndex);
-        const pending = batch.filter(row => {
-            const cached = records.get(row.id);
-            return cached?.revision !== row.revision || cached?.error;
-        });
+    async function readHistoryRows(rows, isCurrent, show) {
+        let next = 0, frame = 0;
+        const schedule = () => {
+            if (!frame && visible) frame = requestAnimationFrame(() => { frame = 0; if (isCurrent()) show(); });
+        };
         try {
-            await Promise.all(pending.map(async row => {
-                try {
-                    const round = await playground.getRound(row.id);
-                    records.set(row.id, { round, revision: row.revision });
-                } catch {
-                    const cached = records.get(row.id);
-                    if (cached?.round) cached.error = true; else records.set(row.id, { error: true });
+            await Promise.all(Array.from({ length: Math.min(4, rows.length) }, async () => {
+                while (next < rows.length && isCurrent()) {
+                    const row = rows[next++], cached = records.get(row.id);
+                    try {
+                        const round = await playground.getRound(row.id);
+                        if (isCurrent()) records.set(row.id, { round, revision: row.revision });
+                    } catch {
+                        if (!isCurrent()) return;
+                        if (cached?.round) cached.error = true; else records.set(row.id, { error: true });
+                    }
+                    schedule();
                 }
             }));
         } finally {
-            loadingEarlier = false;
+            cancelAnimationFrame(frame);
+            if (isCurrent()) show();
         }
-        if (!visible || characterKey(selected) !== key) return;
-        const oldScrollHeight = feed.scrollHeight;
-        const oldScrollTop = feed.scrollTop;
-        keepReading(renderHistory, false);
-        if (feed.scrollHeight > oldScrollHeight && feed.scrollTop === oldScrollTop) {
-            feed.scrollTop = oldScrollTop + (feed.scrollHeight - oldScrollHeight);
+    }
+    function loadEarlierHistory() { return loadHistory('earlier'); }
+    async function loadHistory(direction) {
+        if (!visible || historyLoad || !selected || restoringPosition) return;
+        const key = characterKey(selected), id = refreshId;
+        const rows = rowsByCharacter.get(selected.id) ?? [];
+        const { start, end } = historyRange(rows, key);
+        const nextStart = direction === 'earlier' ? Math.max(0, start - historyPageSize) : start;
+        const nextEnd = direction === 'later' ? Math.min(rows.length, end + historyPageSize) : end;
+        if (nextStart === start && nextEnd === end) return;
+        const request = historyLoad = { direction };
+        const isCurrent = () => visible && id === refreshId && characterKey(selected) === key && historyLoad === request;
+        const batch = direction === 'earlier' ? rows.slice(nextStart, start) : rows.slice(end, nextEnd);
+        const pending = batch.filter(row => records.get(row.id)?.revision !== row.revision || records.get(row.id)?.error);
+        const show = () => {
+            keepReading(() => { setHistoryRange(rows, nextStart, nextEnd, key); renderHistory(); }, false);
+            layout(); updateJump();
+        };
+        updateEarlierBar();
+        try { await readHistoryRows(pending, isCurrent, show); }
+        finally {
+            if (historyLoad === request) { historyLoad = null; if (visible) updateEarlierBar(); }
         }
-        layout();
-        updateJump();
     }
     function renderHistory() {
         if (!visible) return;
         const ready = rowsByCharacter.has(selected?.id);
         const rows = rowsByCharacter.get(selected?.id) ?? [];
         const key = characterKey(selected);
-        const count = visibleCounts.get(key) ?? historyPageSize;
-        const startIndex = Math.max(0, rows.length - count);
-        const visibleRows = rows.slice(startIndex);
+        const { start, end } = historyRange(rows, key);
+        const visibleRows = rows.slice(start, end);
         const visibleIds = new Set(visibleRows.map(row => row.id));
         for (const [id, view] of views) view.item.hidden = !visibleIds.has(id);
         let shown = 0, next = null;
@@ -895,12 +976,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             let view = views.get(row.id);
             if (!view) {
                 view = createRecord(cached.round); views.set(row.id, view);
-                content.insertBefore(view.item, next);
+                content.insertBefore(view.item, next ?? laterBar);
             }
             next = view.item;
             view.item.hidden = false; renderRecord(cached.round, view); shown++;
         }
-        content.prepend(earlierBar);
+        content.prepend(earlierBar); content.append(laterBar);
         updateEarlierBar();
         const failed = visibleRows.filter(row => records.get(row.id)?.error);
         empty.hidden = shown > 0 || (rows.length > 0 && failed.length === visibleRows.length);
@@ -999,6 +1080,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     async function refresh(preferCurrent = false) {
         const id = ++refreshId;
+        historyLoad = null;
         syncCurrent();
         try {
             const savedCharacters = await playground.listCharacters(); if (id !== refreshId) return;
@@ -1023,8 +1105,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (visible) { renderPeople(); updateBrowser(); updateComposer(); }
             const characterId = selected?.id;
             const rows = characterId ? await playground.listRounds(characterId) : []; if (id !== refreshId) return;
+            const previousRows = rowsByCharacter.get(characterId) ?? [];
+            const previousRange = historyRange(previousRows, key);
             rowsByCharacter.set(characterId, rows);
             loaded = true;
+            const targetId = pendingReveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
+            const savedWindow = historyWindows.get(key);
+            if (!savedWindow?.first || !rows.some(row => row.id === savedWindow.first)
+                || (pendingReveal && !rows.slice(historyRange(rows, key).start, historyRange(rows, key).end).some(row => row.id === targetId))) {
+                resetHistoryWindow(rows, targetId, key);
+            } else if (positions.get(key)?.bottom && previousRange.end === previousRows.length) {
+                setHistoryRange(rows, Math.max(0, rows.length - Math.max(historyPageSize, previousRange.end - previousRange.start)), rows.length, key);
+            }
             function showBatch() {
                 readError.hidden = true; applyJob(playground.getState());
                 if (visible) {
@@ -1037,37 +1129,25 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                     rememberPosition(); layout();
                 }
             }
-            const targetId = pendingReveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
-            const targetIndex = rows.findIndex(row => row.id === targetId);
-            const needed = targetIndex >= 0 ? rows.length - targetIndex : historyPageSize;
-            const initialCount = Math.min(rows.length, Math.max(visibleCounts.get(key) ?? historyPageSize, needed, historyPageSize));
-            visibleCounts.set(key, initialCount);
-
-            const visibleRows = rows.slice(Math.max(0, rows.length - initialCount));
+            const { start, end } = historyRange(rows, key);
+            const visibleRows = rows.slice(start, end);
             const job = playground.getState();
             const pending = visibleRows.filter(row => {
                 const cached = records.get(row.id);
                 return cached?.revision !== row.revision || cached?.error || row.id === job.roundId;
+            }).sort((a, b) => {
+                if (a.id === targetId) return -1;
+                if (b.id === targetId) return 1;
+                return positions.get(key)?.bottom !== false ? rows.indexOf(b) - rows.indexOf(a) : rows.indexOf(a) - rows.indexOf(b);
             });
             showBatch();
-            if (pending.length) {
-                await Promise.all(pending.map(async row => {
-                    const cached = records.get(row.id);
-                    try {
-                        const round = await playground.getRound(row.id);
-                        if (id === refreshId) records.set(row.id, { round, revision: row.revision });
-                    } catch {
-                        if (id !== refreshId) return;
-                        if (cached?.round) cached.error = true; else records.set(row.id, { error: true });
-                    }
-                }));
-                if (id !== refreshId) return;
-                showBatch();
-            }
+            if (pending.length) await readHistoryRows(pending, () => id === refreshId, showBatch);
         } catch (error) {
             if (id !== refreshId) return;
             loaded = true; showReadError(error.message || '演出记录暂时无法读取。');
             if (visible) { renderPeople(); renderHistory(); updateComposer(); }
+        } finally {
+            if (id === refreshId && visible && restoringPosition) layout();
         }
     }
     function applyJob(job) {
@@ -1078,6 +1158,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function renderStreamingJob(job) {
         streamFrame = 0;
         if (!visible) return;
+        const rows = rowsByCharacter.get(selected?.id) ?? [];
+        const atBottom = historyRange(rows).end === rows.length && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24;
         applyJob(job);
         const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
         if (record && view && !view.item.hidden) {
@@ -1086,10 +1168,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             syncMessageActions(job.roundId, view);
         }
         updateComposer();
-        const atBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24;
         if (atBottom) {
             feed.scrollTop = feed.scrollHeight;
-            positions.set(characterKey(selected), { bottom: true });
+            commitPosition({ bottom: true });
         } else {
             pendingReveal = null;
             rememberPosition(false);
@@ -1140,25 +1221,33 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             // Reattaching the panel can reset scrollTop before its first layout.
             // Keep the saved position authoritative until that layout restores it.
             root = container; visible = true; restoringPosition = true;
-            syncCurrent(); browsing ??= !current; updateBrowser(); void refreshUser(); void refreshFavorites();
-            if (playground.display) void playground.display.refresh().finally(() => {
-                if (visible) keepReading(renderHistory);
-            }).catch(() => notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'));
-            // Loading native generation helpers does not block history reads.
-            // The send button is enabled once their snapshot readers are ready.
-            if (playground.initialize) void playground.initialize().then(() => {
-                if (visible) updateControls();
-            }).catch(() => notify('生成接口载入失败，请关闭后再打开剧场演出重试。'));
+            syncCurrent(); browsing ??= !current; updateBrowser();
+            resetHistoryWindow(rowsByCharacter.get(selected?.id) ?? []);
+            renderHistory(); updateComposer();
             resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
-            renderPeople(); renderHistory(); updateComposer(); layout(); void refresh();
+            // Paint the panel controls before measuring history or loading the
+            // native helpers. A tab click must not wait for conversation layout.
+            cancelAnimationFrame(activationFrame); clearTimeout(activationTimer);
+            activationFrame = requestAnimationFrame(() => {
+                activationTimer = setTimeout(() => {
+                    if (!visible) return;
+                    renderPeople(); layout(); void refreshUser(); void refreshFavorites(); void refresh();
+                    if (playground.display) void playground.display.refresh().finally(() => {
+                        if (visible) keepReading(renderHistory);
+                    }).catch(() => notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'));
+                    if (playground.initialize) void playground.initialize().then(() => {
+                        if (visible) updateControls();
+                    }).catch(() => notify('生成接口载入失败，请关闭后再打开剧场演出重试。'));
+                }, 0);
+            });
         },
         deactivate() {
-            clearTimeout(positionTimer);
             const key = characterKey(selected);
             if (visible && (!cachedPosition || cachedPosition.key !== key || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
                 commitPosition(capturePosition(true));
             }
-            visible = false; refreshId++; closeResults(false); pageJump.node.open = false; scheduleSave(); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
+            visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); pageJump.node.open = false; scheduleSave();
+            cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
         },
         refresh, layout,
         prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },

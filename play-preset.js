@@ -51,7 +51,7 @@ function requestMessages(context, modules, tavern, signal) {
  * settings throughout several awaits; using it would mix two presets if the
  * user switches while a request is preparing. Reuse ST's PromptManager methods,
  * Message and ChatCompletion objects with our captured settings instead.
- * This path only assembles a normal, single-character play request.
+ * This path assembles normal and continue requests for a single character.
  */
 export async function preparePlayPreset(context, modules, environment, options) {
     const { openai, core, persona, constants } = modules;
@@ -70,7 +70,7 @@ export async function preparePlayPreset(context, modules, environment, options) 
         prepared.content = substitute(prompt.content, original);
         return prepared;
     };
-    const prompts = manager.getPromptCollection('normal');
+    const prompts = manager.getPromptCollection(options.type ?? 'normal');
     const extensions = Object.fromEntries(Object.entries(options.extensionPrompts).map(([key, value]) => [key, { ...value }]));
     const wi = text => text && settings.wi_format?.trim() ? settings.wi_format.replace(/\{0\}/g, () => text) : text || '';
     const builtins = [
@@ -150,6 +150,17 @@ export async function preparePlayPreset(context, modules, environment, options) 
         const sameModel = message.extra?.api === settings.chat_completion_source && message.extra?.model === model;
         return { ...message, role, content, sameModel };
     }).reverse();
+    let continueCollection = null;
+    if (options.type === 'continue' && options.cyclePrompt && settings.continue_prefill && history.length) {
+        // ST removes the real message before depth prompts are inserted.
+        const target = history.shift();
+        const prefill = target.role === 'assistant' && settings.chat_completion_source === 'claude' ? substitute(settings.assistant_prefill) : '';
+        const content = [prefill, target.content].filter(Boolean).join('\n\n');
+        const message = await messages.create(target.role, content, 'continuePrefill');
+        if (settings.names_behavior === 1 && target.name) await message.setName(manager.sanitizeName(target.name));
+        continueCollection = new MessageCollection('continuePrefill');
+        continueCollection.add(message); completion.reserveBudget(continueCollection);
+    }
     const depths = new Set(absolute.map(prompt => Number(prompt.injection_depth)));
     for (const prompt of Object.values(extensions)) if (prompt.position === core.extension_prompt_types.IN_CHAT) depths.add(Number(prompt.depth));
     let inserted = 0;
@@ -166,7 +177,7 @@ export async function preparePlayPreset(context, modules, environment, options) 
                 }).map(key => substitute(extensions[key].value).trim()));
             }
             const content = parts.filter(Boolean).map(text => text.trim()).join('\n');
-            if (content) injections.push({ role, content });
+            if (content) injections.push({ role, content, injected: true });
         }
         history.splice(depth + inserted, 0, ...injections); inserted += injections.length;
     }
@@ -176,6 +187,23 @@ export async function preparePlayPreset(context, modules, environment, options) 
         completion.add(new MessageCollection('chatHistory'), prompts.index('chatHistory'));
         const header = await messages.create('system', substitute(settings.new_chat_prompt), 'newMainChat');
         completion.reserveBudget(header);
+        if (options.type === 'continue' && options.cyclePrompt && !settings.continue_prefill) {
+            const lastIndex = history.findLastIndex(prompt => !prompt.injected);
+            continueCollection = new MessageCollection('continueNudge');
+            if (lastIndex >= 0) {
+                const target = history.splice(lastIndex, 1)[0];
+                continueCollection.add(await messages.create(target.role, substitute(target.content), 'continueAssistant'));
+            }
+            const rawNudge = settings.continue_nudge_prompt ?? '[Continue your last message without repeating its original content.]';
+            const nudgeContent = substitute(rawNudge.replace(/\{\{lastChatMessage\}\}/gi, () => options.cyclePrompt.trim()));
+            const continueNudgeMessage = await messages.create('system', nudgeContent, 'continueNudge');
+            continueCollection.add(continueNudgeMessage);
+            completion.reserveBudget(continueCollection);
+        }
+        if (history.at(-1)?.role === 'assistant' && settings.send_if_empty) {
+            const replacement = await messages.create('user', settings.send_if_empty, 'emptyUserMessageReplacement');
+            if (completion.canAfford(replacement)) completion.insert(replacement, 'chatHistory');
+        }
         for (const [index, prompt] of [...history].reverse().entries()) {
             const message = await messages.create(prompt.role, substitute(prompt.content), `chatHistory-${history.length - index}`);
             if (settings.names_behavior === 1 && prompt.name) await message.setName(manager.sanitizeName(prompt.name));
@@ -219,6 +247,10 @@ export async function preparePlayPreset(context, modules, environment, options) 
     }
     if (power.pin_examples) { await addExamples(); await addHistory(); }
     else { await addHistory(); await addExamples(); }
+    if (continueCollection) {
+        completion.freeBudget(continueCollection);
+        completion.add(continueCollection, -1);
+    }
     if (settings.squash_system_messages) await completion.squashSystemMessages();
     const chat = completion.getChat();
     await context.eventSource.emit(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, { chat, dryRun: false });
