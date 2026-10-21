@@ -502,7 +502,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             if (!feedHeight || displayedCharacter !== characterKey(selected)) return;
             const activeJob = playground.getState();
-            if (activePhases.has(activeJob.phase)) {
+            // Finish restoring a reopened panel during generation too, so later
+            // user scrolls can replace the saved position before completion.
+            if (activePhases.has(activeJob.phase) && !restoringPosition) {
                 if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) feed.scrollTop = feed.scrollHeight;
                 updateJump();
                 return;

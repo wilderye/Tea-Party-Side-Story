@@ -1,4 +1,5 @@
-// Flow: open a long history -> read/edit while older files load -> preserve state.
+// Browser plugin not available. Use the existing Playwright/Edge workflow.
+// Flow: read history or return during continuation -> scroll up -> keep the reading position.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { harness } = require('./play-processing.browser.cjs');
 const http = require('node:http'), fs = require('node:fs/promises'), path = require('node:path');
@@ -245,6 +246,68 @@ async function checkStreaming(page) {
   await page.evaluate(async () => { finishGeneration(streamBody); await streamingTask; });
 }
 
+async function checkContinuationPosition(page, mode) {
+  const id = await page.evaluate(async () => {
+    const round = await runtime.getRound(seed.hidden), result = round.results[0];
+    window.continueBase = Array.from({ length: 60 }, (_, index) => `原文第 ${index + 1} 段。阅读位置验证。`).join('\n\n');
+    window.continueText = continueBase + '\n\n' + Array.from({ length: 40 }, (_, index) => `续写第 ${index + 1} 段。正在生成的正文。`).join('\n\n');
+    await runtime.editResult(round.id, result.id, continueBase, result.text);
+    return round.id;
+  });
+  const panel = page.locator('#teahouse-panel');
+  const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+  const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+  const capture = () => page.locator('.play-feed').evaluate(readingPosition);
+  await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+  await button('剧场演出').click();
+  const record = panel.locator(`[data-record="${id}"]`);
+  await record.getByRole('button', { name: '续写', exact: true }).click();
+  await page.waitForFunction(() => typeof emitGeneration === 'function');
+  await page.evaluate(() => emitGeneration(continueText));
+  await record.getByText('续写第 40 段。正在生成的正文。', { exact: true }).waitFor();
+  await settle();
+  if (mode === 'continue-reopen' || mode === 'continue-stop') {
+    await button('关闭面板').click();
+    await page.locator('#teahouse-panel').waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+  } else if (mode === 'continue-tab') {
+    await button('茶会选集').click();
+    await button('剧场演出').click();
+  }
+  await settle();
+  await page.locator('.play-feed').evaluate(feed => { feed.scrollTop = feed.scrollHeight * 0.45; });
+  await settle();
+  const before = await capture();
+  assert.equal(before.bottom, false, '续写期间向上翻阅普通文字');
+  if (mode === 'continue-reopen' && process.env.TEA_QA_DIR) {
+    await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `continue-reading-before-${page.viewportSize().width}.png`) });
+  }
+  await page.evaluate(mode => {
+    if (mode === 'continue-stop') runtime.stop();
+    else {
+      // Complete in the same turn as the final chunk, before its render frame.
+      emitGeneration(continueText + '\n\n续写结束标记。');
+      finishGeneration(continueText + '\n\n续写结束标记。');
+    }
+  }, mode);
+  await page.waitForFunction(() => runtime.getState().phase === 'idle');
+  await settle();
+  const after = await capture();
+  if (mode === 'continue-reopen' && process.env.TEA_QA_DIR) {
+    await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `continue-reading-after-${page.viewportSize().width}.png`) });
+  }
+  assert.equal(after.bottom, false, '续写结束或停止后不跳到底部');
+  assert.equal(after.anchor, before.anchor, '保持向上翻阅时的同一个段落');
+  assert.ok(Math.abs(after.offset - before.offset) < 2, `续写结束后保持段落位置：${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  const saved = await page.evaluate(id => runtime.getRound(id), id);
+  assert.equal(saved.results[0].status, mode === 'continue-stop' ? 'stopped' : 'complete');
+  assert.ok(saved.results[0].text.startsWith(await page.evaluate(() => continueBase)), '保留续写前的正文');
+  await button('跳到最新消息').click();
+  await settle();
+  assert.equal((await capture()).bottom, true, '仍可以主动跳到最新消息');
+}
+
 async function checkFavoriteProcessing(page, viewport) {
   const id = await page.evaluate(async () => {
     const round = await runtime.getRound(seed.a), result = round.results.at(-1);
@@ -282,7 +345,7 @@ async function checkFavoriteProcessing(page, viewport) {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }]) {
-      for (const mode of ['reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'jump', 'automatic', 'slow', 'states', 'switch', 'favorite', 'favorite-processing', 'stream']) {
+      for (const mode of ['reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'jump', 'automatic', 'slow', 'states', 'switch', 'favorite', 'favorite-processing', 'stream', 'continue', 'continue-reopen', 'continue-tab', 'continue-stop']) {
         const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
@@ -292,6 +355,7 @@ async function checkFavoriteProcessing(page, viewport) {
         else if (mode === 'favorite') await checkFavorite(page);
         else if (mode === 'favorite-processing') await checkFavoriteProcessing(page, viewport);
         else if (mode === 'stream') await checkStreaming(page);
+        else if (mode.startsWith('continue')) await checkContinuationPosition(page, mode);
         else await checkHistory(page, mode, viewport);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ viewport, mode, passed: true, errors }));
