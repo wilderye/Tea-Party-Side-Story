@@ -3,6 +3,7 @@ import { createPreparedPlayRequest, getCustomApiConnection } from './play-reques
 import { preparePlayPreset } from './play-preset.js';
 import { legacyPlayParameters } from './play-parameters.js';
 import { getPlayPreparationCoordinator } from './play-preparation.js';
+import { readPlayContinuationSettings, playContinuationError } from './play-settings.js';
 
 async function loadTavernModules() {
     const paths = {
@@ -13,6 +14,7 @@ async function loadTavernModules() {
         constants: 'scripts/constants.js', tools: 'scripts/tool-calling.js',
         tokenizers: 'scripts/tokenizers.js',
         utils: 'scripts/utils.js',
+        reasoning: 'scripts/reasoning.js',
     };
     const entries = await Promise.all(Object.entries(paths).map(async ([name, path]) =>
         [name, await import(new URL('../../../../' + path, import.meta.url).href)]));
@@ -94,7 +96,7 @@ function addPersona(modules, settings) {
     }
 }
 
-async function formatHistory(modules, chat, environment) {
+async function formatHistory(modules, chat, environment, isContinue) {
     const { regex, chats } = modules;
     const canUseTools = environment.tavern.canUseTools ?? modules.tools.ToolManager.isToolCallingSupported();
     const regexText = (text, placement, depth) => {
@@ -111,7 +113,7 @@ async function formatHistory(modules, chat, environment) {
     const history = chat.filter(message => !message.is_system || (canUseTools && Array.isArray(message.extra?.tool_invocations)));
     const prepared = await Promise.all(history.map(async (message, index) => {
         const placement = message.is_user ? regex.regex_placement.USER_INPUT : regex.regex_placement.AI_OUTPUT;
-        let text = regexText(message.mes, placement, history.length - index - 1);
+        let text = regexText(message.mes, placement, history.length - index - (isContinue ? 2 : 1));
         text = await chats.appendFileContent(message, text);
         const titles = [];
         if (message.extra?.append_title && message.extra.title) titles.push(message.extra.title);
@@ -121,17 +123,25 @@ async function formatHistory(modules, chat, environment) {
         if (titles.length) text += '\n\n' + titles.join('\n\n');
         return { ...message, mes: text, index };
     }));
-    const reasoning = environment.tavern.power.reasoning ?? {};
-    let additions = 0;
-    for (let index = prepared.length - 1; index >= 0 && reasoning.add_to_prompts && additions < reasoning.max_additions; index--) {
-        const message = prepared[index];
-        const text = regexText(String(message.extra?.reasoning ?? ''), regex.regex_placement.REASONING, prepared.length - index - 1);
-        if (!text || text === '\u200B') continue;
-        const sub = value => modules.core.substituteParams(value || '');
-        message.mes = `${sub(reasoning.prefix)}${text}${sub(reasoning.suffix)}${sub(reasoning.separator)}${message.mes}`;
-        additions++;
+    // Theatre treats "Add to prompts" as off without changing Tavern's
+    // settings. Native continuation still includes the target's own reasoning.
+    let continuationReasoning = '', reasoningPrefix = '';
+    if (isContinue && prepared.length) {
+        const target = prepared.at(-1);
+        const text = regexText(String(target.extra?.reasoning ?? ''), regex.regex_placement.REASONING, -1);
+        if (text && text !== '\u200B') {
+            const template = environment.tavern.power.reasoning ?? {};
+            const sub = value => modules.core.substituteParams(value || '');
+            const opening = `${sub(template.prefix)}${text}`;
+            const ending = `${sub(template.suffix)}${sub(template.separator)}`;
+            continuationReasoning = text;
+            reasoningPrefix = opening + ending;
+            // Match PromptReasoning.addToMessage's incomplete-prefix behavior
+            // without constructing its shared main-chat reasoning instance.
+            target.mes = opening + (target.mes ? ending + target.mes : '');
+        }
     }
-    return prepared;
+    return { history: prepared, continuationReasoning, reasoningPrefix };
 }
 
 function customSettings(settings, api) {
@@ -185,7 +195,7 @@ async function preparePayload(context, modules, messages, environment, signal, t
     return payload;
 }
 
-async function prepareNativeRequest(ctx, modules, { prompt, environment, signal, continueMessage }, prepareMessages, emit, isInterrupted) {
+async function prepareNativeRequest(ctx, modules, { prompt, environment, signal, continueMessage, continueExtra }, prepareMessages, emit, isInterrupted) {
     const { core, openai, world, notes, constants, extensions } = modules;
     const context = ctx(), events = context.eventTypes;
     const guard = () => {
@@ -198,6 +208,9 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         }
     };
     guard();
+    const continuation = environment.continuation ?? readPlayContinuationSettings({});
+    const continuationError = continueMessage && playContinuationError(continuation);
+    if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
     const leadingSystemPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
     const scope = promptScope(core);
     try {
@@ -226,9 +239,9 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         if (chat[0]) chat[0].mes = core.substituteParams(chat[0].mes);
         chat.push({ name: context.name1, is_user: true, is_system: false, mes: core.substituteParams(prompt), extra: {} });
         if (continueMessage) {
-            chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: {} });
+            chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}) });
         }
-        const history = await formatHistory(modules, chat, environment);
+        const { history, continuationReasoning, reasoningPrefix } = await formatHistory(modules, chat, environment, !!continueMessage);
         guard();
         const maxContext = environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens;
         const aborted = await extensions.runGenerationInterceptors(history, maxContext, continueMessage ? 'continue' : 'normal');
@@ -242,7 +255,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         const info = await scanWorldInfo(core, world, worldChat, maxContext, {
             personaDescription: fields.persona, characterDescription: fields.description,
             characterPersonality: fields.personality, characterDepthPrompt: fields.charDepthPrompt,
-            scenario: fields.scenario, creatorNotes: fields.creatorNotes, trigger: 'normal',
+            scenario: fields.scenario, creatorNotes: fields.creatorNotes, trigger: continueMessage ? 'continue' : 'normal',
         });
         scope.remember();
         guard();
@@ -277,6 +290,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
             type: continueMessage ? 'continue' : 'normal',
             quietPrompt: '', quietImage: null,
             cyclePrompt: continueMessage || '',
+            cycleReasoning: reasoningPrefix,
             systemPromptOverride: fields.system,
             jailbreakPromptOverride: fields.jailbreak, history,
             messageExamples: openai.setOpenAIMessageExamples(examples), toolsData, signal, leadingSystemPrompt,
@@ -297,7 +311,15 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
                 payload.messages.unshift({ role: 'system', content: leadingSystemPrompt });
             }
         }
-        return createPreparedPlayRequest(context, payload, { prefix: continueMessage || '' });
+        return createPreparedPlayRequest(context, payload, {
+            prefix: continueMessage || '', continueExtra, continuationReasoning,
+            reasoning: modules.reasoning,
+            showThoughts: environment.tavern.settings.show_thoughts !== false,
+            processReasoning: text => {
+                const processed = modules.regex.getRegexedString(text, modules.regex.regex_placement.REASONING);
+                return environment.tavern.power.trim_spaces ? processed.trim() : processed;
+            },
+        });
     } finally {
         scope.remember();
         scope.restore();

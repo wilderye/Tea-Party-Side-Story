@@ -39,6 +39,7 @@ tests/*
 !tests/play-flow.browser.cjs
 !tests/play-native.browser.cjs
 !tests/play-native-continue.browser.cjs
+!tests/play-continuation.browser.cjs
 !tests/play-native-state.browser.cjs
 !tests/play-processing.test.js
 !tests/play-processing.browser.cjs

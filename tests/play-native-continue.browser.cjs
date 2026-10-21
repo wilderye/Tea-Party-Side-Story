@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 
 (async () => {
+    const { DEFAULT_CONTINUE_PROMPTS } = await import('../play-settings.js');
     const urls = (process.env.PLAY_NATIVE_URLS || 'http://127.0.0.1:9051,http://127.0.0.1:9052').split(',');
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     const deadline = setTimeout(() => void browser.close(), 90_000);
@@ -140,7 +141,7 @@ const root = path.resolve(__dirname, '..');
                 assert.equal(payload.type, 'continue');
                 assert.equal(Object.hasOwn(payload, 'assistant_prefill'), false, '续写请求不得携带助手预填');
                 assert.equal(payload.messages.at(-1).role, 'system');
-                assert.equal(payload.messages.at(-1).content, '[Continue your last message without repeating its original content.]');
+                assert.equal(payload.messages.at(-1).content, DEFAULT_CONTINUE_PROMPTS.history);
             }
             const continueRequest = outbound[1];
             // 待续写消息应作为末位 assistant
@@ -150,7 +151,7 @@ const root = path.resolve(__dirname, '..');
             // 末尾应包含 Nudge 提示
             const lastMsg = continueRequest.messages.at(-1);
             assert.equal(lastMsg.role, 'system');
-            assert.ok(lastMsg.content.includes('Continue your last message without repeating'));
+            assert.equal(lastMsg.content, DEFAULT_CONTINUE_PROMPTS.history);
             assert.equal(continueRequest.type, 'continue', '发送参数保留续写类型');
 
             const comparisons = await page.evaluate(async () => {
@@ -158,6 +159,7 @@ const root = path.resolve(__dirname, '..');
                 const persona = await import('/scripts/power-user.js'), constants = await import('/scripts/constants.js');
                 const { preparePlayPreset } = await import('/scripts/extensions/third-party/tea-review/play-preset.js');
                 const { createNativePlayPreparer } = await import('/scripts/extensions/third-party/tea-review/play-prompt.js');
+                const { DEFAULT_CONTINUE_PROMPTS } = await import('/scripts/extensions/third-party/tea-review/play-settings.js');
                 const ctx = SillyTavern.getContext(), preparer = createNativePlayPreparer(() => ctx);
                 await preparer.ready();
                 const base = structuredClone(openai.oai_settings), cases = [];
@@ -180,14 +182,16 @@ const root = path.resolve(__dirname, '..');
                             worldInfoBefore: '', worldInfoAfter: '', extensionPrompts: core.extension_prompts,
                             bias: '', type: 'continue', quietPrompt: '', quietImage: null, cyclePrompt: history.at(-1).mes,
                             systemPromptOverride: '', jailbreakPromptOverride: '', history, messageExamples: [] };
-                        const environment = { tavern: { settings: structuredClone(openai.oai_settings),
+                        const nudge = openai.oai_settings.continue_nudge_prompt.trim()
+                            ? openai.oai_settings.continue_nudge_prompt : DEFAULT_CONTINUE_PROMPTS.history;
+                        const environment = { continuation: { mode: 'history', prompt: nudge }, tavern: { settings: structuredClone(openai.oai_settings),
                             power: structuredClone(persona.power_user), name1: ctx.name1, name2: ctx.name2,
                             model: openai.getChatCompletionModel(), ...preparer.capture() } };
                         // Compare with native nudge assembly, including the
                         // theatre's default nudge when the preset leaves it empty.
                         const savedNudge = openai.oai_settings.continue_nudge_prompt;
                         openai.oai_settings.continue_prefill = false;
-                        if (!savedNudge.trim()) openai.oai_settings.continue_nudge_prompt = '[Continue your last message without repeating its original content.]';
+                        openai.oai_settings.continue_nudge_prompt = nudge;
                         let native;
                         try {
                             [native] = await openai.prepareOpenAIMessages({ ...options, messages: openai.setOpenAIMessages(history) }, false);

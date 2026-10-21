@@ -43,7 +43,8 @@ export async function fetchCustomApiModels(context, api, signal) {
  * those would assemble prompts again or notify third-party reply handlers.
  * Both ST 1.14 and 1.19 expose ChatCompletionService.sendRequest.
  */
-export function createPreparedPlayRequest(context, data, { prefix = '' } = {}) {
+export function createPreparedPlayRequest(context, data, { prefix = '', continueExtra,
+    continuationReasoning = '', reasoning, showThoughts = true, processReasoning = text => text } = {}) {
     if (!Array.isArray(data?.messages) || !data.messages.length
         || typeof data.chat_completion_source !== 'string' || !data.chat_completion_source
         || typeof data.model !== 'string' || !data.model) {
@@ -62,7 +63,7 @@ export function createPreparedPlayRequest(context, data, { prefix = '' } = {}) {
     return {
         context: { model: payload.model, source: payload.chat_completion_source, stream: !!payload.stream,
             ...(payload.custom_url ? { endpoint: payload.custom_url } : {}) },
-        async send({ signal, onText = () => {} }) {
+        async send({ signal, onText = () => {}, onReasoning = () => {} }) {
             signal?.throwIfAborted();
             if (sent) throw new PlaygroundError('request_already_sent', '这份请求已经发送；再次生成必须重新处理当前预设和聊天。');
             sent = true;
@@ -79,16 +80,33 @@ export function createPreparedPlayRequest(context, data, { prefix = '' } = {}) {
                     const text = extract(result, 'openai');
                     if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的正文格式不正确');
                     const fullText = prefix + text;
+                    const options = { mainApi: 'openai', chatCompletionSource: payload.chat_completion_source, ignoreShowThoughts: true };
+                    const extracted = showThoughts ? reasoning?.extractReasoningFromData?.(result, options) ?? '' : '';
+                    onReasoning({
+                        reasoning: (prefix ? continueExtra?.reasoning || '' : '') + processReasoning(extracted),
+                        reasoning_signature: reasoning?.extractReasoningSignatureFromData?.(result, options) ?? null,
+                        reasoning_duration: prefix ? continueExtra?.reasoning_duration ?? null : null,
+                        api: payload.chat_completion_source, model: payload.model,
+                    });
                     onText(fullText);
                     return fullText;
                 }
                 if (typeof result !== 'function') throw new PlaygroundError('invalid_response', '酒馆没有返回可读取的流式回复');
                 iterator = result();
                 let text = '';
+                let thought = continuationReasoning;
                 for await (const chunk of iterator) {
                     controller.signal.throwIfAborted();
                     if (typeof chunk?.text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的流式正文格式不正确');
                     text = chunk.text;
+                    // Native streaming keeps the prefix reasoning if a chunk
+                    // has no reasoning, and replaces it with new model reasoning.
+                    thought = chunk.state?.reasoning || thought;
+                    onReasoning({
+                        reasoning: processReasoning(thought), reasoning_signature: chunk.state?.signature ?? null,
+                        reasoning_duration: prefix ? continueExtra?.reasoning_duration ?? null : null,
+                        api: payload.chat_completion_source, model: payload.model,
+                    });
                     onText(prefix + text);
                 }
                 controller.signal.throwIfAborted();

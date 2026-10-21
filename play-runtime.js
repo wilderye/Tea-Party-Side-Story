@@ -1,7 +1,7 @@
 import { createBrowserPlayHistory } from './play-storage.js';
 import { createPlayground, PlaygroundError } from './playground.js';
 import { createNativePlayPreparer } from './play-prompt.js';
-import { readPlaySettings } from './play-settings.js';
+import { readPlaySettings, readPlayContinuationSettings } from './play-settings.js';
 import { createPlayDisplay } from './play-processing.js';
 
 export function readPlayTarget(context) {
@@ -32,6 +32,7 @@ export function capturePlayEnvironment(context, settings) {
                 presetName: String(context.chatCompletionSettings?.preset_settings ?? '') },
             api,
             playPrompt: readPlaySettings(settings).prompt,
+            continuation: readPlayContinuationSettings(settings),
             tavern: {
                 settings: context.chatCompletionSettings,
                 power: context.powerUserSettings ?? {},

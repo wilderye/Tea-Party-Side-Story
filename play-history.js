@@ -65,6 +65,25 @@ export function readPlayContext(value) {
     return result;
 }
 
+// Only native reasoning fields may accompany a result. Never persist response
+// objects or the captured settings, which may contain credentials.
+export function readPlayReasoning(value) {
+    assert(value && typeof value === 'object' && !Array.isArray(value));
+    const result = {};
+    for (const key of ['reasoning', 'api', 'model']) {
+        if (value[key] !== undefined) { assert(typeof value[key] === 'string'); result[key] = value[key]; }
+    }
+    if (value.reasoning_signature !== undefined) {
+        assert(value.reasoning_signature === null || typeof value.reasoning_signature === 'string');
+        result.reasoning_signature = value.reasoning_signature;
+    }
+    if (value.reasoning_duration !== undefined) {
+        assert(value.reasoning_duration === null || (Number.isFinite(value.reasoning_duration) && value.reasoning_duration >= 0));
+        result.reasoning_duration = value.reasoning_duration;
+    }
+    return result;
+}
+
 function readResult(value) {
     assert(value && isId(value.id) && isDate(value.startedAt) && statuses.includes(value.status)
         && typeof value.text === 'string');
@@ -74,6 +93,7 @@ function readResult(value) {
         id: value.id, startedAt: value.startedAt, finishedAt: value.finishedAt,
         status: value.status, text: value.text, context: readPlayContext(value.context),
     };
+    if (value.extra !== undefined) result.extra = readPlayReasoning(value.extra);
     if (value.error !== undefined) {
         assert(value.error && isText(value.error.code) && isText(value.error.message));
         result.error = { code: value.error.code, message: value.error.message };

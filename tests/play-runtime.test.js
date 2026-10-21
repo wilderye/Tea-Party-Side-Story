@@ -46,6 +46,14 @@ test('捕获本次角色、聊天和 API 选择，不提前计算宏、不修改
     assert.equal(env.tavern.power.persona_description, '用户人设');
 });
 
+test('续写方式与提示词随请求捕获，切换设置只影响下一次续写', () => {
+    const ctx = context(), settings = { playContinueMode: 'prompt', playContinuePrompts: { history: '第一种', prompt: '第二种：{{lastChatMessage}}' } };
+    const env = capturePlayEnvironment(ctx, settings);
+    settings.playContinueMode = 'history'; settings.playContinuePrompts.prompt = '后来修改';
+    assert.deepEqual(env.continuation, { mode: 'prompt', prompt: '第二种：{{lastChatMessage}}' });
+    assert.deepEqual(capturePlayEnvironment(ctx, settings).continuation, { mode: 'history', prompt: '第一种' });
+});
+
 test('当前角色和接口范围明确；无关的扩展回调不会阻止生成', () => {
     assert.throws(() => readPlayTarget({ ...context(), characters: [] }), /打开一个角色/);
     assert.throws(() => readPlayTarget({ ...context(), groupId: 'group-a' }), /群聊尚未接入/);

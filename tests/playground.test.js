@@ -107,6 +107,54 @@ function fixture(overrides = {}) {
     return { ...f, service, current, control, prepared, sent, restart: () => createPlayground({ ...options, history: f.createStore() }) };
 }
 
+test('思维链和签名独立保存，重新读取后传给续写，停止时保留已经收到的思维链', async () => {
+    const f = fixture();
+    const extra = { reasoning: '初次思维链', reasoning_signature: 'synthetic-signature', api: 'custom', model: 'test-model' };
+    f.control.response = async ({ onReasoning }) => { onReasoning(extra); return '初次正文'; };
+    const first = await f.service.send({ prompt: '测试保存' });
+    assert.deepEqual((await f.restart().getRound(first.roundId)).results[0].extra, extra);
+    f.control.prepare = async request => {
+        assert.deepEqual(request.continueExtra, extra);
+        return { send: async ({ signal, onReasoning, onText }) => {
+            onReasoning({ ...extra, reasoning: '续写思维链', reasoning_signature: null });
+            onText(request.continueMessage + '续写正文');
+            f.service.stop(); signal.throwIfAborted();
+        } };
+    };
+    await f.service.continueResult(first.roundId, first.result.id);
+    const saved = (await f.restart().getRound(first.roundId)).results[0];
+    assert.equal(saved.text, '初次正文续写正文');
+    assert.equal(saved.extra.reasoning, '续写思维链');
+    assert.equal(saved.extra.reasoning_signature, null);
+    assert.equal(saved.status, 'stopped');
+});
+
+test('无效的第二种续写提示词不改写已有回复状态，也不开始准备请求', async () => {
+    const f = fixture(), first = await f.service.send({ prompt: '测试' });
+    const before = await f.store.getRound(first.roundId), preparations = f.prepared.length, writes = f.writes.length;
+    f.current.continuation = { mode: 'prompt', prompt: '没有占位符' };
+    await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'invalid_continue_prompt');
+    assert.deepEqual(await f.store.getRound(first.roundId), before);
+    assert.equal(f.prepared.length, preparations); assert.equal(f.writes.length, writes);
+    assert.equal(f.service.getState().phase, 'idle');
+});
+
+test('流式尚未返回正文时也定期保存思维链，重开历史不会丢失', async () => {
+    const f = fixture({ checkpointMs: 1 }), started = deferred(), finish = deferred();
+    f.control.response = async ({ onReasoning }) => {
+        onReasoning({ reasoning: '尚在思考', api: 'custom', model: 'test-model' });
+        started.resolve(); await finish.promise; return '完成正文';
+    };
+    const task = f.service.send({ prompt: '测试思考阶段保存' });
+    try {
+        await started.promise; await delay(25);
+        const round = await f.createStore().getRound(f.service.getState().roundId);
+        assert.equal(round.results[0].text, '');
+        assert.equal(round.results[0].extra.reasoning, '尚在思考');
+        assert.equal(round.results[0].status, 'unfinished');
+    } finally { finish.resolve(); await task; }
+});
+
 test('删除消息不请求模型或改主聊天；全部回复删除后可重新生成，用户消息删除后不可生成', async () => {
     const f = fixture(), chat = structuredClone(f.current.chat);
     const first = await f.service.send({ prompt: '待删除的消息' });

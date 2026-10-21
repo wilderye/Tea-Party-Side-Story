@@ -1,5 +1,5 @@
 import { element, iconButton, textButton } from './ui.js';
-import { readPlaySettings } from './play-settings.js';
+import { readPlaySettings, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
 import { fetchCustomApiModels } from './play-request.js';
 
 export function createPlayApiSettings(ctx, settings, saveSettings, diagnostics) {
@@ -98,6 +98,44 @@ function textSetting(area, settings, saveSettings, key, name, value, note) {
 export function renderPlayPromptSetting(area, settings, saveSettings) {
     textSetting(area, settings, saveSettings, 'playPrompt', '自定义小剧场提示词', readPlaySettings(settings).prompt,
         '放在全部提示词最前面，留空不添加。');
+}
+
+export function renderPlayContinuationSettings(area, settings, saveSettings) {
+    const section = element('section', undefined, 'play-continue-settings');
+    const row = element('label', undefined, 'tea-setting-row');
+    row.append(element('strong', '续写方式'));
+    const mode = element('select'); mode.setAttribute('aria-label', '续写方式');
+    for (const [value, text] of [['history', '第一种：保留 AI 消息'], ['prompt', '第二种：正文放入提示词']]) {
+        const option = element('option', text); option.value = value; mode.append(option);
+    }
+    mode.value = readPlayContinuationSettings(settings).mode; row.append(mode);
+    const description = element('p', '', 'tea-setting-description');
+    const field = element('label', '续写提示词', 'tea-field');
+    const input = element('textarea'); input.rows = 5; input.spellcheck = false;
+    input.setAttribute('aria-label', '续写提示词');
+    const error = element('p', '', 'tea-setting-description play-continue-error');
+    error.id = 'tea-play-continue-error'; error.setAttribute('role', 'status');
+    input.setAttribute('aria-describedby', error.id);
+    field.append(input); section.append(row, description, field, error); area.append(section);
+    function validate() {
+        const message = playContinuationError(readPlayContinuationSettings(settings));
+        error.textContent = message; error.hidden = !message;
+        input.setAttribute('aria-invalid', String(!!message)); input.setCustomValidity(message);
+    }
+    function update() {
+        const continuation = readPlayContinuationSettings(settings);
+        input.value = continuation.prompt;
+        description.textContent = continuation.mode === 'history'
+            ? '保留待续写 AI 消息，最后追加续写提示词。默认提示词不引用原正文。'
+            : '本次请求不单独保留待续写 AI 消息，通过 {{lastChatMessage}} 引用原正文；它的思维链紧接在原正文前。';
+        validate();
+    }
+    mode.addEventListener('change', () => { settings.playContinueMode = mode.value; saveSettings(); update(); });
+    input.addEventListener('input', () => {
+        (settings.playContinuePrompts ??= {})[mode.value] = input.value;
+        saveSettings(); validate();
+    });
+    update();
 }
 
 export function renderPlayProcessingSettings(area, settings, saveSettings, display, viewState) {

@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { PLAY_HISTORY_INDEX, playRoundFile, readPlayRound } from '../play-history.js';
+import { PLAY_HISTORY_INDEX, playRoundFile, readPlayRound, readPlayReasoning } from '../play-history.js';
 import { memoryFiles, characterA, characterB, contextA, time } from './play-fixture.js';
 
+test('原生思维链元数据仅保存所需字段，不保存请求配置或凭据', () => {
+    assert.deepEqual(readPlayReasoning({ reasoning: '模型原生思维链', reasoning_signature: '合成签名', reasoning_duration: 1200,
+        api: 'openrouter', model: 'synthetic-model', headers: { Authorization: 'synthetic-secret' }, settings: { key: 'synthetic-secret' } }),
+    { reasoning: '模型原生思维链', reasoning_signature: '合成签名', reasoning_duration: 1200, api: 'openrouter', model: 'synthetic-model' });
+    for (const invalid of [null, [], { reasoning: {} }, { reasoning_signature: {} }, { reasoning_duration: -1 }]) {
+        assert.throws(() => readPlayReasoning(invalid));
+    }
+});
 test('编辑用户消息只更新提示词，保留回复、归属、时间和历史顺序', async () => {
     const f = memoryFiles(), round = await f.begin();
     const saved = await f.store.saveResult(round.id, round.results[0].id, { status: 'complete', text: '原回复', finishedAt: time(1) });

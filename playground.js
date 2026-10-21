@@ -1,4 +1,5 @@
-import { PlayHistoryError, readPlayContext, readPlayOrigin } from './play-history.js';
+import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning } from './play-history.js';
+import { playContinuationError } from './play-settings.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message) { super(message); this.name = 'PlaygroundError'; this.code = code; }
@@ -36,7 +37,8 @@ function publicError(error, phase) {
 
 /**
  * prepareRequest uses the native prompt pipeline and returns
- * { send({ signal, onText }), context? }. onText receives the full text so far.
+ * { send({ signal, onText, onReasoning }), context? }. Callbacks receive the
+ * full text or native reasoning metadata so far, stored independently.
  * This module neither evaluates outputs nor broadcasts SillyTavern events.
  */
 export function createPlayground({ history, captureEnvironment, isCurrent, prepareRequest,
@@ -58,6 +60,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             const job = active?.resultId === result.id ? active : unsaved?.job.resultId === result.id ? unsaved.job : null;
             if (job) {
                 result.text = job.text;
+                if (job.extra) result.extra = clone(job.extra);
                 result.status = active === job ? job.phase : 'save-failed';
                 if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
             }
@@ -93,10 +96,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         job.timer = setTimeout(() => {
             job.timer = null;
             const text = job.text;
+            const extra = job.extra;
             job.checkpointPending = true;
             job.checkpoint = (async () => {
                 try {
-                    await history.saveResult(job.round.id, job.resultId, { text, status: 'unfinished', finishedAt: null });
+                    await history.saveResult(job.round.id, job.resultId, { text, ...(extra ? { extra } : {}), status: 'unfinished', finishedAt: null });
                     job.checkpointError = null;
                 } catch (error) {
                     if (!job.checkpointError) diagnostics?.error('保存生成中的小剧场', error, { phase: 'saving' });
@@ -108,7 +112,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                     notify();
                     // Coalesce text received during a slow upload; never build
                     // a queue of obsolete full-text checkpoints behind it.
-                    if (job.text !== text) scheduleCheckpoint(job);
+                    if (job.text !== text || job.extra !== extra) scheduleCheckpoint(job);
                 }
             })();
         }, checkpointMs);
@@ -123,9 +127,12 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let environment;
         try { environment = clone(captureEnvironment()); }
         catch (error) { diagnostics?.error('读取小剧场生成环境', error); throw error; }
+        const continuationError = continueResultId && playContinuationError(environment.continuation);
+        if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
         const context = readPlayContext(environment.context);
         const resultId = continueResultId || uuid();
         let baseText = '';
+        let continueExtra;
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
             characterName: environment.character.name, text: '', closed: false, checkpoint: Promise.resolve() };
         const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成', { phase: 'preparing', apiMode: environment.api?.mode },
@@ -142,6 +149,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (!target) throw new PlaygroundError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
                 if (!target.text.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
                 baseText = target.text;
+                continueExtra = readPlayReasoning(target.extra ?? {});
+                if (target.extra) job.extra = clone(continueExtra);
                 job.text = baseText;
                 assertCurrent(environment);
             }
@@ -154,6 +163,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             const request = await abortable(() => prepareRequest({
                 generationId: job.resultId, prompt: job.round.prompt, environment,
                 continueMessage: continueResultId ? baseText : undefined,
+                ...(continueResultId ? { continueExtra } : {}),
                 signal: job.controller.signal,
             }), job.controller.signal);
             if (typeof request?.send !== 'function') throw new PlaygroundError('invalid_prepared_request', '提示词处理没有返回可发送的请求，本次没有发送到模型。');
@@ -164,6 +174,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now() });
             notify();
             const result = await abortable(() => request.send({ signal: job.controller.signal,
+                onReasoning(extra) {
+                    if (active !== job || job.closed || job.controller.signal.aborted) return;
+                    job.extra = readPlayReasoning(extra);
+                    scheduleCheckpoint(job);
+                },
                 onText(text) {
                     if (active !== job || job.closed || job.controller.signal.aborted) return;
                     if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的内容格式不正确');
@@ -200,6 +215,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             if (!job.round) { if (active === job) active = null; notify(); }
         }
         const update = { text: job.text, status: finalStatus, finishedAt: job.finishedAt, context: resultContext,
+            ...(job.extra ? { extra: job.extra } : {}),
             ...(job.error ? { error: job.error } : {}) };
         try {
             const round = await history.saveResult(job.round.id, job.resultId, update);

@@ -4,7 +4,7 @@ import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js'
 const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply'];
-const workerVersion = 6;
+const workerVersion = 7;
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {

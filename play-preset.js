@@ -1,3 +1,6 @@
+import { readPlayContinuationSettings, playContinuationError } from './play-settings.js';
+import { PlaygroundError } from './playground.js';
+
 function requestMessages(context, modules, tavern, signal) {
     const { Message } = modules.openai;
     const cache = new Map();
@@ -57,6 +60,9 @@ export async function preparePlayPreset(context, modules, environment, options) 
     const { openai, core, persona, constants } = modules;
     const { settings, power, name1, name2, model } = environment.tavern;
     const { MessageCollection, ChatCompletion } = openai;
+    const continuation = environment.continuation ?? readPlayContinuationSettings({});
+    const continuationError = options.type === 'continue' && playContinuationError(continuation);
+    if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
     const messages = requestMessages(context, modules, environment.tavern, options.signal);
     const manager = Object.assign(Object.create(openai.promptManager), {
         serviceSettings: settings, activeCharacter: structuredClone(openai.promptManager.activeCharacter),
@@ -177,17 +183,21 @@ export async function preparePlayPreset(context, modules, environment, options) 
         completion.add(new MessageCollection('chatHistory'), prompts.index('chatHistory'));
         const header = await messages.create('system', substitute(settings.new_chat_prompt), 'newMainChat');
         completion.reserveBudget(header);
-        // Theatre continuations always use a nudge, independent of Tavern's prefill setting.
+        // Both theatre modes end with their own nudge. Tavern's main-chat
+        // prefill/nudge settings are left untouched.
         if (options.type === 'continue' && options.cyclePrompt) {
             const lastIndex = history.findLastIndex(prompt => !prompt.injected);
             continueCollection = new MessageCollection('continueNudge');
             if (lastIndex >= 0) {
                 const target = history.splice(lastIndex, 1)[0];
-                continueCollection.add(await messages.create(target.role, substitute(target.content), 'continueAssistant'));
+                if (continuation.mode === 'history') {
+                    const message = await messages.create(target.role, substitute(target.content), 'continueAssistant');
+                    if (environment.tavern.reasoningSignatureSupported && target.sameModel && target.extra?.reasoning_signature) message.signature = target.extra.reasoning_signature;
+                    continueCollection.add(message);
+                }
             }
-            const rawNudge = settings.continue_nudge_prompt?.trim()
-                ? settings.continue_nudge_prompt : '[Continue your last message without repeating its original content.]';
-            const nudgeContent = substitute(rawNudge.replace(/\{\{lastChatMessage\}\}/gi, () => options.cyclePrompt.trim()));
+            const nudgeContent = substitute(continuation.prompt.replace(/\{\{lastChatMessage\}\}/gi,
+                () => (continuation.mode === 'prompt' ? options.cycleReasoning || '' : '') + options.cyclePrompt.trim()));
             const continueNudgeMessage = await messages.create('system', nudgeContent, 'continueNudge');
             continueCollection.add(continueNudgeMessage);
             completion.reserveBudget(continueCollection);

@@ -146,3 +146,49 @@ for (const stream of [false, true]) test(`每次只请求一份回复，不丢�
     assert.equal(original.n, 3, '不改酒馆预设的多回复设置');
     assert.equal(result, '一份完整回复');
 });
+
+for (const stream of [false, true]) test(`原生思维链和签名单独返回，正文不混入思维链：流式=${stream}`, async () => {
+    const extras = [], texts = [];
+    const ctx = { ChatCompletionService: { async sendRequest() {
+        return stream ? async function* () {
+            yield { text: '', state: { reasoning: '思考' } };
+            yield { text: '正文', state: { reasoning: '思考完成', signature: 'native-signature' } };
+        } : { text: '正文', thought: '思考完成', signature: 'native-signature' };
+    } }, extractMessageFromData: value => value.text };
+    const reasoning = {
+        extractReasoningFromData(value, options) {
+            assert.equal(options.mainApi, 'openai'); assert.equal(options.chatCompletionSource, 'custom');
+            assert.equal(options.ignoreShowThoughts, true); return value.thought;
+        },
+        extractReasoningSignatureFromData: value => value.signature,
+    };
+    const result = await createPreparedPlayRequest(ctx, { ...data(), stream }, { reasoning })
+        .send({ signal: new AbortController().signal, onReasoning: extra => extras.push(extra), onText: text => texts.push(text) });
+    assert.equal(result, '正文'); assert.equal(texts.at(-1), '正文');
+    assert.deepEqual(extras.at(-1), { reasoning: '思考完成', reasoning_signature: 'native-signature', reasoning_duration: null,
+        api: 'custom', model: 'test-model' });
+});
+
+test('流式续写沿用目标思维链，有新思维链时采用新内容，签名不沿用旧值', async () => {
+    const extras = [];
+    const ctx = { ChatCompletionService: { async sendRequest() { return async function* () {
+        yield { text: '续', state: { reasoning: '' } };
+        yield { text: '续写', state: { reasoning: '本次的新思维链', signature: 'new-signature' } };
+    }; } }, extractMessageFromData: value => value };
+    const request = createPreparedPlayRequest(ctx, { ...data(), stream: true }, { prefix: '旧正文', continuationReasoning: '发送前处理后的旧思维链',
+        continueExtra: { reasoning: '旧思维链', reasoning_signature: 'old-signature', reasoning_duration: 1200 } });
+    assert.equal(await request.send({ signal: new AbortController().signal, onReasoning: extra => extras.push(extra) }), '旧正文续写');
+    assert.equal(extras[0].reasoning, '发送前处理后的旧思维链');
+    assert.equal(extras[0].reasoning_signature, null);
+    assert.equal(extras.at(-1).reasoning, '本次的新思维链');
+    assert.equal(extras.at(-1).reasoning_signature, 'new-signature');
+});
+
+test('非流式续写按酒馆 appendFinal 将新思维链接在已保存的思维链后', async () => {
+    let extra;
+    const ctx = { ChatCompletionService: { sendRequest: async () => ({ text: '续写', thought: '新思维链' }) }, extractMessageFromData: value => value.text };
+    const request = createPreparedPlayRequest(ctx, data(), { prefix: '旧正文', continueExtra: { reasoning: '旧思维链' },
+        reasoning: { extractReasoningFromData: value => value.thought }, processReasoning: text => text.replace('新', '处理后的新') });
+    assert.equal(await request.send({ signal: new AbortController().signal, onReasoning: value => { extra = value; } }), '旧正文续写');
+    assert.equal(extra.reasoning, '旧思维链处理后的新思维链');
+});

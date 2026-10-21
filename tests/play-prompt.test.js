@@ -33,6 +33,54 @@ test('清空自定义提示词后不附加，发送时捕获的提示词不会�
     assert.equal(f.assemblies[1].leadingSystemPrompt, '');
 });
 
+test('续写正文和思维链使用 -1 深度；不加入较早思维链，也不改原文占位符', async () => {
+    const f = fixture(), calls = [];
+    f.context.powerUserSettings.reasoning = { add_to_prompts: true, max_additions: 10,
+        prefix: '<think>', suffix: '</think>', separator: '\n' };
+    f.context.chat[0].extra = { reasoning: '更早的主聊天思维链' };
+    f.modules.regex.getRegexedString = (text, placement, options) => {
+        calls.push({ text, placement, options });
+        return options?.isPrompt ? text.replace('【发送前删除】', '') : text;
+    };
+    const before = structuredClone(f.context.powerUserSettings);
+    const original = '待续写正文【发送前删除】';
+    const options = { ...f.options(), continueMessage: original,
+        continueExtra: { reasoning: '目标思维链【发送前删除】', api: 'openai', model: 'current-model' } };
+    await f.prepare(options);
+    const assembly = f.assemblies.at(-1);
+    assert.equal(assembly.history.at(-1).mes, '<think>目标思维链</think>\n待续写正文');
+    assert.equal(assembly.history[0].mes, '主聊天旧回复');
+    assert.equal(assembly.cyclePrompt, original);
+    assert.equal(assembly.cycleReasoning, '<think>目标思维链</think>\n');
+    assert.deepEqual(calls.filter(call => call.options?.isPrompt).map(call => [call.text, call.options.depth]), [
+        ['主聊天旧回复', 1], ['本次用户小剧场', 0], [original, -1], ['目标思维链【发送前删除】', -1],
+    ]);
+    assert.deepEqual(f.context.powerUserSettings, before, '酒馆主聊天的设置保持原值');
+    calls.length = 0;
+    await f.prepare(f.options());
+    assert.equal(f.assemblies.at(-1).history[0].mes, '主聊天旧回复');
+    assert.deepEqual(calls.filter(call => call.options?.isPrompt).map(call => call.options.depth), [1, 0]);
+});
+
+test('第二种提示词校验早于世界书、发送前回调与模型请求', async () => {
+    const f = fixture();
+    const options = f.options();
+    options.environment.continuation = { mode: 'prompt', prompt: '缺少占位符' };
+    await assert.rejects(f.prepare({ ...options, continueMessage: '待续写正文' }), error => error.code === 'invalid_continue_prompt');
+    assert.deepEqual(f.order, []);
+    assert.equal(f.requests.length, 0);
+});
+
+test('添加到提示词关闭或最大值为零时，续写仍发送目标自身的思维链', async () => {
+    for (const addToPrompts of [false, true]) {
+        const f = fixture();
+        f.context.powerUserSettings.reasoning = { add_to_prompts: addToPrompts, max_additions: 0,
+            prefix: '<think>', suffix: '</think>', separator: '\n' };
+        await f.prepare({ ...f.options(), continueMessage: '原正文', continueExtra: { reasoning: '原生思维链' } });
+        assert.equal(f.assemblies.at(-1).history.at(-1).mes, '<think>原生思维链</think>\n原正文');
+    }
+});
+
 function eventBus() {
     const listeners = new Map();
     const removeListener = (event, listener) => listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener));
@@ -508,3 +556,33 @@ test('续写准备将待续写消息推入聊天并以 continue 模式拼装，�
     assert.equal(lastMessage.content, '待续写的旧正文');
     assert.ok(result.startsWith('待续写的旧正文'));
 });
+
+for (const apiMode of ['tavern', 'custom']) {
+    test(`世界书按本次操作筛选普通生成和续写条目，且不修改主聊天：API=${apiMode}`, async () => {
+        const f = fixture(), before = structuredClone(f.context.chat);
+        const scanWorld = f.modules.world.getWorldInfoPrompt;
+        const entries = [
+            { triggers: [], content: '通用世界书条目' },
+            { triggers: ['normal'], content: '仅普通生成的世界书条目' },
+            { triggers: ['continue'], content: '仅续写的世界书条目' },
+        ];
+        f.modules.world.getWorldInfoPrompt = async (...args) => {
+            const result = await scanWorld(...args), scan = args[3];
+            result.worldInfoBefore = entries.filter(entry => !entry.triggers.length || entry.triggers.includes(scan.trigger))
+                .map(entry => entry.content).join('\n');
+            return result;
+        };
+        const api = apiMode === 'custom'
+            ? { mode: 'custom', url: 'https://example.invalid/v1', model: 'test-model', key: '' }
+            : { mode: 'tavern' };
+        for (const continueMessage of [undefined, '待续写的旧正文', undefined]) {
+            const request = await f.prepare({ ...f.options('本次小剧场', api), continueMessage });
+            await request.send({ signal: new AbortController().signal });
+            const contents = f.requests.at(-1).payload.messages.map(message => message.content).join('\n');
+            assert.match(contents, /通用世界书条目/);
+            assert.ok(contents.includes(continueMessage ? '仅续写的世界书条目' : '仅普通生成的世界书条目'));
+            assert.ok(!contents.includes(continueMessage ? '仅普通生成的世界书条目' : '仅续写的世界书条目'));
+            assert.deepEqual(f.context.chat, before);
+        }
+    });
+}

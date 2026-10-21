@@ -525,6 +525,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-api-model-row { display:flex; align-items:flex-end; gap:12px; min-width:0; }
 #teahouse-panel .play-api-model-row .tea-field { flex:1; min-width:0; }
 #teahouse-panel .play-api-model-refresh { flex:none; min-height:42px; padding:8px 14px; border:1px solid var(--tea-line)!important; border-radius:4px!important; background:var(--tea-control-paper,var(--tea-forest))!important; color:var(--tea-control-ink,var(--tea-paper))!important; white-space:nowrap; }
+#teahouse-panel .play-continue-settings { display:flex; flex-direction:column; gap:12px; }
+#teahouse-panel .play-continue-settings>.tea-setting-row { padding-top:0; border-bottom:0; }
+#teahouse-panel .play-continue-settings select { max-width:100%; }
+#teahouse-panel .play-continue-settings .tea-setting-description { margin:0; }
+#teahouse-panel .play-continue-error { color:var(--tea-error,var(--play-coral-ink)); }
 #teahouse-panel .play-processing-settings { display:flex; flex-direction:column; gap:14px; padding-top:16px; }
 #teahouse-panel .play-processing-settings .tea-setting-row { padding:0; border-bottom:0; }
 #teahouse-panel .play-processing-settings .tea-setting-description { margin:0; font-weight:400; }
