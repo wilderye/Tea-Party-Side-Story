@@ -245,6 +245,50 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings .tea-setting-description { line-height:20px; font-weight:400; }
 #teahouse-panel .tea-settings-group>.tea-setting-row:last-child { border-bottom:0; }
 #teahouse-panel .play-api-settings>.tea-setting-row { border-bottom:0; padding-top:0; }
+#teahouse-panel .play-prompt-settings { margin-top:16px; }
+#teahouse-panel .play-prompt-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+#teahouse-panel .play-prompt-heading strong { font-size:15px; }
+#teahouse-panel .play-prompt-controls { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+#teahouse-panel .play-prompt-controls select { flex:1; min-width:0; width:0; height:44px; margin:0!important; padding:8px 12px!important; border:1px solid var(--tea-line)!important; border-radius:4px!important; background:var(--tea-field-paper,#fffdf6)!important; text-overflow:ellipsis; }
+#teahouse-panel .tea-settings .play-prompt-content-field textarea { min-height:112px; max-height:360px; padding:12px!important; font-size:15px; line-height:25px!important; resize:vertical; }
+#teahouse-panel .play-prompt-note { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:6px 0 16px; }
+#teahouse-panel .play-prompt-note small { flex:1; }
+#teahouse-panel .play-prompt-delete { flex:none; min-height:40px; padding:0 8px; color:var(--tea-accent,#a65340)!important; font-size:12px; }
+#teahouse-panel .tea-settings .play-prompt-position { border-bottom:0; padding-bottom:8px; }
+#teahouse-panel .play-prompt-editor { position:fixed; inset:0; width:min(720px,calc(100vw - 48px)); height:min(660px,calc(100dvh - 48px)); min-height:0; max-width:none; max-height:none; margin:auto; padding:0; border:1px solid var(--tea-line)!important; border-radius:8px!important; background:var(--tea-paper)!important; color:var(--tea-ink)!important; overflow:hidden; font:14px/24px var(--tea-ui); text-align:left; box-shadow:0 24px 64px var(--tea-popup-shadow,#102f2850); }
+#teahouse-panel .play-prompt-editor::backdrop { background:#00000060; }
+#teahouse-panel .play-prompt-editor-form { display:flex; flex-direction:column; height:100%; min-height:0; margin:0; }
+#teahouse-panel .play-prompt-editor-header { display:flex; align-items:center; justify-content:space-between; flex:none; gap:16px; padding:12px 24px; border-bottom:1px solid var(--tea-line); }
+#teahouse-panel .play-prompt-editor-header h3 { font-size:18px; color:var(--tea-ink)!important; }
+#teahouse-panel .play-prompt-editor-fields { display:flex; flex-direction:column; flex:1; min-height:0; gap:18px; padding:20px 24px; overflow:auto; }
+#teahouse-panel .play-prompt-editor-fields>.play-prompt-draft { flex:1; min-height:180px; }
+#teahouse-panel .tea-settings .play-prompt-editor-fields .tea-field :is(input,textarea) { font-size:16px; }
+#teahouse-panel .tea-settings .play-prompt-editor-fields .tea-field textarea { flex:1; min-height:160px; resize:none; }
+#teahouse-panel .play-prompt-editor-footer { display:flex; flex:none; align-items:center; justify-content:space-between; gap:12px; padding:12px 24px; border-top:1px solid var(--tea-line); }
+#teahouse-panel .play-prompt-editor-footer>.tea-actions { margin-left:auto; }
+#teahouse-panel .play-prompt-editor-error { color:var(--tea-accent,#a65340); }
+#teahouse-panel :is(.play-prompt-save,.play-prompt-cancel) { min-width:80px; min-height:44px; padding:8px 20px; border-radius:4px!important; }
+#teahouse-panel .play-prompt-save { background:var(--tea-control-paper,var(--tea-forest))!important; color:var(--tea-control-ink,var(--tea-paper))!important; }
+#teahouse-panel .play-prompt-cancel { border:1px solid var(--tea-line)!important; }
+#teahouse-panel .play-prompt-cancel:hover { background:var(--tea-hover,#183e360c)!important; }
+#teahouse-panel .play-prompt-compact { top:50%; bottom:auto; width:min(440px,calc(100vw - 36px)); height:auto; max-height:calc(100dvh - 48px); transform:translateY(-50%); }
+#teahouse-panel .play-prompt-compact .play-prompt-editor-form { height:auto; max-height:inherit; }
+#teahouse-panel .play-prompt-rename .play-prompt-editor-header { border-bottom:0; }
+#teahouse-panel .play-prompt-rename .play-prompt-editor-footer { border-top:0; }
+#teahouse-panel .play-prompt-delete-message { overflow-wrap:anywhere; }
+@media(max-width:760px) {
+    #teahouse-panel .play-prompt-controls select,#teahouse-panel .play-prompt-position select { font-size:16px!important; }
+    #teahouse-panel .tea-settings .play-prompt-content-field textarea { min-height:128px; max-height:320px; font-size:16px; }
+    #teahouse-panel .play-prompt-note { align-items:flex-start; gap:8px; }
+    #teahouse-panel .play-prompt-note .play-prompt-delete { margin-top:-6px; }
+    #teahouse-panel .play-prompt-editor:not(.play-prompt-compact) { top:var(--tea-viewport-top,0px); bottom:auto; width:100vw; height:var(--tea-viewport-height,100dvh); margin:0; border:0!important; border-radius:0!important; }
+    #teahouse-panel .play-prompt-editor-header { padding:calc(8px + env(safe-area-inset-top)) 18px 8px; }
+    #teahouse-panel .play-prompt-editor-fields { padding:16px 18px; }
+    #teahouse-panel .play-prompt-editor-footer { padding:8px 18px calc(8px + env(safe-area-inset-bottom)); }
+    #teahouse-panel .play-prompt-editor .tea-icon { min-height:44px; }
+    #teahouse-panel .play-prompt-compact { inset:var(--tea-viewport-top,0px) 0 auto; max-height:calc(var(--tea-viewport-height,100dvh) - 64px); margin-top:48px; transform:none; }
+    #teahouse-panel .play-prompt-rename { top:calc(var(--tea-viewport-top,0px) + var(--tea-viewport-height,100dvh) / 2); max-height:calc(var(--tea-viewport-height,100dvh) - 32px); margin-top:0; transform:translateY(-50%); }
+}
 #teahouse-panel .tea-setting-row { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:24px 0; border-bottom:1px solid var(--tea-line); margin:0; }
 #teahouse-panel .tea-setting-row strong { display:block; font-size:15px; }
 #teahouse-panel .tea-update-setting { padding:16px 0; border-bottom:1px solid var(--tea-line); }

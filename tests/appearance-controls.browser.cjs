@@ -157,7 +157,7 @@ async function verify(page, url, theme, viewport) {
     });
     await check('settings fields, log text and disabled model controls');
     assert.equal(await panel.getByRole('combobox', { name: '模型', exact: true }).evaluate(node => getComputedStyle(node).fontSize), viewport.width <= 760 ? '16px' : '14px');
-    const field = panel.getByRole('textbox', { name: '自定义小剧场提示词', exact: true });
+    const field = panel.getByRole('textbox', { name: '隐藏标签', exact: true });
     await field.focus(); await check('textarea focus');
     const toggle = panel.locator('input[role=switch]').filter({ visible: true }).first();
     await toggle.setChecked(true); await toggle.hover(); await check('checked switch hover');
@@ -180,6 +180,16 @@ async function verify(page, url, theme, viewport) {
     await panel.locator('.tea-settings').evaluate(node => { node.scrollTop = 0; });
     await screenshot(page, `controls-${theme.slug || 'synthetic'}-settings-${viewport.width}.png`);
     await api.selectOption('tavern');
+    await panel.getByRole('combobox', { name: '自定义小剧场提示词', exact: true }).selectOption('recommended');
+    await panel.getByRole('textbox', { name: '小剧场提示词内容', exact: true }).focus();
+    await check('prompt content and rename controls');
+    await panel.getByRole('button', { name: '修改提示词名称', exact: true }).click();
+    await check('prompt rename dialog');
+    await panel.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+    await panel.getByRole('button', { name: '新增提示词', exact: true }).click();
+    await panel.getByRole('dialog').getByRole('textbox', { name: '内容', exact: true }).focus();
+    await check('prompt add dialog, fields and footer');
+    await panel.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
     await button(viewport.width > 760 ? '设置' : '返回剧场演出').click();
     await check('restored default prose');
     const composer = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });

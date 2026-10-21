@@ -33,6 +33,36 @@ test('清空自定义提示词后不附加，发送时捕获的提示词不会�
     assert.equal(f.assemblies[1].leadingSystemPrompt, '');
 });
 
+for (const position of ['user-before', 'user-after']) {
+    for (const continuation of [false, true]) test(`提示词在本次用户消息内部，位置=${position}，续写=${continuation}`, async () => {
+        const f = fixture(), before = structuredClone(f.context.chat);
+        const options = f.options();
+        options.environment.playPrompt = '要求{{user}}【处理】'; options.environment.playPromptPosition = position;
+        f.modules.regex.getRegexedString = text => text.replace('【处理】', '');
+        const expected = position === 'user-before' ? '要求用户\n\n本次用户小剧场' : '本次用户小剧场\n\n要求用户';
+        let scanned, intercepted;
+        const scan = f.modules.world.getWorldInfoPrompt;
+        f.modules.world.getWorldInfoPrompt = (...args) => { scanned = args[0]; return scan(...args); };
+        f.modules.extensions.runGenerationInterceptors = history => { intercepted = structuredClone(history); return false; };
+        if (continuation) { options.continueMessage = '需要续写的正文'; options.continueExtra = {}; }
+        const request = await f.prepare(options); await request.send({ signal: new AbortController().signal });
+        const messages = f.requests[0].payload.messages;
+        assert.equal(messages.filter(message => message.role === 'user' && message.content === expected).length, 1);
+        assert.equal(messages.filter(message => message.content.includes('要求用户')).length, 1, '同一要求只出现一次');
+        assert.equal(f.assemblies[0].leadingSystemPrompt, '', '用户消息内的要求按消息长度计算，不另行预留系统提示词长度');
+        assert.equal(intercepted.findLast(message => message.is_user).mes, expected);
+        assert.ok(scanned.includes('用户: ' + expected), '拼接完成的用户消息进入原有世界书扫描');
+        assert.deepEqual(f.context.chat, before, '主聊天原文保持原样');
+    });
+    test(`用户消息位置=${position}，留空时不拼接分隔符`, async () => {
+        const f = fixture(), options = f.options();
+        options.environment.playPrompt = ''; options.environment.playPromptPosition = position;
+        const request = await f.prepare(options); await request.send({ signal: new AbortController().signal });
+        assert.equal(f.requests[0].payload.messages.at(-1).content, '本次用户小剧场');
+        assert.equal(f.assemblies[0].leadingSystemPrompt, '');
+    });
+}
+
 test('续写正文和思维链使用 -1 深度；不加入较早思维链，也不改原文占位符', async () => {
     const f = fixture(), calls = [];
     f.context.powerUserSettings.reasoning = { add_to_prompts: true, max_additions: 10,

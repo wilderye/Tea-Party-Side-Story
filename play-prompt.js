@@ -211,7 +211,9 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
     const continuation = environment.continuation ?? readPlayContinuationSettings({});
     const continuationError = continueMessage && playContinuationError(continuation);
     if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
-    const leadingSystemPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
+    const customPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
+    const promptPosition = environment.playPromptPosition ?? 'start';
+    const leadingSystemPrompt = promptPosition === 'start' ? customPrompt : '';
     const scope = promptScope(core);
     try {
         // Same preparation notification used by independent generators.
@@ -237,7 +239,10 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
             chat.splice(environment.unfinishedMessageId, 1);
         }
         if (chat[0]) chat[0].mes = core.substituteParams(chat[0].mes);
-        chat.push({ name: context.name1, is_user: true, is_system: false, mes: core.substituteParams(prompt), extra: {} });
+        const userPrompt = core.substituteParams(prompt);
+        const userMessage = !customPrompt || promptPosition === 'start' ? userPrompt
+            : (promptPosition === 'user-before' ? [customPrompt, userPrompt] : [userPrompt, customPrompt]).join('\n\n');
+        chat.push({ name: context.name1, is_user: true, is_system: false, mes: userMessage, extra: {} });
         if (continueMessage) {
             chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}) });
         }
@@ -276,7 +281,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
             if (example.position === world.wi_anchor_position.before) examples.unshift(...parsed);
             else examples.push(...parsed);
         }
-        const { promptBias } = core.getBiasStrings(prompt, continueMessage ? 'continue' : 'normal');
+        const { promptBias } = core.getBiasStrings(promptPosition === 'start' ? prompt : userMessage, continueMessage ? 'continue' : 'normal');
         const toolsData = {};
         const { tavern } = environment;
         const multiSwipe = tavern.settings.n > 1 && ['openai', 'azure_openai', 'custom', 'xai', 'aimlapi', 'moonshot'].includes(tavern.settings.chat_completion_source);

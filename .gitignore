@@ -33,6 +33,8 @@ tests/*
 !tests/diagnostics.test.js
 !tests/play-request.test.js
 !tests/play-runtime.test.js
+!tests/play-settings.test.js
+!tests/play-prompt-settings.browser.cjs
 !tests/play-prompt.test.js
 !tests/play-preset.test.js
 !tests/play-fixture.js

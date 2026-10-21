@@ -1,5 +1,5 @@
 import { element, iconButton, textButton } from './ui.js';
-import { readPlaySettings, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
+import { readPlaySettings, readPlayPromptSettings, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
 import { fetchCustomApiModels } from './play-request.js';
 
 export function createPlayApiSettings(ctx, settings, saveSettings, diagnostics) {
@@ -96,8 +96,127 @@ function textSetting(area, settings, saveSettings, key, name, value, note) {
 }
 
 export function renderPlayPromptSetting(area, settings, saveSettings) {
-    textSetting(area, settings, saveSettings, 'playPrompt', '自定义小剧场提示词', readPlaySettings(settings).prompt,
-        '放在全部提示词最前面，留空不添加。');
+    const section = element('section', undefined, 'play-prompt-settings');
+    const heading = element('div', undefined, 'play-prompt-heading');
+    const add = iconButton('plus', '新增提示词', () => openDialog('add'));
+    heading.append(element('strong', '自定义小剧场提示词'), add);
+    const controls = element('div', undefined, 'play-prompt-controls'), select = element('select');
+    select.setAttribute('aria-label', '自定义小剧场提示词');
+    const selected = () => {
+        const config = readPlayPromptSettings(settings);
+        return config.presets.find(preset => preset.id === config.selectedId);
+    };
+    const rename = iconButton('edit', '修改提示词名称', () => openDialog('rename', selected()));
+    controls.append(select, rename);
+    const contentField = element('label', '提示词内容', 'tea-field play-prompt-content-field'), content = element('textarea');
+    content.rows = 3; content.spellcheck = false; content.setAttribute('aria-label', '小剧场提示词内容');
+    content.placeholder = '填写要发送给 AI 的提示词。'; contentField.append(content);
+    const note = element('div', undefined, 'play-prompt-note');
+    const remove = textButton('删除提示词', () => openDialog('delete', selected())); remove.className = 'play-prompt-delete';
+    note.append(element('small', '内容修改后自动保存；留空时不添加。', 'tea-setting-description'), remove);
+    const positionField = element('label', undefined, 'tea-setting-row play-prompt-position'), position = element('select');
+    positionField.append(element('strong', '提示词插入位置'));
+    position.setAttribute('aria-label', '提示词插入位置');
+    for (const [value, name] of [['start', '全部提示词前'], ['user-before', '最新用户消息前'], ['user-after', '最新用户消息后']]) {
+        const option = element('option', name); option.value = value; position.append(option);
+    }
+    positionField.append(position);
+    const description = element('p', '', 'tea-setting-description');
+    section.append(heading, controls, contentField, note, positionField, description); area.append(section);
+
+    function save(config) {
+        settings.playPromptConfig = config;
+        // The old textarea value is migrated once; only the presets remain authoritative.
+        delete settings.playPrompt;
+        saveSettings();
+    }
+    function resizeContent() {
+        const scrollTop = content.scrollTop;
+        content.style.height = 'auto'; content.style.height = `${content.scrollHeight}px`;
+        content.scrollTop = scrollTop;
+    }
+    function update() {
+        const config = readPlayPromptSettings(settings);
+        select.replaceChildren();
+        for (const preset of config.presets) {
+            const option = element('option', preset.name); option.value = preset.id; select.append(option);
+        }
+        select.value = config.selectedId; position.value = config.position;
+        content.value = selected().content; resizeContent(); requestAnimationFrame(resizeContent);
+        remove.hidden = ['default', 'recommended'].includes(config.selectedId);
+        description.textContent = config.position === 'start'
+            ? '将上面的内容放在发给 AI 的全部提示词最前面。'
+            : config.position === 'user-before'
+                ? '在本次小剧场用户消息中，先放上面的内容，空一行，再放你输入的小剧场。'
+                : '在本次小剧场用户消息中，先放你输入的小剧场，空一行，再放上面的内容。';
+    }
+    select.addEventListener('change', () => { save({ ...readPlayPromptSettings(settings), selectedId: select.value }); update(); });
+    position.addEventListener('change', () => { save({ ...readPlayPromptSettings(settings), position: position.value }); update(); });
+    content.addEventListener('input', () => {
+        const config = readPlayPromptSettings(settings);
+        save({ ...config, presets: config.presets.map(preset => preset.id === config.selectedId ? { ...preset, content: content.value } : preset) });
+        resizeContent();
+    });
+
+    function openDialog(mode, preset) {
+        const adding = mode === 'add', deleting = mode === 'delete';
+        const title = adding ? '新增提示词' : deleting ? '删除提示词' : '修改名称';
+        const dialog = element('dialog', undefined, `play-prompt-editor${adding ? '' : ' play-prompt-compact'}`);
+        if (mode === 'rename') dialog.classList.add('play-prompt-rename');
+        dialog.setAttribute('aria-label', title);
+        const form = element('form', undefined, 'play-prompt-editor-form');
+        form.noValidate = true;
+        const header = element('header', undefined, 'play-prompt-editor-header');
+        const close = () => dialog.close();
+        header.append(element('h3', title), iconButton('close', '关闭提示词弹窗', close));
+        const fields = element('div', undefined, 'play-prompt-editor-fields');
+        const nameField = element('label', adding ? '小剧场提示词名称' : undefined, 'tea-field'), name = element('input');
+        name.type = 'text'; name.value = preset?.name ?? ''; name.required = true; name.maxLength = 100;
+        if (adding) name.placeholder = '例如：完整故事';
+        name.setAttribute('aria-label', '小剧场提示词名称');
+        nameField.append(name);
+        const draftContent = element('textarea');
+        if (deleting) fields.append(element('p', `确定删除「${preset.name}」？删除后将选中“默认提示词”。`, 'play-prompt-delete-message'));
+        else fields.append(nameField);
+        if (adding) {
+            const draftField = element('label', '内容', 'tea-field play-prompt-draft');
+            draftContent.spellcheck = false; draftContent.rows = 10;
+            draftContent.placeholder = '填写要发送给 AI 的提示词；留空时不添加。'; draftContent.setAttribute('aria-label', '内容');
+            draftField.append(draftContent); fields.append(draftField);
+        }
+        const footer = element('footer', undefined, 'play-prompt-editor-footer');
+        const error = element('p', '', 'tea-setting-description play-prompt-editor-error'); error.hidden = true; error.setAttribute('role', 'alert');
+        fields.append(error);
+        const actions = element('div', undefined, 'tea-actions');
+        const cancel = textButton('取消', close); cancel.className = 'play-prompt-cancel';
+        const submit = element('button', deleting ? '确认删除' : '保存', 'play-prompt-save'); submit.type = 'submit';
+        actions.append(cancel, submit); footer.append(actions);
+        form.append(header, fields, footer); dialog.append(form); section.append(dialog);
+        dialog.addEventListener('cancel', event => { event.preventDefault(); event.stopPropagation(); close(); });
+        dialog.addEventListener('keydown', event => { if (event.key === 'Escape') event.stopPropagation(); });
+        dialog.addEventListener('close', () => {
+            dialog.remove(); (adding ? add : deleting ? select : rename).focus({ preventScroll: true });
+        });
+        name.addEventListener('input', () => { name.removeAttribute('aria-invalid'); error.hidden = true; });
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            if (deleting) {
+                const config = readPlayPromptSettings(settings);
+                save({ ...config, presets: config.presets.filter(entry => entry.id !== preset.id), selectedId: 'default' });
+                update(); close(); return;
+            }
+            const config = readPlayPromptSettings(settings), title = name.value.trim();
+            const message = !title ? '请填写小剧场提示词名称。'
+                : config.presets.some(entry => entry.id !== preset?.id && entry.name === title) ? '已有同名提示词，请换一个名称。' : '';
+            if (message) { error.textContent = message; error.hidden = false; name.setAttribute('aria-invalid', 'true'); name.focus(); return; }
+            const id = preset?.id ?? `custom-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+            const entry = { id, name: title, content: adding ? draftContent.value : config.presets.find(item => item.id === id).content };
+            save({ ...config, presets: preset ? config.presets.map(item => item.id === id ? entry : item) : [...config.presets, entry], selectedId: id });
+            update(); close();
+        });
+        dialog.showModal(); (deleting ? cancel : name).focus({ preventScroll: true });
+    }
+    update();
 }
 
 export function renderPlayContinuationSettings(area, settings, saveSettings) {

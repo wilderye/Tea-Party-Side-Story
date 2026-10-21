@@ -25,13 +25,15 @@ export function capturePlayEnvironment(context, settings) {
     if (!['tavern', 'custom'].includes(api.mode)) throw new PlaygroundError('invalid_api_mode', '游玩的 API 选择不正确');
     const streaming = context.streamingProcessor;
     const unfinished = streaming && !streaming.isFinished ? streaming.messageId : -1;
+    const playSettings = readPlaySettings(settings);
     try {
         return structuredClone({
             ...target,
             context: { chatId: target.chatId, characterName: target.character.name, apiMode: api.mode,
                 presetName: String(context.chatCompletionSettings?.preset_settings ?? '') },
             api,
-            playPrompt: readPlaySettings(settings).prompt,
+            playPrompt: playSettings.prompt,
+            playPromptPosition: playSettings.promptPosition,
             continuation: readPlayContinuationSettings(settings),
             tavern: {
                 settings: context.chatCompletionSettings,

@@ -54,6 +54,19 @@ test('续写方式与提示词随请求捕获，切换设置只影响下一次�
     assert.deepEqual(capturePlayEnvironment(ctx, settings).continuation, { mode: 'history', prompt: '第一种' });
 });
 
+test('选中的小剧场提示词及位置随请求捕获，后来编辑只影响下一次发送', () => {
+    const settings = { playPromptConfig: { presets: [
+        { id: 'default', name: '默认提示词', content: '旧默认' },
+        { id: 'recommended', name: '推荐提示词', content: '旧推荐' },
+    ], selectedId: 'recommended', position: 'user-before' } };
+    const ctx = context(), environment = capturePlayEnvironment(ctx, settings);
+    settings.playPromptConfig.presets[1].content = '新推荐';
+    settings.playPromptConfig.selectedId = 'default'; settings.playPromptConfig.position = 'user-after';
+    assert.equal(environment.playPrompt, '旧推荐'); assert.equal(environment.playPromptPosition, 'user-before');
+    const next = capturePlayEnvironment(ctx, settings);
+    assert.equal(next.playPrompt, '旧默认'); assert.equal(next.playPromptPosition, 'user-after');
+});
+
 test('当前角色和接口范围明确；无关的扩展回调不会阻止生成', () => {
     assert.throws(() => readPlayTarget({ ...context(), characters: [] }), /打开一个角色/);
     assert.throws(() => readPlayTarget({ ...context(), groupId: 'group-a' }), /群聊尚未接入/);

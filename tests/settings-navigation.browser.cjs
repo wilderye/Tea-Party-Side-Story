@@ -37,7 +37,7 @@ async function verifyDesktop(page, viewport) {
     const positions = async () => ({ settings: await settingsButton.boundingBox(), close: await button('关闭面板').boundingBox() });
     const settingsState = () => settings.evaluate(node => ({
         scroll: node.scrollTop,
-        prompt: node.querySelector('[aria-label="自定义小剧场提示词"]').value,
+        prompt: fixture.settings.playPromptConfig.presets.find(preset => preset.id === node.querySelector('[aria-label="自定义小剧场提示词"]').value).content,
         rulesOpen: node.querySelector('.play-regex-list').open,
     }));
     const expectSettings = async saved => {
@@ -53,7 +53,7 @@ async function verifyDesktop(page, viewport) {
     assert.deepEqual(await positions(), before, '进入设置后，设置按钮和关闭按钮不移动');
     assert.deepEqual(await panel.locator('.tea-tabs:visible button').allTextContents(), ['茶会选集', '亲笔手稿', '我的收藏', '剧场演出']);
     assert.equal(await panel.locator('.tea-view-title > button').count(), 0, '电脑设置标题不再显示返回箭头');
-    await settings.getByRole('textbox', { name: '自定义小剧场提示词', exact: true }).fill('保留正在调整的设置。');
+    await settings.getByRole('textbox', { name: '小剧场提示词内容', exact: true }).fill('保留正在调整的设置。');
     await settings.locator('.play-regex-list > summary').click();
     await settings.getByRole('checkbox', { name: '全局替换', exact: true }).waitFor();
     await settings.evaluate(node => { node.scrollTop = 300; });

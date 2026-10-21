@@ -482,13 +482,14 @@ if (require.main === module) (async()=>{
    };
    const closeSettings=async settingsPage=>{await settingsPage.getByRole('button',{name:viewport.width<=760?'返回剧场演出':'设置',exact:true}).click();};
    let dialog=await openSettings();
-   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观']);
+   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','小剧场续写','回复显示','阅读外观']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
    assert.equal(await dialog.getByRole('textbox',{name:'隐藏标签'}).inputValue(),'think,thinking,update,status');
    assert.ok(await dialog.getByRole('textbox',{name:'隐藏标签'}).evaluate(node=>node.clientHeight<60),'默认隐藏名单使用紧凑的一行');
    assert.deepEqual(await dialog.getByRole('combobox',{name:'正文字号'}).locator('option').allTextContents(),Array.from({length:11},(_,i)=>String(12+i*2)));
    assert.ok(await dialog.getByRole('combobox',{name:'正文字号'}).locator('..').locator('strong').evaluate(node=>Number(getComputedStyle(node).fontWeight)>=600),'正文字号名称与其他设置一样加粗');
-   assert.equal(await dialog.getByRole('textbox',{name:'自定义小剧场提示词'}).inputValue(),'本次仅输出小剧场，不生成任何状态栏或待办等附加内容。');
+   assert.equal(await dialog.getByRole('combobox',{name:'自定义小剧场提示词'}).inputValue(),'default');
+   assert.equal(await dialog.getByRole('textbox',{name:'小剧场提示词内容',exact:true}).inputValue(),'本次仅输出小剧场，不生成任何状态栏或待办等附加内容。');
    assert.equal(await dialog.locator('details').evaluate(node=>node.open),false);
    await screenshot(page,`processing-settings-defaults-${viewport.width}.png`);
    await dialog.getByRole('textbox',{name:'隐藏标签'}).fill('think，thinking,\n\nupdate');
@@ -671,13 +672,14 @@ if (require.main === module) (async()=>{
    await panel.getByText('酒馆正则读取失败，请在设置中刷新正则列表后重试。',{exact:true}).waitFor();
    await page.evaluate(()=>window.failRegex=false);
 
-   dialog=await openSettings();await dialog.getByRole('textbox',{name:'自定义小剧场提示词'}).fill('');
+   dialog=await openSettings();await dialog.getByRole('textbox',{name:'小剧场提示词内容',exact:true}).fill('');
    await dialog.getByRole('textbox',{name:'隐藏标签'}).fill('');await closeSettings(dialog);
    await page.reload();await page.waitForFunction(()=>window.ready);
    await page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
    await panel.getByRole('button',{name:'剧场演出',exact:true}).click();
    dialog=await openSettings();assert.equal(await dialog.getByRole('textbox',{name:'隐藏标签'}).inputValue(),'');
-   assert.equal(await dialog.getByRole('textbox',{name:'自定义小剧场提示词'}).inputValue(),'');await closeSettings(dialog);
+   assert.equal(await dialog.getByRole('textbox',{name:'小剧场提示词内容',exact:true}).inputValue(),'');
+   await closeSettings(dialog);
    await verifyEntryFill(page);
    await verifyPromptEdit(page,viewport,openSettings,closeSettings);
    await verifyUnsavedPromptEdit(page,viewport);

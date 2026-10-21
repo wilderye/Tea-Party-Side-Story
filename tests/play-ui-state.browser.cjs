@@ -111,7 +111,7 @@ async function verifySettingsRefresh(page, viewport) {
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('茶会选集').click();
     await button('设置').click();
-    const input = panel.getByRole('textbox', { name: '自定义小剧场提示词', exact: true });
+    const input = panel.getByRole('textbox', { name: '小剧场提示词内容', exact: true });
     await input.fill('正在编辑的小剧场要求。\n'.repeat(20));
     await input.focus();
     const saved = await input.evaluate(node => {
