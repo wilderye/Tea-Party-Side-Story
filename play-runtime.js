@@ -49,14 +49,15 @@ export function capturePlayEnvironment(context, settings) {
                 context.symbols?.ignore && message.extra?.[context.symbols.ignore] ? [index] : []),
             characterId: context.characterId,
         });
-    } catch {
-        throw new PlaygroundError('context_not_copyable', '本次聊天内容无法读取，请重新打开聊天后再试。');
+    } catch (cause) {
+        throw new PlaygroundError('context_not_copyable', '本次聊天内容无法读取，请重新打开聊天后再试。', { cause });
     }
 }
 
 /** Wire native prompt preparation, independent storage and chat identity. */
-export function createPlayRuntime(ctx, settings, history = createBrowserPlayHistory(ctx), { prepareRequest = createNativePlayPreparer(ctx), loadRegex,
+export function createPlayRuntime(ctx, settings, history, { prepareRequest = createNativePlayPreparer(ctx), loadRegex,
     loadPersona = () => import('/scripts/personas.js'), onError = () => {}, diagnostics } = {}) {
+    history ??= createBrowserPlayHistory(ctx, diagnostics);
     const playground = createPlayground({ history, prepareRequest, diagnostics, enabled: () => settings.enabled !== false,
         uuid: () => ctx().uuidv4(),
         captureEnvironment: () => {

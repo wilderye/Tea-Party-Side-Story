@@ -104,7 +104,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             ctx().accountStorage?.setItem(storageKey, JSON.stringify({ format: 1,
                 positions: [...positions], selections: [...selections], drafts: [...drafts] }));
         } catch (error) {
-            if (!storageFailed) diagnostics?.error('保存剧场草稿和阅读位置', error);
+            diagnostics?.error('保存剧场草稿和阅读位置', error);
             storageFailed = true;
         }
     }

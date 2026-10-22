@@ -5,7 +5,8 @@ import { setTimeout as delay, setImmediate as nextTurn } from 'node:timers/promi
 import { createPlayground } from '../playground.js';
 import { PLAY_HISTORY_INDEX } from '../play-history.js';
 import { createDiagnostics } from '../diagnostics.js';
-import { memoryFiles, characterA, characterB, contextA, deferred, time } from './play-fixture.js';
+import { createPreparedPlayRequest } from '../play-request.js';
+import { memoryFiles, characterA, characterB, contextA, deferred, time, mockPlayContext, streamResponse, testStreaming } from './play-fixture.js';
 
 test('编辑用户消息不请求模型，其他角色也能修改，后续生成使用保存后的提示词', async () => {
     const f = fixture(), first = await f.service.send({ prompt: '原来的用户消息' });
@@ -222,6 +223,24 @@ test('插件日志记录请求阶段和完整错误，不附带提示词、回�
     assert.ok(log.requestStartedAt); assert.ok(log.firstContentAt); assert.ok(log.lastContentAt);
     assert.equal(log.error.message, 'socket hang up'); assert.equal(log.error.cause.message, '连接重置');
     assert.doesNotMatch(diagnostics.export(), /secret-key|不应进入诊断的回复|不应进入诊断的提示词/);
+});
+
+test('真实读取流内错误后保留片段并保存为失败，错误原文和接口详情进入日志', async t => {
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const ctx = mockPlayContext(t, async () => streamResponse([
+        { choices: [{ delta: { content: '已经生成的片段' } }] },
+        { error: { message: 'backend stream failed', code: 'upstream_failed', request_id: 'r-30' } }, '[DONE]',
+    ]));
+    const f = fixture({ diagnostics, prepareRequest: async () => createPreparedPlayRequest(ctx,
+        { messages: [{ role: 'user', content: 'private prompt' }], model: 'test-model', chat_completion_source: 'custom', stream: true },
+        { streaming: testStreaming }) });
+    const result = await f.service.send({ prompt: 'private prompt' });
+    assert.equal(result.result.text, '已经生成的片段'); assert.equal(result.result.status, 'failed');
+    assert.equal(result.result.error.message, 'backend stream failed');
+    const stored = await f.restart().getRound(result.roundId);
+    assert.equal(stored.results[0].text, '已经生成的片段'); assert.equal(stored.results[0].status, 'failed');
+    assert.match(diagnostics.export(), /upstream_failed/); assert.match(diagnostics.export(), /r-30/);
+    assert.doesNotMatch(diagnostics.export(), /private prompt|已经生成的片段/);
 });
 
 test('读取和保存演出记录失败留下完整日志，并继续把原错误交给界面处理', async () => {

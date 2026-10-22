@@ -146,3 +146,59 @@ test('捕捉插件自己的意外错误与异步错误，不收集酒馆或其�
     stop(); dispatch('unhandledrejection', { reason: ownError });
     assert.equal(logs.read().entries.length, 2);
 });
+
+test('默认无条数上限，超过一百条后旧错误和普通记录仍保留，刷新后也能读取', () => {
+    const { logs, storage } = fixture();
+    logs.error('最早的错误', new Error('保留最早错误'));
+    for (let i = 0; i < 250; i++) logs.info(`操作 ${i}`);
+    assert.equal(logs.read().entries.length, 251);
+    const loaded = createDiagnostics({ storage });
+    assert.equal(loaded.read().entries.length, 251);
+    assert.match(loaded.export(), /保留最早错误/);
+    assert.match(loaded.export(), /操作 249/);
+});
+
+test('浏览器空间不足时不删除任何旧错误，仍能导出，并记录存储原始错误', () => {
+    const { logs, storage } = fixture();
+    logs.error('旧错误', new Error('旧错误全文'));
+    const saved = storage.getItem('teahouse-diagnostics-v1');
+    storage.setItem = () => { throw new DOMException('browser quota full', 'QuotaExceededError'); };
+    logs.error('新错误', new Error('新错误全文'));
+    assert.equal(storage.getItem('teahouse-diagnostics-v1'), saved);
+    assert.match(logs.read().persistenceError, /导出/);
+    for (const expected of [/旧错误全文/, /新错误全文/, /QuotaExceededError/, /browser quota full/]) assert.match(logs.export(), expected);
+});
+
+test('保留网络错误附带字段、嵌套接口详情和聚合错误，过滤请求与配置容器', () => {
+    const { logs, storage } = fixture();
+    const network = new Error('connect failed');
+    Object.assign(network, { errno: -4078, syscall: 'connect', address: '127.0.0.1', port: 9000 });
+    const error = new AggregateError([network, new Error('second failure')], 'multiple failures');
+    error.detail = { type: 'gateway_error', request_id: 'r-55', retryable: true,
+        metadata: { provider: 'test-provider', config: { api_key: 'private-secret' } } };
+    error.response = { content: 'private reply' }; error.request = { messages: ['private prompt'] };
+    logs.error('请求失败', error);
+    const exported = createDiagnostics({ storage }).export();
+    for (const text of ['connect failed', 'second failure', 'errno: -4078', 'syscall: connect', '127.0.0.1', '9000', 'r-55', 'test-provider']) {
+        assert.ok(exported.includes(text), text);
+    }
+    assert.doesNotMatch(exported, /private-secret|private reply|private prompt/);
+});
+
+test('JSON 解析错误保留类型和调用位置，隐藏浏览器自动附带的原文片段', () => {
+    const { logs } = fixture();
+    try { JSON.parse('private reply text that must not be logged'); }
+    catch (error) { logs.error('解析回复', error); }
+    assert.match(logs.export(), /SyntaxError/); assert.match(logs.export(), /diagnostics.test.js/);
+    assert.doesNotMatch(logs.export(), /private reply/);
+});
+
+test('相同错误被多处引用时保留每处信息，不误判为循环引用', () => {
+    const { logs } = fixture();
+    const cause = new Error('same underlying failure');
+    const error = new AggregateError([cause, cause], 'request failures', { cause });
+    logs.error('请求失败', error);
+    const saved = logs.read().entries[0].error;
+    assert.equal(saved.errors[0].stack, cause.stack); assert.equal(saved.errors[1].stack, cause.stack);
+    assert.equal(saved.cause.stack, cause.stack); assert.doesNotMatch(logs.export(), /循环引用/);
+});

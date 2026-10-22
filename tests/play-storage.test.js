@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createBrowserPlayHistory, createPlayFiles } from '../play-storage.js';
 import { memoryFiles, time } from './play-fixture.js';
 import { randomUUID } from 'node:crypto';
+import { createDiagnostics, serializeDiagnosticError } from '../diagnostics.js';
 
 const context = () => ({ uuidv4: randomUUID, getRequestHeaders: () => ({ 'Content-Type': 'application/json' }) });
 function browser(t, SharedWorker, indexedDB) {
@@ -63,17 +64,19 @@ test('保存资格失效后不发送上传或删除请求，读取已有文件�
 
 test('后台任务接收保存后断开，不自动换通道重复提交这次操作', async t => {
     let sent = 0, localAttempts = 0;
+    const original = new Error('worker original failure', { cause: new Error('connection reset') });
     browser(t, class {
         constructor() {
             this.port = { close() {}, postMessage: () => {
                 sent++;
-                queueMicrotask(() => this.onerror({ preventDefault() {} }));
+                queueMicrotask(() => this.onerror({ preventDefault() {}, error: original }));
             } };
             queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
         }
     }, { open() { localAttempts++; throw Error('must not retry here'); } });
     const history = createBrowserPlayHistory(context);
-    await assert.rejects(history.renameCharacter('A.png', 'B.png', '改名'), error => error.code === 'history_worker_unavailable');
+    await assert.rejects(history.renameCharacter('A.png', 'B.png', '改名'), error =>
+        error.code === 'history_worker_unavailable' && error.cause === original);
     assert.equal(sent, 1); assert.equal(localAttempts, 0);
 });
 
@@ -111,4 +114,40 @@ test('取消通过编号通知后台，尚未收到后台确认前不丢弃可�
     assert.equal(settled, false);
     worker.port.onmessage({ data: { id: messages[0].id, value: { id: 'already-saved' } } });
     assert.deepEqual(await pending, { id: 'already-saved' });
+});
+
+test('后台保存错误完整传回调用页面，保留原堆栈、原因和网络错误字段', async t => {
+    const original = new Error('upload failed', { cause: new Error('connection reset') });
+    original.status = 507; original.errno = -1;
+    original.request = { messages: ['private prompt'], key: 'private-key' };
+    const detail = serializeDiagnosticError(original);
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: ({ id }) => queueMicrotask(() => this.port.onmessage({ data: { id, error: detail } })) };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    const history = createBrowserPlayHistory(context);
+    await assert.rejects(history.renameCharacter('A.png', 'B.png', '改名'), error => {
+        assert.equal(error.message, original.message); assert.equal(error.stack, original.stack);
+        assert.equal(error.status, 507); assert.equal(error.errno, -1);
+        assert.equal(error.cause.message, 'connection reset'); assert.equal(error.request, undefined);
+        return true;
+    });
+});
+
+test('后台清理失败仍记录完整警告，不把已成功的保存改成失败', async t => {
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: ({ id }) => queueMicrotask(() => {
+                this.port.onmessage({ data: { warning: { operation: '清理旧文件', error: serializeDiagnosticError(new Error('unlink failed')) } } });
+                this.port.onmessage({ data: { id, value: 'saved' } });
+            }) };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    assert.equal(await createBrowserPlayHistory(context, diagnostics).renameCharacter('A.png', 'B.png', '改名'), 'saved');
+    assert.match(diagnostics.export(), /unlink failed/);
+    assert.equal(diagnostics.read().entries[0].level, 'warn');
 });

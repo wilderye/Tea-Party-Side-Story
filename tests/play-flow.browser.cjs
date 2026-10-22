@@ -26,7 +26,7 @@ window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{prepareRequ
 window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml);
 document.getElementById('render').onclick=()=>window.renderText('<!doctype html><html><head><style>body{min-height:100vh}</style></head><body><p>网页回复正文</p><button id="expand">展开更多</button><div id="more"></div><script>document.getElementById("expand").onclick=()=>{document.getElementById("more").innerHTML="<p>更多内容</p>".repeat(40)};<'+ '/script></body></html>');
 </script>`;
-const allowed = new Set(['style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js',
+const allowed = new Set(['style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
   'play-storage-worker.js', 'play-storage-lock.js', 'play-prompt.js', 'play-preparation.js', 'play-preset.js', 'play-parameters.js', 'play-request.js',
   'play-render.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
 const server = http.createServer(async (request, response) => {

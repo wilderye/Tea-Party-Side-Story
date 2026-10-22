@@ -12,7 +12,7 @@ const assert = (condition, message = '演出记录文件格式不正确，未覆
 };
 
 export class PlayHistoryError extends Error {
-    constructor(code, message) { super(message); this.name = 'PlayHistoryError'; this.code = code; }
+    constructor(code, message, options) { super(message, options); this.name = 'PlayHistoryError'; this.code = code; }
 }
 
 export function playRoundFile(id, revision) {
@@ -150,7 +150,7 @@ function randomId() {
 }
 
 /** readFile returns null only for HTTP 404. Other read failures must throw. */
-export function createPlayHistory({ readFile, writeFile, removeFile, withLock = run => run(), uuid = randomId }) {
+export function createPlayHistory({ readFile, writeFile, removeFile, withLock = run => run(), uuid = randomId, onWarning = () => {} }) {
     let queue = Promise.resolve();
     const serialize = (run, signal) => {
         signal?.throwIfAborted();
@@ -179,7 +179,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         try { return readPlayIndex(JSON.parse(text)); }
         catch (error) {
             if (error instanceof PlayHistoryError) throw error;
-            throw new PlayHistoryError('invalid_history', '演出记录目录无法解析，未覆盖原文件');
+            throw new PlayHistoryError('invalid_history', '演出记录目录无法解析，未覆盖原文件', { cause: error });
         }
     }
     async function readRoundFromRow(row, retry = true) {
@@ -194,7 +194,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         if (text === null) throw new PlayHistoryError('round_missing', '这轮演出记录的正文文件缺失，未覆盖原文件');
         let round;
         try { round = readPlayRound(JSON.parse(text)); }
-        catch { throw new PlayHistoryError('invalid_history', '这轮演出记录无法解析，未覆盖原文件'); }
+        catch (cause) { throw new PlayHistoryError('invalid_history', '这轮演出记录无法解析，未覆盖原文件', { cause }); }
         assert(round.id === row.id && round.characterId === row.characterId && round.createdAt === row.createdAt);
         return round;
     }
@@ -208,7 +208,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         if (text === null) throw new PlayHistoryError('favorite_missing', '这份收藏的正文文件缺失，未覆盖原文件');
         let favorite;
         try { favorite = readFavorite(JSON.parse(text)); }
-        catch { throw new PlayHistoryError('invalid_favorite', '这份收藏无法解析，未覆盖原文件'); }
+        catch (cause) { throw new PlayHistoryError('invalid_favorite', '这份收藏无法解析，未覆盖原文件', { cause }); }
         assert(JSON.stringify(readFavoriteInfo(favorite)) === JSON.stringify(readFavoriteInfo(row)));
         return { ...favorite, revision: row.revision };
     }
@@ -219,8 +219,13 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             // A dropped response does not prove the server failed to save.
             // Confirm the exact directory before reporting an unsaved result.
             let saved;
-            try { saved = await readFile(PLAY_HISTORY_INDEX); } catch { /* retain the original failure */ }
+            try { saved = await readFile(PLAY_HISTORY_INDEX); }
+            catch (verificationError) {
+                if (error && typeof error === 'object') error.verificationError = verificationError;
+                else onWarning('核实演出目录是否保存', verificationError);
+            }
             if (saved !== text) throw error;
+            onWarning('保存演出目录时连接报错，已核实文件保存成功', error);
         }
     }
     async function commitDocument(directory, rows, document, fileName, info) {
@@ -233,7 +238,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         // Cleanup is not part of the save transaction. Never remove a revision
         // whose directory commit was not acknowledged or verified.
         if (previous && removeFile) {
-            try { await removeFile(fileName(previous.id, previous.revision)); } catch { /* harmless old copy */ }
+            try { await removeFile(fileName(previous.id, previous.revision)); }
+            catch (error) { onWarning('清理演出记录的旧文件', error); }
         }
         return row;
     }
@@ -251,7 +257,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         directory.rounds = directory.rounds.filter(item => item !== previous);
         await writeIndex(directory);
         if (removeFile) {
-            try { await removeFile(playRoundFile(previous.id, previous.revision)); } catch { /* harmless old copy */ }
+            try { await removeFile(playRoundFile(previous.id, previous.revision)); }
+            catch (error) { onWarning('清理已删除演出的旧文件', error); }
         }
         return null;
     }
@@ -339,7 +346,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 directory.favorites = directory.favorites.filter(item => item !== previous);
                 await writeIndex(directory);
                 if (removeFile) {
-                    try { await removeFile(playFavoriteFile(previous.id, previous.revision)); } catch { /* harmless old copy */ }
+                    try { await removeFile(playFavoriteFile(previous.id, previous.revision)); }
+                    catch (error) { onWarning('清理已取消收藏的旧文件', error); }
                 }
             });
         },

@@ -4,6 +4,9 @@ const fields = new Set(['phase', 'apiMode', 'source', 'model', 'stream', 'endpoi
     'count', 'file', 'line', 'column']);
 const statusNames = { complete: '已完成', failed: '失败', stopped: '已停止', 'save-failed': '保存失败' };
 const phaseNames = { preparing: '准备提示词', generating: '已发出生成请求', saving: '保存回复' };
+// Error objects sometimes carry an entire request or host configuration. Keep
+// diagnostic properties, but never copy those containers into a log.
+const privateFields = /^(?:(?:request|response)(?:data|body|headers|config|options)?|config|configuration|settings|options|payload|parameters|headers|custom_include_headers|authorization|cookie|set-cookie|messages|prompt|prompts|input|output|content|text|body|chat|reasoning|reasoning_signature|api[-_]?key|key|proxy_password|access_token|refresh_token|password|secret)$/i;
 
 function redactor(secrets = []) {
     const privateValues = secrets.filter(value => typeof value === 'string' && value).sort((a, b) => b.length - a.length);
@@ -13,6 +16,9 @@ function redactor(secrets = []) {
         text = text.replace(/\bBearer\s+[^\s"'<>;,}]+/gi, 'Bearer [已隐藏]');
         text = text.replace(/((?:authorization|cookie|set-cookie)\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n,;}]+)/gi, '$1[已隐藏]');
         text = text.replace(/((?:api[-_ ]?key|proxy_password|access_token|refresh_token)\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)/gi, '$1[已隐藏]');
+        // V8 includes a fragment of the parsed body in some SyntaxErrors.
+        // Keep the error and call sites, but do not log that prompt/reply text.
+        text = text.replace(/(Unexpected token [^\r\n,]+),[\s\S]*?( is not valid JSON)/g, '$1, [解析内容已隐藏]$2');
         return text.replace(/https?:\/\/[^\s"'<>]+/gi, value => {
             try {
                 const url = new URL(value);
@@ -34,25 +40,43 @@ function errorDetails(error, clean, seen = new Set()) {
     if (typeof error !== 'object') return { message: clean(error) };
     if (seen.has(error)) return { message: '[循环引用]' };
     seen.add(error);
-    const result = {};
-    for (const key of ['name', 'message', 'stack', 'code', 'status', 'statusText']) {
-        if (typeof error[key] === 'string') result[key] = clean(error[key]);
-        else if (typeof error[key] === 'number' && Number.isFinite(error[key])) result[key] = error[key];
+    if (Array.isArray(error)) {
+        const items = error.map(item => typeof item === 'string' ? clean(item)
+            : item && typeof item === 'object' ? errorDetails(item, clean, seen) : item);
+        seen.delete(error);
+        return items;
     }
-    if (error.cause !== undefined) result.cause = errorDetails(error.cause, clean, seen);
-    if (error.error !== undefined) result.error = errorDetails(error.error, clean, seen);
+    const result = {};
+    const keys = new Set(['name', 'message', 'stack', ...Object.getOwnPropertyNames(error)]);
+    for (const key of keys) {
+        if (privateFields.test(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) continue;
+        let item;
+        try { item = error[key]; } catch { continue; }
+        if (typeof item === 'string') result[key] = clean(item);
+        else if (item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item))) result[key] = item;
+        else if (typeof item === 'object' && item !== null) result[key] = errorDetails(item, clean, seen);
+    }
+    seen.delete(error);
     return result;
 }
 
+/** Also used when an error crosses the history worker boundary. */
+export function serializeDiagnosticError(error, secrets = []) {
+    return errorDetails(error, redactor(secrets));
+}
+
 function errorText(error) {
+    if (!error || typeof error !== 'object') return String(error);
+    if (Array.isArray(error)) return error.map(errorText).join('\n\n');
     const lines = [];
     if (typeof error.message === 'string' && !error.stack?.includes(error.message)) lines.push(error.message);
     if (typeof error.stack === 'string') lines.push(error.stack);
-    for (const key of ['name', 'code', 'status', 'statusText']) {
+    for (const key of Object.keys(error)) {
+        if (['message', 'stack', 'cause', 'error', 'errors'].includes(key)) continue;
         if (error[key] === undefined || (key === 'name' && error.stack?.startsWith(error.name))) continue;
-        lines.push(`${key}: ${error[key]}`);
+        lines.push(`${key}: ${typeof error[key] === 'object' ? JSON.stringify(error[key], null, 2) : error[key]}`);
     }
-    for (const key of ['cause', 'error']) if (error[key]) lines.push(`${key}:\n${errorText(error[key])}`);
+    for (const key of ['cause', 'error', 'errors']) if (error[key]) lines.push(`${key}:\n${errorText(error[key])}`);
     return lines.length ? lines.join('\n') : JSON.stringify(error);
 }
 
@@ -75,7 +99,7 @@ function metadata(value, clean) {
 }
 
 /** Local diagnostics contain observed events and errors, never request/settings objects. */
-export function createDiagnostics({ storage, limit = 100, now = () => new Date().toISOString(),
+export function createDiagnostics({ storage, limit = Infinity, now = () => new Date().toISOString(),
     uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` } = {}) {
     let entries = [], persistenceError = '', epoch = 0;
     const listeners = new Set();
@@ -91,28 +115,38 @@ export function createDiagnostics({ storage, limit = 100, now = () => new Date()
                     message: clean(item.message ?? item.status ?? ''),
                     ...metadata(item, clean), ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
             }).sort((a, b) => a.at.localeCompare(b.at)).slice(-limit);
-    } catch { persistenceError = '旧日志无法读取；新日志仍可查看和导出。'; }
+    } catch (error) {
+        persistenceError = '旧日志无法读取；新日志仍可查看和导出。';
+        entries.push({ id: uuid(), at: now(), level: 'error', operation: '读取插件日志', error: serializeDiagnosticError(error) });
+    }
     function persist() {
         if (!storage) { persistenceError = '浏览器未提供日志存储；当前日志仍可查看和导出。'; return; }
-        while (true) {
-            try { storage.setItem(STORAGE_KEY, JSON.stringify(entries)); persistenceError = ''; return; }
-            catch (error) {
-                if (error?.name === 'QuotaExceededError' && entries.length > 1) { entries.shift(); continue; }
-                persistenceError = '日志暂时无法保存到浏览器；请在刷新页面前导出。'; return;
-            }
+        try { storage.setItem(STORAGE_KEY, JSON.stringify(entries)); persistenceError = ''; }
+        catch (error) {
+            persistenceError = '日志暂时无法保存到浏览器；当前页面保留完整日志，请在刷新或关闭页面前导出。';
+            entries.push({ id: uuid(), at: now(), level: 'error', operation: '保存插件日志', error: serializeDiagnosticError(error) });
         }
     }
     function changed() {
         persist();
+        let viewerFailed = false;
         for (const listener of listeners) {
-            try { listener(); } catch { /* A log viewer must not interrupt plugin operations. */ }
+            try { listener(); }
+            catch (error) {
+                entries.push({ id: uuid(), at: now(), level: 'error', operation: '更新插件日志显示', error: serializeDiagnosticError(error) });
+                viewerFailed = true;
+            }
         }
+        // Do not notify the broken viewer again and recurse through logging.
+        if (viewerFailed) persist();
     }
     function append(level, operation, values = {}, error, clean = redactor(), message = '') {
         const entry = { id: uuid(), at: now(), level, operation: clean(operation), message: clean(message),
             ...metadata(values, clean),
             ...(error != null ? { error: errorDetails(error, clean) } : {}) };
-        entries.push(entry); entries = entries.slice(-limit); changed();
+        entries.push(entry);
+        if (Number.isFinite(limit)) entries = entries.slice(-limit);
+        changed();
         return entry;
     }
     // Long operations add milestones to the same timeline as ordinary runtime logs.

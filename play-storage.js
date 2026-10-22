@@ -4,7 +4,7 @@ import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js'
 const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply'];
-const workerVersion = 7;
+const workerVersion = 8;
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {
@@ -40,9 +40,9 @@ export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {
 
 // The page fallback and the shared worker use the same HTTP lock and history
 // rules. Reading files never opens the lock database or requires a worker.
-export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistoryLock()) {
+export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistoryLock(), onWarning) {
     let check;
-    return createPlayHistory({ ...createPlayFiles(getHeaders, () => check()), uuid,
+    return createPlayHistory({ ...createPlayFiles(getHeaders, () => check()), uuid, onWarning,
         withLock: (run, signal) => withLock(async assertOwner => {
             check = assertOwner;
             try { return await run(); }
@@ -50,21 +50,23 @@ export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistory
         }, signal) });
 }
 
-export function createBrowserPlayHistory(ctx) {
+export function createBrowserPlayHistory(ctx, diagnostics) {
+    const onWarning = (operation, error) => diagnostics?.warn(operation, error);
     if (globalThis.navigator?.locks?.request) {
-        return createPlayHistory({ ...createPlayFiles(() => ctx().getRequestHeaders()), uuid: () => ctx().uuidv4(),
+        return createPlayHistory({ ...createPlayFiles(() => ctx().getRequestHeaders()), uuid: () => ctx().uuidv4(), onWarning,
             withLock: (run, signal) => navigator.locks.request('teahouse-play-history', { signal }, run) });
     }
-    const local = createHttpPlayHistory(() => ctx().getRequestHeaders(), () => ctx().uuidv4());
+    const local = createHttpPlayHistory(() => ctx().getRequestHeaders(), () => ctx().uuidv4(), undefined, onWarning);
     let worker, connecting, ready, timer, workerUnavailable = typeof SharedWorker !== 'function';
     const pending = new Map();
-    function fail() {
+    function fail(cause = new DOMException('演出记录后台保存未能在 5 秒内连接。', 'TimeoutError')) {
+        onWarning('演出记录后台保存连接中断', cause);
         workerUnavailable = true;
         clearTimeout(timer);
         worker?.port.close(); worker = null;
         ready?.(null); ready = null;
         for (const { reject } of pending.values()) reject(new PlayHistoryError('history_worker_unavailable',
-            '演出记录保存连接已中断，请重试保存。'));
+            '演出记录保存连接已中断，请重试保存。', { cause }));
         pending.clear();
     }
     function connect() {
@@ -77,12 +79,17 @@ export function createBrowserPlayHistory(ctx) {
         try {
             worker = new SharedWorker(new URL(`./play-storage-worker.js?v=${workerVersion}`, import.meta.url),
                 { type: 'module', name: `teahouse-play-history-v${workerVersion}` });
-        } catch { fail(); return connecting; }
+        } catch (error) { fail(error); return connecting; }
         timer = setTimeout(fail, 5000);
-        worker.onerror = event => { event.preventDefault(); fail(); };
-        worker.port.onmessageerror = fail;
+        worker.onerror = event => {
+            event.preventDefault();
+            fail(event.error ?? Object.assign(new Error(event.message || '演出记录后台保存发生错误。'),
+                { file: event.filename, line: event.lineno, column: event.colno }));
+        };
+        worker.port.onmessageerror = () => fail(new Error('演出记录后台保存返回了无法读取的消息。'));
         worker.port.onmessage = ({ data }) => {
             if (workerUnavailable) return;
+            if (data?.warning) { onWarning(data.warning.operation, data.warning.error); return; }
             if (data?.ready === true) {
                 clearTimeout(timer); ready?.(worker.port); ready = null;
                 return;
@@ -90,7 +97,7 @@ export function createBrowserPlayHistory(ctx) {
             const task = pending.get(data?.id);
             if (!task) return;
             pending.delete(data.id);
-            if (data.error) task.reject(new PlayHistoryError(data.error.code, data.error.message));
+            if (data.error) task.reject(Object.assign(new PlayHistoryError(data.error.code ?? 'history_io_failed', data.error.message), data.error));
             else task.resolve(data.value);
         };
         return connecting;
@@ -117,7 +124,7 @@ export function createBrowserPlayHistory(ctx) {
         return new Promise((resolve, reject) => {
             // The worker acknowledges cancellation only before its commit starts.
             // A commit already in progress returns normally and is saved as stopped.
-            const abort = () => { try { port.postMessage({ id, cancel: true }); } catch { fail(); } };
+            const abort = () => { try { port.postMessage({ id, cancel: true }); } catch (error) { fail(error); } };
             const cleanup = () => signal?.removeEventListener('abort', abort);
             pending.set(id, { resolve: value => { cleanup(); resolve(value); }, reject: error => { cleanup(); reject(error); } });
             signal?.addEventListener('abort', abort, { once: true });

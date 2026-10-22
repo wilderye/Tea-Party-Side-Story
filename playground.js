@@ -2,7 +2,7 @@ import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning } 
 import { playContinuationError } from './play-settings.js';
 
 export class PlaygroundError extends Error {
-    constructor(code, message) { super(message); this.name = 'PlaygroundError'; this.code = code; }
+    constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
 }
 
 export const PLAY_GENERATION_UNAVAILABLE = '剧场演出的发送接口尚未连接。';
@@ -103,7 +103,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                     await history.saveResult(job.round.id, job.resultId, { text, ...(extra ? { extra } : {}), status: 'unfinished', finishedAt: null });
                     job.checkpointError = null;
                 } catch (error) {
-                    if (!job.checkpointError) diagnostics?.error('保存生成中的小剧场', error, { phase: 'saving' });
+                    diagnostics?.error('保存生成中的小剧场', error, { phase: 'saving' });
                     job.checkpointError = true;
                     if (isRemovedResult(error)) job.controller.abort(new DOMException('这条消息已在其他窗口删除或替换', 'AbortError'));
                 }

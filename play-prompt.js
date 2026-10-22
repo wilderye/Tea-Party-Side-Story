@@ -15,6 +15,7 @@ async function loadTavernModules() {
         tokenizers: 'scripts/tokenizers.js',
         utils: 'scripts/utils.js',
         reasoning: 'scripts/reasoning.js',
+        sse: 'scripts/sse-stream.js',
     };
     const entries = await Promise.all(Object.entries(paths).map(async ([name, path]) =>
         [name, await import(new URL('../../../../' + path, import.meta.url).href)]));
@@ -319,6 +320,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         return createPreparedPlayRequest(context, payload, {
             prefix: continueMessage || '', continueExtra, continuationReasoning,
             reasoning: modules.reasoning,
+            streaming: { EventSourceStream: modules.sse?.default, getStreamingReply: modules.openai.getStreamingReply },
             showThoughts: environment.tavern.settings.show_thoughts !== false,
             processReasoning: text => {
                 const processed = modules.regex.getRegexedString(text, modules.regex.regex_placement.REASONING);

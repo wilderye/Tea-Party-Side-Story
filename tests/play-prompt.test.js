@@ -1,9 +1,16 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativePlayPreparer } from '../play-prompt.js';
 import { capturePlayEnvironment } from '../play-runtime.js';
 import { DEFAULT_PLAY_PROMPT } from '../play-settings.js';
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import { testStreaming, streamResponse } from './play-fixture.js';
+
+let sendResponse;
+beforeEach(t => t.mock.method(globalThis, 'fetch', (url, options) => {
+    assert.equal(url, '/api/backends/chat-completions/generate');
+    return sendResponse(JSON.parse(options.body), options.signal);
+}));
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -166,13 +173,14 @@ function fixture() {
         chatCompletionSettings: { preset_settings: '当前预设' }, powerUserSettings: {},
         getCurrentChatId() { return this.chatId; }, symbols: { ignore: Symbol.for('ignore') },
         eventSource: source, eventTypes: events,
-        ChatCompletionService: { async sendRequest(payload, extract, signal) {
-            requests.push({ payload, extract, signal });
-            const content = '<UpdateVariable>value=80</UpdateVariable>\n<% 不执行回复 %>';
-            return payload.stream ? async function* () { yield { text: content }; }
-                : { choices: [{ message: { content } }] };
-        } },
+        getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
         extractMessageFromData: data => data.choices[0].message.content,
+    };
+    sendResponse = async (payload, signal) => {
+        requests.push({ payload, signal });
+        const content = '<UpdateVariable>value=80</UpdateVariable>\n<% 不执行回复 %>';
+        return payload.stream ? streamResponse([{ choices: [{ delta: { content } }] }, '[DONE]'])
+            : Response.json({ choices: [{ message: { content } }] });
     };
     const fields = { description: '角色说明', personality: '角色性格', persona: '用户人设', scenario: '场景',
         mesExamples: '角色示例', system: '角色主提示', jailbreak: '角色后置提示', charDepthPrompt: '本次角色备注', creatorNotes: '作者说明' };
@@ -189,6 +197,7 @@ function fixture() {
             getBiasStrings: () => ({ promptBias: '' }),
         },
         openai: {
+            getStreamingReply: testStreaming.getStreamingReply,
             oai_settings: { preset_settings: '当前预设', chat_completion_source: 'openai', openai_model: 'current-model',
                 temp_openai: 0.7, top_p_openai: 0.9, freq_pen_openai: 0, pres_pen_openai: 0, openai_max_context: 34000, openai_max_tokens: 2000, stream_openai: false },
             setOpenAIMessages: history => history.filter(message => !message.extra?.[Symbol.for('ignore')])
@@ -209,6 +218,7 @@ function fixture() {
                     custom_prompt_post_processing: settings.custom_prompt_post_processing } };
             },
         },
+        sse: { default: testStreaming.EventSourceStream },
         world: {
             world_info_include_names: true, wi_anchor_position: { before: 0, after: 1 },
             async getWorldInfoPrompt(chat, max, dryRun, scan) {

@@ -137,7 +137,10 @@ export async function updateLibrary() {
                 try {
                     text = await (await request(`/user/files/${packName(pack)}`, { signal: controller.signal })).text();
                     items = await readPack(text, pack);
-                } catch (error) { if (controller.signal.aborted) throw error; }
+                } catch (error) {
+                    if (controller.signal.aborted) throw error;
+                    diagnostics.warn('读取已下载的茶会选集，改为重新下载', error);
+                }
             }
             if (!items) {
                 text = await (await download(new URL(pack.path, base))).text();
