@@ -147,18 +147,20 @@ test('捕捉插件自己的意外错误与异步错误，不收集酒馆或其�
     assert.equal(logs.read().entries.length, 2);
 });
 
-test('默认无条数上限，超过一百条后旧错误和普通记录仍保留，刷新后也能读取', () => {
+test('默认保留最近五百条，各级日志都按时间先后淘汰，刷新后保持一致', () => {
     const { logs, storage } = fixture();
     logs.error('最早的错误', new Error('保留最早错误'));
-    for (let i = 0; i < 250; i++) logs.info(`操作 ${i}`);
-    assert.equal(logs.read().entries.length, 251);
+    for (let i = 0; i < 505; i++) logs.info(`操作 ${i}`);
+    assert.equal(logs.read().limit, 500);
+    assert.equal(logs.read().entries.length, 500);
     const loaded = createDiagnostics({ storage });
-    assert.equal(loaded.read().entries.length, 251);
-    assert.match(loaded.export(), /保留最早错误/);
-    assert.match(loaded.export(), /操作 249/);
+    assert.equal(loaded.read().entries.length, 500);
+    assert.doesNotMatch(loaded.export(), /保留最早错误/);
+    assert.equal(loaded.read().entries[0].operation, '操作 5');
+    assert.match(loaded.export(), /操作 504/);
 });
 
-test('浏览器空间不足时不删除任何旧错误，仍能导出，并记录存储原始错误', () => {
+test('连一条日志也无法保存时不清空已有日志，仍能导出并记录存储原始错误', () => {
     const { logs, storage } = fixture();
     logs.error('旧错误', new Error('旧错误全文'));
     const saved = storage.getItem('teahouse-diagnostics-v1');
@@ -167,6 +169,61 @@ test('浏览器空间不足时不删除任何旧错误，仍能导出，并记�
     assert.equal(storage.getItem('teahouse-diagnostics-v1'), saved);
     assert.match(logs.read().persistenceError, /导出/);
     for (const expected of [/旧错误全文/, /新错误全文/, /QuotaExceededError/, /browser quota full/]) assert.match(logs.export(), expected);
+});
+
+test('全部是错误和警告时淘汰最早的一条，不截短保留的错误', () => {
+    const { logs, storage } = fixture({ limit: 3 });
+    logs.error('最早错误', new Error('old failure'));
+    logs.warn('警告', new Error('warning details'));
+    logs.error('第二个错误', new Error('second failure'));
+    const error = new Error('latest failure\n' + '完整后续原文\n'.repeat(100));
+    logs.error('最新错误', error);
+    const entries = createDiagnostics({ storage, limit: 3 }).read().entries;
+    assert.deepEqual(entries.map(entry => entry.operation), ['警告', '第二个错误', '最新错误']);
+    assert.equal(entries.at(-1).error.message, error.message); assert.equal(entries.at(-1).error.stack, error.stack);
+});
+
+test('读取旧版未限制条数的日志时同样只保留最新记录，顺序保持不变', () => {
+    const { storage } = fixture();
+    storage.setItem('teahouse-diagnostics-v1', JSON.stringify([
+        { id: 'warning', at: '2026-10-23T00:00:00Z', level: 'warn', error: { message: 'old warning' } },
+        { id: 'ordinary', at: '2026-10-23T00:00:01Z', level: 'info', operation: 'old ordinary' },
+        { id: 'error', at: '2026-10-23T00:00:02Z', level: 'error', error: { message: 'new failure' } },
+        { id: 'latest', at: '2026-10-23T00:00:03Z', level: 'info', operation: 'latest ordinary' },
+    ]));
+    const entries = createDiagnostics({ storage, limit: 3 }).read().entries;
+    assert.deepEqual(entries.map(entry => entry.id), ['ordinary', 'error', 'latest']);
+});
+
+test('浏览器提前存满时按顺序删旧记录后重试，保存后查看和导出与实际存储一致', () => {
+    const { logs, storage } = fixture();
+    logs.error('旧错误', new Error('old failure'));
+    logs.info('旧普通记录'); logs.info('新普通记录');
+    const write = storage.setItem;
+    storage.setItem = (key, text) => {
+        if (JSON.parse(text).length > 2) throw new DOMException('browser quota full', 'QuotaExceededError');
+        write(key, text);
+    };
+    logs.error('新错误', new Error('new failure'));
+    assert.equal(logs.read().persistenceError, '');
+    assert.deepEqual(logs.read().entries.map(entry => entry.operation), ['新普通记录', '新错误']);
+    assert.equal(logs.export(), createDiagnostics({ storage }).export());
+});
+
+test('浏览器只能保存一条错误时保留最新错误全文，普通存储故障不会触发删记录', () => {
+    const { logs, storage } = fixture();
+    logs.error('旧错误', new Error('old failure'));
+    const write = storage.setItem;
+    storage.setItem = (key, text) => {
+        if (JSON.parse(text).length > 1) throw new DOMException('browser quota full', 'QuotaExceededError');
+        write(key, text);
+    };
+    logs.error('新错误', new Error('new failure'));
+    assert.equal(logs.read().entries.length, 1); assert.match(logs.export(), /new failure/);
+    assert.doesNotMatch(logs.export(), /old failure/);
+    storage.setItem = () => { throw new Error('storage disabled'); };
+    logs.error('再一个错误', new Error('another failure'));
+    assert.match(logs.export(), /new failure/); assert.match(logs.export(), /another failure/);
 });
 
 test('保留网络错误附带字段、嵌套接口详情和聚合错误，过滤请求与配置容器', () => {

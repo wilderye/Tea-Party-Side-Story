@@ -99,7 +99,7 @@ function metadata(value, clean) {
 }
 
 /** Local diagnostics contain observed events and errors, never request/settings objects. */
-export function createDiagnostics({ storage, limit = Infinity, now = () => new Date().toISOString(),
+export function createDiagnostics({ storage, limit = 500, now = () => new Date().toISOString(),
     uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` } = {}) {
     let entries = [], persistenceError = '', epoch = 0;
     const listeners = new Set();
@@ -114,17 +114,36 @@ export function createDiagnostics({ storage, limit = Infinity, now = () => new D
                     operation: clean(item.operation ?? ''),
                     message: clean(item.message ?? item.status ?? ''),
                     ...metadata(item, clean), ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
-            }).sort((a, b) => a.at.localeCompare(b.at)).slice(-limit);
+            }).sort((a, b) => a.at.localeCompare(b.at));
     } catch (error) {
         persistenceError = '旧日志无法读取；新日志仍可查看和导出。';
         entries.push({ id: uuid(), at: now(), level: 'error', operation: '读取插件日志', error: serializeDiagnosticError(error) });
     }
+    function trim(items, maximum) {
+        if (items.length > maximum) items.splice(0, items.length - maximum);
+    }
+    trim(entries, limit);
     function persist() {
         if (!storage) { persistenceError = '浏览器未提供日志存储；当前日志仍可查看和导出。'; return; }
-        try { storage.setItem(STORAGE_KEY, JSON.stringify(entries)); persistenceError = ''; }
-        catch (error) {
-            persistenceError = '日志暂时无法保存到浏览器；当前页面保留完整日志，请在刷新或关闭页面前导出。';
-            entries.push({ id: uuid(), at: now(), level: 'error', operation: '保存插件日志', error: serializeDiagnosticError(error) });
+        const candidate = entries.slice();
+        while (true) {
+            try {
+                storage.setItem(STORAGE_KEY, JSON.stringify(candidate));
+                entries = candidate; persistenceError = ''; return;
+            } catch (error) {
+                if (error?.name === 'QuotaExceededError' && candidate.length > 1) {
+                    // Free some headroom with bounded retries, keeping the
+                    // newest entry whole even if one entry alone is too large.
+                    trim(candidate, Math.max(1, Math.floor(candidate.length * 0.9)));
+                    continue;
+                }
+                persistenceError = '日志暂时无法保存到浏览器；请在刷新或关闭页面前导出。';
+                // Only commit evictions after a successful write. Storage may
+                // be unavailable even for one entry; retain the export then.
+                entries.push({ id: uuid(), at: now(), level: 'error', operation: '保存插件日志', error: serializeDiagnosticError(error) });
+                trim(entries, limit);
+                return;
+            }
         }
     }
     function changed() {
@@ -134,6 +153,7 @@ export function createDiagnostics({ storage, limit = Infinity, now = () => new D
             try { listener(); }
             catch (error) {
                 entries.push({ id: uuid(), at: now(), level: 'error', operation: '更新插件日志显示', error: serializeDiagnosticError(error) });
+                trim(entries, limit);
                 viewerFailed = true;
             }
         }
@@ -145,7 +165,7 @@ export function createDiagnostics({ storage, limit = Infinity, now = () => new D
             ...metadata(values, clean),
             ...(error != null ? { error: errorDetails(error, clean) } : {}) };
         entries.push(entry);
-        if (Number.isFinite(limit)) entries = entries.slice(-limit);
+        trim(entries, limit);
         changed();
         return entry;
     }
