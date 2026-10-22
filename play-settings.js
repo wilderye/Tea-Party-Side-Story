@@ -11,7 +11,8 @@ export const DEFAULT_CONTINUE_PROMPTS = {
 
 export function readPlayContinuationSettings(settings) {
     const mode = settings.playContinueMode === 'prompt' ? 'prompt' : 'history';
-    return { mode, prompt: settings.playContinuePrompts?.[mode] ?? DEFAULT_CONTINUE_PROMPTS[mode] };
+    return { mode, prompt: settings.playContinuePrompts?.[mode] ?? DEFAULT_CONTINUE_PROMPTS[mode],
+        sendReasoning: settings.playContinueSendReasoning !== false };
 }
 
 export function playContinuationError(continuation = readPlayContinuationSettings({})) {

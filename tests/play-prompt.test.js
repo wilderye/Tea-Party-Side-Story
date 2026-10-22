@@ -111,6 +111,28 @@ test('添加到提示词关闭或最大值为零时，续写仍发送目标自�
     }
 });
 
+for (const mode of ['history', 'prompt']) for (const sendReasoning of [false, true]) {
+    test(`续写原生思维链开关只改变发送前缀，保留正文 CoT 和已收思维链：方式=${mode}，开关=${sendReasoning}`, async () => {
+        const f = fixture();
+        f.context.powerUserSettings.reasoning = { add_to_prompts: false, max_additions: 0,
+            prefix: '<think>', suffix: '</think>', separator: '\n' };
+        const body = '<thinking>正文 CoT</thinking>\n剧情';
+        const extra = { reasoning: '原生思维链', reasoning_signature: 'synthetic-signature', api: 'openai', model: 'current-model' };
+        const before = structuredClone({ chat: f.context.chat, extra, power: f.context.powerUserSettings });
+        const options = { ...f.options(), continueMessage: body, continueExtra: extra };
+        options.environment.continuation = { mode, prompt: '接着写：{{lastChatMessage}}', sendReasoning };
+        const request = await f.prepare(options), received = [];
+        await request.send({ signal: options.signal, onReasoning: value => received.push(value) });
+        const assembly = f.assemblies.at(-1), prefix = sendReasoning ? '<think>原生思维链</think>\n' : '';
+        assert.equal(assembly.history.at(-1).mes, prefix + body);
+        assert.equal(assembly.cycleReasoning, prefix);
+        assert.equal(assembly.cyclePrompt, body);
+        assert.equal(JSON.stringify(f.requests.at(-1).payload.messages).includes('原生思维链'), sendReasoning);
+        assert.equal(received.at(-1).reasoning, extra.reasoning, '关闭发送不清空流式续写保留的原生思维链');
+        assert.deepEqual({ chat: f.context.chat, extra, power: f.context.powerUserSettings }, before);
+    });
+}
+
 function eventBus() {
     const listeners = new Map();
     const removeListener = (event, listener) => listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener));

@@ -123,18 +123,18 @@ async function formatHistory(modules, chat, environment, isContinue) {
         if (titles.length) text += '\n\n' + titles.join('\n\n');
         return { ...message, mes: text, index };
     }));
-    // Theatre treats "Add to prompts" as off without changing Tavern's
-    // settings. Native continuation still includes the target's own reasoning.
+    // Earlier chat reasoning stays out of theatre prompts. The continuation
+    // switch controls only the target's outbound prefix, not its saved reasoning.
     let continuationReasoning = '', reasoningPrefix = '';
     if (isContinue && prepared.length) {
         const target = prepared.at(-1);
         const text = regexText(String(target.extra?.reasoning ?? ''), regex.regex_placement.REASONING, -1);
-        if (text && text !== '\u200B') {
+        continuationReasoning = text === '\u200B' ? '' : text;
+        if (continuationReasoning && environment.continuation?.sendReasoning !== false) {
             const template = environment.tavern.power.reasoning ?? {};
             const sub = value => modules.core.substituteParams(value || '');
             const opening = `${sub(template.prefix)}${text}`;
             const ending = `${sub(template.suffix)}${sub(template.separator)}`;
-            continuationReasoning = text;
             reasoningPrefix = opening + ending;
             // Match PromptReasoning.addToMessage's incomplete-prefix behavior
             // without constructing its shared main-chat reasoning instance.

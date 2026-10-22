@@ -192,7 +192,7 @@ export async function preparePlayPreset(context, modules, environment, options) 
                 const target = history.splice(lastIndex, 1)[0];
                 if (continuation.mode === 'history') {
                     const message = await messages.create(target.role, substitute(target.content), 'continueAssistant');
-                    if (environment.tavern.reasoningSignatureSupported && target.sameModel && target.extra?.reasoning_signature) message.signature = target.extra.reasoning_signature;
+                    if (continuation.sendReasoning !== false && environment.tavern.reasoningSignatureSupported && target.sameModel && target.extra?.reasoning_signature) message.signature = target.extra.reasoning_signature;
                     continueCollection.add(message);
                 }
             }

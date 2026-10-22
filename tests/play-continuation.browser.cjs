@@ -1,5 +1,5 @@
 // Browser plugin not available. Use the existing Playwright/Edge workflow.
-// Flow: settings -> choose continuation mode -> edit -> validate -> persist -> continue.
+// Flow: settings -> toggle native reasoning -> choose mode -> persist -> continue.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { harness } = require('./play-processing.browser.cjs');
 const http = require('node:http');
@@ -24,6 +24,7 @@ async function verify(page, url, viewport) {
     const panel = page.locator('#teahouse-panel');
     const mode = panel.getByRole('combobox', { name: '续写方式', exact: true });
     const input = panel.getByRole('textbox', { name: '续写提示词', exact: true });
+    const sendReasoning = panel.getByRole('switch', { name: '续写时发回原生思维链', exact: true });
     const error = panel.locator('.play-continue-error');
     const open = async () => {
         await page.waitForFunction(() => window.ready);
@@ -35,6 +36,9 @@ async function verify(page, url, viewport) {
     assert.equal(await mode.inputValue(), 'history');
     assert.match(await input.inputValue(), /^Resume the preceding assistant reply/);
     assert.ok(!(await input.inputValue()).includes('{{lastChatMessage}}'));
+    assert.equal(await sendReasoning.isChecked(), true, '默认保持原有发送行为');
+    await sendReasoning.uncheck();
+    assert.equal(await page.evaluate(() => fixture.settings.playContinueSendReasoning), false);
     await input.fill('第一种的测试指令');
     await mode.selectOption('prompt');
     assert.match(await input.inputValue(), /^Resume the reply provided below/);
@@ -57,6 +61,7 @@ async function verify(page, url, viewport) {
     await mode.selectOption('prompt'); assert.equal(await input.inputValue(), second);
     await page.reload(); await open();
     assert.equal(await mode.inputValue(), 'prompt'); assert.equal(await input.inputValue(), second);
+    assert.equal(await sendReasoning.isChecked(), false, '切换续写方式和刷新后仍保持关闭');
     await mode.selectOption('history'); assert.equal(await input.inputValue(), '第一种的测试指令');
     await mode.selectOption('prompt');
     await page.evaluate(async () => {
@@ -71,7 +76,10 @@ async function verify(page, url, viewport) {
         return { text: result.result.text, continuation: captured.at(-1).continuation, phase: runtime.getState().phase };
     });
     assert.ok(outcome.text.endsWith('测试续写正文'));
-    assert.deepEqual(outcome.continuation, { mode: 'prompt', prompt: second }); assert.equal(outcome.phase, 'idle');
+    assert.deepEqual(outcome.continuation, { mode: 'prompt', prompt: second, sendReasoning: false }); assert.equal(outcome.phase, 'idle');
+    await sendReasoning.check();
+    await page.reload(); await open();
+    assert.equal(await sendReasoning.isChecked(), true, '重新开启后保存设置');
     await input.scrollIntoViewIfNeeded();
     const bounds = await input.evaluate(node => {
         const rect = node.getBoundingClientRect(), section = node.closest('section');
@@ -79,6 +87,13 @@ async function verify(page, url, viewport) {
     });
     assert.ok(bounds.left >= 0 && bounds.right <= viewport.width);
     assert.ok(bounds.scrollWidth <= bounds.width + 1);
+    await sendReasoning.scrollIntoViewIfNeeded();
+    const toggleBounds = await sendReasoning.evaluate(node => {
+        const label = node.closest('label'), rect = label.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: label.clientWidth, scrollWidth: label.scrollWidth };
+    });
+    assert.ok(toggleBounds.left >= 0 && toggleBounds.right <= viewport.width);
+    assert.ok(toggleBounds.scrollWidth <= toggleBounds.width + 1);
     await page.screenshot({ path: path.join(os.tmpdir(), `teahouse-continue-${viewport.width}.png`) });
 }
 
@@ -95,7 +110,7 @@ async function verify(page, url, viewport) {
             try {
                 await verify(page, url, viewport);
                 assert.deepEqual(errors, []);
-                console.log(`PASS continuation ${viewport.width}x${viewport.height}: edit, switch, persist, validate, continue and layout (${url})`);
+                console.log(`PASS continuation ${viewport.width}x${viewport.height}: reasoning toggle, edit, persist, validate, continue and layout (${url})`);
             } finally { await context.close(); }
         }
     } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }

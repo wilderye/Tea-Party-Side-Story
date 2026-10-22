@@ -107,6 +107,24 @@ test('第一种保留连在一起的思维链和处理后正文，系统指令�
     assert.equal(chat.filter(message => message.content.includes('原回复，')).length, 1);
 });
 
+for (const mode of ['history', 'prompt']) test(`关闭原生思维链发送时不带签名，正文 CoT 与占位符保留：方式=${mode}`, async () => {
+    const f = fixture({ chat_completion_source: 'openrouter' });
+    f.environment.continuation = { mode, prompt: '接着写：\n{{lastchatmessage}}', sendReasoning: false };
+    f.environment.tavern.reasoningSignatureSupported = true;
+    const body = '<thinking>正文 CoT</thinking>\n剧情';
+    f.options.cyclePrompt = body;
+    f.options.history.at(-1).mes = body;
+    f.options.history.at(-1).extra = { reasoning: '原生思维链', reasoning_signature: 'synthetic-signature', api: 'openrouter', model: 'test' };
+    const before = structuredClone(f.options.history);
+    const chat = await f.prepare();
+    assert.equal(chat.at(-1).content, '接着写：\n' + body);
+    if (mode === 'history') assert.equal(chat.at(-2).content, body);
+    else assert.equal(chat.filter(message => message.content.includes(body)).length, 1);
+    assert.ok(chat.every(message => !message.signature));
+    assert.doesNotMatch(JSON.stringify(chat), /原生思维链|synthetic-signature/);
+    assert.deepEqual(f.options.history, before, '只控制发送，保留原文与原生思维链');
+});
+
 test('第二种拒绝缺少占位符的提示词，接受大小写不同的占位符', async () => {
     const f = fixture();
     f.environment.continuation = { mode: 'prompt', prompt: '接着写' };

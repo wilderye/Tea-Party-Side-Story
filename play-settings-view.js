@@ -229,13 +229,21 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
     }
     mode.value = readPlayContinuationSettings(settings).mode; row.append(mode);
     const description = element('p', '', 'tea-setting-description');
+    const reasoningRow = element('label', undefined, 'tea-setting-row');
+    const sendReasoning = element('input'); sendReasoning.type = 'checkbox';
+    sendReasoning.setAttribute('role', 'switch'); sendReasoning.setAttribute('aria-label', '续写时发回原生思维链');
+    const reasoningNote = element('p', '开启时随正文发回原生思维链；关闭时只发正文，正文里的 CoT 仍保留。', 'tea-setting-description');
+    reasoningNote.id = 'tea-play-continue-reasoning-description';
+    sendReasoning.setAttribute('aria-describedby', reasoningNote.id);
+    reasoningRow.append(element('strong', '续写时发回原生思维链'), sendReasoning);
+    sendReasoning.addEventListener('change', () => { settings.playContinueSendReasoning = sendReasoning.checked; saveSettings(); });
     const field = element('label', '续写提示词', 'tea-field');
     const input = element('textarea'); input.rows = 5; input.spellcheck = false;
     input.setAttribute('aria-label', '续写提示词');
     const error = element('p', '', 'tea-setting-description play-continue-error');
     error.id = 'tea-play-continue-error'; error.setAttribute('role', 'status');
     input.setAttribute('aria-describedby', error.id);
-    field.append(input); section.append(row, description, field, error); area.append(section);
+    field.append(input); section.append(row, description, reasoningRow, reasoningNote, field, error); area.append(section);
     function validate() {
         const message = playContinuationError(readPlayContinuationSettings(settings));
         error.textContent = message; error.hidden = !message;
@@ -244,6 +252,7 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
     function update() {
         const continuation = readPlayContinuationSettings(settings);
         input.value = continuation.prompt;
+        sendReasoning.checked = continuation.sendReasoning;
         description.textContent = continuation.mode === 'history'
             ? '待续写回复位于聊天历史最底部'
             : '以 {{lastChatMessage}} 形式引用待续写回复，放在续写提示词后面，整体位于提示词最底部';

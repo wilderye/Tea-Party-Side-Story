@@ -46,12 +46,16 @@ test('捕获本次角色、聊天和 API 选择，不提前计算宏、不修改
     assert.equal(env.tavern.power.persona_description, '用户人设');
 });
 
-test('续写方式与提示词随请求捕获，切换设置只影响下一次续写', () => {
+test('续写方式、提示词和原生思维链开关随请求捕获，切换设置只影响下一次续写', () => {
     const ctx = context(), settings = { playContinueMode: 'prompt', playContinuePrompts: { history: '第一种', prompt: '第二种：{{lastChatMessage}}' } };
     const env = capturePlayEnvironment(ctx, settings);
-    settings.playContinueMode = 'history'; settings.playContinuePrompts.prompt = '后来修改';
-    assert.deepEqual(env.continuation, { mode: 'prompt', prompt: '第二种：{{lastChatMessage}}' });
-    assert.deepEqual(capturePlayEnvironment(ctx, settings).continuation, { mode: 'history', prompt: '第一种' });
+    settings.playContinueMode = 'history'; settings.playContinuePrompts.prompt = '后来修改'; settings.playContinueSendReasoning = false;
+    assert.deepEqual(env.continuation, { mode: 'prompt', prompt: '第二种：{{lastChatMessage}}', sendReasoning: true });
+    const disabled = capturePlayEnvironment(ctx, settings);
+    assert.deepEqual(disabled.continuation, { mode: 'history', prompt: '第一种', sendReasoning: false });
+    settings.playContinueSendReasoning = true;
+    assert.equal(disabled.continuation.sendReasoning, false);
+    assert.equal(capturePlayEnvironment(ctx, settings).continuation.sendReasoning, true);
 });
 
 test('选中的小剧场提示词及位置随请求捕获，后来编辑只影响下一次发送', () => {
