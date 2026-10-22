@@ -158,7 +158,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         // Expand only display names; keep the saved prompt and other macros untouched.
         const names = { user: user.name, char: roundCharacter(round).name };
-        const text = round.prompt.replace(/\{\{(user|char)\}\}/gi, (_, macro) => names[macro.toLowerCase()]);
+        const text = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
         if (!view.userEditor && view.promptText !== text) {
             renderPlayText(view.userText, text, `${round.id}/user/text`);
             view.promptText = text;

@@ -158,7 +158,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  await editor.fill('长提示词\n'.repeat(100));
  const editorLimit=viewport.width<=760?(await panel.locator('.play-feed').boundingBox()).height:420;
  assert.ok(await editor.evaluate((node,maxHeight)=>node.scrollHeight>node.clientHeight&&node.clientHeight<=maxHeight,editorLimit),'长消息只在编辑框内滚动');
- const draft='改成清晨。\n\n{{char}} 请听 {{user}} 说话。';await editor.fill(draft);
+ const draft='改成清晨。\n\n{{char}} 请听 {{user}} 说话。\n\n<char> 与 <user>；<CHAR> 与 <USER>。\n\n{{other}} 和 <character> 原样保留。';await editor.fill(draft);
  await closeSettings(await openSettings());
  assert.equal(await editor.inputValue(),draft,'设置返回不覆盖用户消息编辑草稿');
  await screenshot(page,`user-message-editor-${viewport.width}.png`);
@@ -177,6 +177,9 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  assert.equal(await panel.isVisible(),true,'保存用户消息时也不能关闭面板');
  await page.evaluate(()=>{window.holdSave=false;window.resumeSave();});
  await record.locator('.play-user-text').getByText('测试甲 请听 茶客 说话。',{exact:true}).waitFor();
+ await record.locator('.play-user-text').getByText('测试甲 与 茶客；测试甲 与 茶客。',{exact:true}).waitFor();
+ await record.locator('.play-user-text').getByText('{{other}} 和 <character> 原样保留。',{exact:true}).waitFor();
+ await screenshot(page,`prompt-name-display-${viewport.width}.png`);
  assert.equal(await panel.locator('.play-compose').isVisible(),true,'保存用户消息后恢复底部输入区域');
  assert.deepEqual(await page.evaluate(id=>runtime.getRound(id),id),{...original,prompt:draft},'保存只修改提示词，所有回复、归属和时间均保留');
  assert.equal(await input.inputValue(),composer);
