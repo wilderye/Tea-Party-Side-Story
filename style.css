@@ -245,6 +245,12 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings .tea-setting-description { line-height:20px; font-weight:400; }
 #teahouse-panel .tea-settings-group>.tea-setting-row:last-child { border-bottom:0; }
 #teahouse-panel .play-api-settings>.tea-setting-row { border-bottom:0; padding-top:0; }
+#teahouse-panel .tea-settings .tea-update-setting { padding:0 0 12px; }
+#teahouse-panel .tea-settings .tea-update-controls { grid-template-columns:minmax(0,1fr) auto; grid-template-rows:40px 24px; gap:0 12px; }
+#teahouse-panel .tea-settings .tea-update-status:empty { display:none; }
+#teahouse-panel .tea-settings .tea-content-preference { padding:12px 0; border-bottom:0; }
+#teahouse-panel .tea-settings .tea-content-preference .tea-setting-row { padding:0; }
+#teahouse-panel .tea-library-settings>.tea-text-button { margin-top:8px; }
 #teahouse-panel .play-prompt-settings { margin-top:16px; }
 #teahouse-panel .play-prompt-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 #teahouse-panel .play-prompt-heading strong { font-size:15px; }
@@ -697,7 +703,20 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-jump-latest::after { content:''; position:absolute; inset:-4px; border-radius:50%; }
     #teahouse-panel .play-input-row { gap:3px; }
     #teahouse-panel .play-compose-input { padding-right:7px!important; padding-left:8px!important; }
+    #teahouse-panel.tea-play-mode[data-mode=list]:not(.play-choosing-character):has(.play-page.is-message-editing) { container:play-edit / size; }
+    #teahouse-panel .play-page.is-message-editing .play-reading-area { container-type:size; }
+    #teahouse-panel .play-page.is-message-editing .play-jump-latest { display:none; }
+    /* Reserve just the message header and a small gap. Keep the whole input
+       above the keyboard so the caret at the end of long text stays visible. */
+    #teahouse-panel .play-page.is-message-editing .play-edit-form { display:flex; flex-direction:column; height:max(80px,calc(100cqh - 80px - env(safe-area-inset-bottom))); }
+    #teahouse-panel .play-page.is-message-editing .play-edit-form textarea { flex:1; min-height:0; max-height:none; resize:none; }
+    #teahouse-panel .play-page.is-message-editing .play-edit-form>.play-result-error { flex:none; }
+    #teahouse-panel .play-message:has(.play-edit-form)>.play-message-meta { position:sticky; top:0; z-index:3; background:var(--tea-reading-paper,#fdfbf5); }
     #teahouse-panel .tea-settings .tea-field :is(input,textarea) { font-size:16px; }
+    @container play-edit (max-height:560px) {
+        #teahouse-panel.tea-play-mode[data-mode=list]>.play-catalog { display:none; }
+        #teahouse-panel .play-page.is-message-editing .play-reading-area { padding-top:env(safe-area-inset-top); }
+    }
 }
 @media(max-width:355px) {
     #teahouse-panel .play-message-actions { gap:5px; }

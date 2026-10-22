@@ -100,7 +100,7 @@ async function screenshot(page,name) {
 async function verifyEntryFill(page) {
  const panel=page.locator('#teahouse-panel');
  const button=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});
- const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true});
+ const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true,includeHidden:true});
  const requestCount=await page.evaluate(()=>captured.length);
  let body='暂停当前剧情，写一篇雨中的小剧场。\n\n保留 {{char}} 和 {{user}}。';
  await page.evaluate(body=>{
@@ -133,7 +133,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  const id=await record.getAttribute('data-record');
  const original=await page.evaluate(id=>runtime.getRound(id),id),requests=await page.evaluate(()=>captured.length);
  const mainChat=await page.evaluate(()=>structuredClone(ctx.chat));
- const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true});
+ const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true,includeHidden:true});
  const composer='底部尚未发送的草稿';await input.fill(composer);
  const action=name=>record.locator('.play-user-meta').getByRole('button',{name,exact:true});
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
@@ -152,9 +152,12 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  const messageBox=await record.locator('.play-user-message').boundingBox(),editorBox=await editor.boundingBox();
  assert.ok(Math.abs(editorBox.x-messageBox.x)<1&&Math.abs(editorBox.width-messageBox.width)<1,'用户编辑框与消息边缘对齐');
  assert.ok((await action('保存').boundingBox()).y<editorBox.y,'保存和取消图标位于消息顶部');
- assert.ok(editorBox.height<150,'短用户消息沿用回复编辑框的紧凑高度');
+ if(viewport.width<=760)assert.ok(editorBox.height>400,'手机用户编辑框占据大部分可见区域');
+ else assert.ok(editorBox.height<150,'桌面短用户消息沿用回复编辑框的紧凑高度');
+ assert.equal(await panel.locator('.play-compose').isVisible(),viewport.width>760,'手机编辑用户消息时隐藏底部输入区域，桌面保持原布局');
  await editor.fill('长提示词\n'.repeat(100));
- assert.ok(await editor.evaluate(node=>node.scrollHeight>node.clientHeight&&node.clientHeight<=420),'长消息只在编辑框内滚动');
+ const editorLimit=viewport.width<=760?(await panel.locator('.play-feed').boundingBox()).height:420;
+ assert.ok(await editor.evaluate((node,maxHeight)=>node.scrollHeight>node.clientHeight&&node.clientHeight<=maxHeight,editorLimit),'长消息只在编辑框内滚动');
  const draft='改成清晨。\n\n{{char}} 请听 {{user}} 说话。';await editor.fill(draft);
  await closeSettings(await openSettings());
  assert.equal(await editor.inputValue(),draft,'设置返回不覆盖用户消息编辑草稿');
@@ -174,6 +177,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  assert.equal(await panel.isVisible(),true,'保存用户消息时也不能关闭面板');
  await page.evaluate(()=>{window.holdSave=false;window.resumeSave();});
  await record.locator('.play-user-text').getByText('测试甲 请听 茶客 说话。',{exact:true}).waitFor();
+ assert.equal(await panel.locator('.play-compose').isVisible(),true,'保存用户消息后恢复底部输入区域');
  assert.deepEqual(await page.evaluate(id=>runtime.getRound(id),id),{...original,prompt:draft},'保存只修改提示词，所有回复、归属和时间均保留');
  assert.equal(await input.inputValue(),composer);
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
@@ -561,6 +565,7 @@ if (require.main === module) (async()=>{
    assert.equal(await hidden.locator('.play-again').isDisabled(),true);
    assert.equal(await hidden.locator('.play-assistant-message>.play-message-actions').isVisible(),false,'编辑时隐藏底部操作栏');
    assert.equal(await hidden.locator('.play-count').isDisabled(),true);
+   assert.equal(await panel.locator('.play-compose').isVisible(),viewport.width>760,'手机编辑 AI 消息时隐藏底部输入区域，桌面保持原布局');
    assert.equal(await hidden.getByText('回复原文',{exact:true}).count(),0,'不显示多余的原文标题');
    for(const name of ['保存','取消']){
     const action=editAction(name);
@@ -575,12 +580,14 @@ if (require.main === module) (async()=>{
    const textStart=await editor.evaluate(node=>node.getBoundingClientRect().left+parseFloat(getComputedStyle(node).paddingLeft));
    assert.ok(Math.abs(textStart-(await hidden.locator('.play-user-text').boundingBox()).x)<1,'编辑文字与消息正文对齐');
    await assertUnframed(editor);
-   assert.ok(editorBox.height<150,'短回复的编辑框按内容显示，不撑满半屏');
+   if(viewport.width<=760)assert.ok(editorBox.height>400,'手机回复编辑框占据大部分可见区域');
+   else assert.ok(editorBox.height<150,'桌面短回复的编辑框按内容显示，不撑满半屏');
    assert.ok(saveBox.y+saveBox.height<=editorBox.y,'保存图标位于编辑框上方');
    assert.ok(saveBox.x>editorBox.x+editorBox.width/2,'保存图标位于消息右侧');
    assert.equal(await editor.inputValue(),'<thinking>找回整段小剧场</thinking>');
    await editor.fill('<thinking>思考</thinking>\n修正后的正文');
-   assert.ok((await editor.boundingBox()).height<150,'输入两行正文后仍保持紧凑高度');
+   if(viewport.width<=760)assert.ok((await editor.boundingBox()).height>400,'手机输入两行正文后仍保留大编辑区域');
+   else assert.ok((await editor.boundingBox()).height<150,'桌面输入两行正文后仍保持紧凑高度');
    dialog=await openSettings();await closeSettings(dialog);
    assert.equal(await editor.inputValue(),'<thinking>思考</thinking>\n修正后的正文','设置返回及显示刷新不覆盖编辑草稿');
    assert.ok(await editor.evaluate(node=>parseFloat(getComputedStyle(node).fontSize))>=(viewport.width<761?16:14));
@@ -611,6 +618,7 @@ if (require.main === module) (async()=>{
    assert.equal(await editor.isDisabled(),true);
    await page.evaluate(()=>{window.holdSave=false;window.resumeSave();});
    await hidden.getByText('修正后的正文',{exact:true}).waitFor();
+   assert.equal(await panel.locator('.play-compose').isVisible(),true,'保存 AI 消息后恢复底部输入区域');
    await hidden.getByRole('button',{name:'编辑回复原文'}).click();
    edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true});
    await edit.getByRole('textbox',{name:'回复原文'}).fill('取消后不保存');

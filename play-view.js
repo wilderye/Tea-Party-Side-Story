@@ -471,7 +471,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function layout() {
         cancelAnimationFrame(layoutFrame);
         if (!visible) return;
-        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; cachedRowHeight = 0; renderPeople(); updateBrowser(); }
+        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; cachedRowHeight = 0; renderPeople(); updateBrowser(); updateControls(); }
         // ResizeObserver runs before paint; do not defer catalog pagination by a frame.
         if (measureCharactersPerPage() !== charactersPerPage) renderPeople(true);
         layoutFrame = requestAnimationFrame(() => {
@@ -540,7 +540,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
 
     function updateComposer() {
         const draft = draftFor();
-        inputRow.hidden = !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
         if (input.value !== draft.text) {
             input.value = draft.text;
             // Textareas normalize CRLF. Keep the draft equal to what will be
@@ -550,10 +549,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         contextLine.replaceChildren();
         if (storageFailed) contextLine.append(element('span', '草稿和阅读位置暂未保存', 'play-storage-notice'));
         contextLine.hidden = !contextLine.childElementCount;
-        compose.hidden = inputRow.hidden && contextLine.hidden;
         updateControls();
     }
     function updateControls() {
+        const editing = mobile.matches && hasActiveEditor();
+        inputRow.hidden = editing || !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
+        page.classList.toggle('is-message-editing', editing);
+        compose.hidden = editing || (inputRow.hidden && contextLine.hidden);
         const job = playground.getState(), active = activePhases.has(job.phase), available = playground.availability();
         const belongsHere = job.characterId ? job.characterId === selected?.id : pendingSend?.key === characterKey(selected);
         const stopping = active && belongsHere;
@@ -646,11 +648,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function editPrompt(id) {
         const round = records.get(id)?.round, view = views.get(id);
         if (!canEditPrompt(round) || !view || view.removing || view.favoriting || isEditing(id)) return;
-        const original = round.prompt;
+        const original = round.prompt, position = mobile.matches ? capturePosition(false) : null;
         function finish() {
             view.userEditor?.dispose();
             view.userEditor = null; view.promptText = null;
             keepReading(() => { renderRecord(records.get(id).round, view); updateControls(); }, false);
+            if (mobile.matches && position) { restorePosition(position); rememberPosition(false, true); }
             if (visible && !view.item.hidden) view.edit.focus({ preventScroll: true });
         }
         const editing = createPlayEditor({ text: original, label: '提示词原文', onCancel: finish,
@@ -666,6 +669,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             renderRecord(round, view); updateControls();
         }, false);
         editing.input.focus({ preventScroll: true });
+        if (mobile.matches) jumpToMessage(id, 'user');
     }
     function hasPendingSave(job) {
         return job.phase === 'save-failed' || (job.unsaved && job.phase === 'saving');
@@ -720,15 +724,19 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const view = views.get(id);
         return !!view?.userEditor || [...(view?.outputs.values() ?? [])].some(output => output.editor);
     }
+    function hasActiveEditor() {
+        return [...views].some(([id, view]) => !view.item.hidden && isEditing(id));
+    }
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
         if (!canEditResult(result) || !output || view.removing || view.favoriting || isEditing(id)) return;
-        const original = result.text;
+        const original = result.text, position = mobile.matches ? capturePosition(false) : null;
         function finish() {
             output.editor?.dispose();
             output.editor = null; output.signature = null;
             keepReading(() => { renderRecord(records.get(id).round, view); updateControls(); }, false);
+            if (mobile.matches && position) { restorePosition(position); rememberPosition(false, true); }
             if (visible && !view.item.hidden) view.editReply.focus({ preventScroll: true });
         }
         const editing = createPlayEditor({ text: original, onCancel: finish,
@@ -746,6 +754,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             renderRecord(round, view); updateControls();
         }, false);
         editing.input.focus({ preventScroll: true });
+        if (mobile.matches) jumpToMessage(id, 'assistant');
     }
     function header(character, time, anchor, role = 'assistant') {
         const head = element('header', undefined, `play-message-meta play-${role}-meta`);

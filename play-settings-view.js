@@ -224,7 +224,7 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
     const row = element('label', undefined, 'tea-setting-row');
     row.append(element('strong', '续写方式'));
     const mode = element('select'); mode.setAttribute('aria-label', '续写方式');
-    for (const [value, text] of [['history', '第一种：保留 AI 消息'], ['prompt', '第二种：正文放入提示词']]) {
+    for (const [value, text] of [['history', '待续写内容位于聊天记录中'], ['prompt', '待续写内容位于底部']]) {
         const option = element('option', text); option.value = value; mode.append(option);
     }
     mode.value = readPlayContinuationSettings(settings).mode; row.append(mode);
@@ -245,8 +245,8 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
         const continuation = readPlayContinuationSettings(settings);
         input.value = continuation.prompt;
         description.textContent = continuation.mode === 'history'
-            ? '保留待续写 AI 消息，最后追加续写提示词。默认提示词不引用原正文。'
-            : '本次请求不单独保留待续写 AI 消息，通过 {{lastChatMessage}} 引用原正文；它的思维链紧接在原正文前。';
+            ? '待续写回复位于聊天历史最底部'
+            : '以 {{lastChatMessage}} 形式引用待续写回复，放在续写提示词后面，整体位于提示词最底部';
         validate();
     }
     mode.addEventListener('change', () => { settings.playContinueMode = mode.value; saveSettings(); update(); });

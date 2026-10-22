@@ -45,6 +45,7 @@ tests/*
 !tests/play-native-state.browser.cjs
 !tests/play-processing.test.js
 !tests/play-processing.browser.cjs
+!tests/play-mobile-editing.browser.cjs
 !tests/play-ui-state.browser.cjs
 !tests/play-reading.browser.cjs
 !tests/play-messages.test.js

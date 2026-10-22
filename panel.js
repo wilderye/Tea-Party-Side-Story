@@ -726,6 +726,7 @@ export function createTheatrePanel(ctx, state, actions) {
             section.append(element('h3', name)); area.append(section); return section;
         }
         const library = group('剧场库');
+        library.classList.add('tea-library-settings');
         const update = element('section', undefined, 'tea-update-setting');
         const controls = element('div', undefined, 'tea-update-controls');
         const button = iconButton('refresh', '手动更新', actions.updateLibrary); button.classList.add('tea-manual-update');
@@ -754,7 +755,6 @@ export function createTheatrePanel(ctx, state, actions) {
             apiSettings ??= createPlayApiSettings(ctx, state.settings, actions.saveSettings, actions.diagnostics);
             generation.append(apiSettings.node);
             renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
-            renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
             const display = group('回复显示');
             display.classList.add('play-display-settings');
             display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
@@ -781,6 +781,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 render({ resetPosition: scope !== 'play' });
             }); row.append(element('strong', '每页篇数'), size); reading.append(row);
         }
+        if (actions.playground) renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
         workspace.append(area);
         settingsView = () => ({ scrollTop: area.scrollTop, rules: captureRules?.(), logs: diagnosticsView?.capture() });
     }

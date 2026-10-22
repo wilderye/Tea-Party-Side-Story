@@ -153,7 +153,7 @@ async function verifyEditPosition(page, url, viewport) {
     const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const metrics = head => head.evaluate(node => ({ head: node.getBoundingClientRect().top,
         body: node.parentElement.children[1].getBoundingClientRect().top, scroll: node.closest('.play-feed').scrollTop }));
-    const composer = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
+    const composer = panel.getByRole('textbox', { name: '小剧场提示词', exact: true, includeHidden: true });
     await composer.fill('编辑时保留的输入草稿');
     for (const role of ['user', 'assistant']) {
         const head = record.locator(`.play-${role}-meta`);
@@ -178,8 +178,14 @@ async function verifyEditPosition(page, url, viewport) {
                 await editor.waitFor(); await settle();
                 const during = await metrics(head);
                 if (long && finish === '取消') await screenshot(page, `edit-${role}-after-${viewport.width}.png`);
-                assert.ok(Math.abs(during.head - before.head) < 2 && Math.abs(during.body - before.body) < 2,
-                    `${role} ${long ? '长' : '短'}消息进入编辑不跳动：${JSON.stringify({ before, during })}`);
+                if (viewport.width <= 760) {
+                    const bounds = await feed.boundingBox(), editorBounds = await editor.boundingBox();
+                    assert.ok(during.head >= bounds.y && editorBounds.y + editorBounds.height <= bounds.y + bounds.height + 1,
+                        '手机进入编辑时让按钮和大编辑框完整显示');
+                } else {
+                    assert.ok(Math.abs(during.head - before.head) < 2 && Math.abs(during.body - before.body) < 2,
+                        `${role} ${long ? '长' : '短'}消息进入编辑不跳动：${JSON.stringify({ before, during })}`);
+                }
                 assert.equal(await editor.evaluate(node => document.activeElement === node), true);
                 assert.equal(await composer.inputValue(), '编辑时保留的输入草稿');
                 if (finish === '保存') await editor.fill(text + '\n本次保存。');
@@ -201,8 +207,18 @@ async function verifyEditPosition(page, url, viewport) {
         const head = last.locator(`.play-${role}-meta`), before = await metrics(head);
         await head.getByRole('button', { name: role === 'user' ? '修改提示词' : '编辑回复原文', exact: true }).click(); await settle();
         const after = await metrics(head);
-        assert.ok(Math.abs(after.head - before.head) < 2, `停在末尾时编辑 ${role} 不自动回到消息顶部：${JSON.stringify({ before, after })}`);
+        if (viewport.width <= 760) {
+            const bounds = await feed.boundingBox();
+            for (const name of ['保存', '取消']) {
+                const action = await head.getByRole('button', { name, exact: true }).boundingBox();
+                assert.ok(action.y >= bounds.y && action.y + action.height <= bounds.y + bounds.height,
+                    '手机在末尾编辑也露出保存和取消按钮');
+            }
+        } else {
+            assert.ok(Math.abs(after.head - before.head) < 2, `停在末尾时编辑 ${role} 不自动回到消息顶部：${JSON.stringify({ before, after })}`);
+        }
         await head.getByRole('button', { name: '取消', exact: true }).click(); await settle();
+        if (viewport.width <= 760) assert.ok(Math.abs((await metrics(head)).head - before.head) < 2, '手机退出编辑后回到原阅读位置');
     }
 }
 
