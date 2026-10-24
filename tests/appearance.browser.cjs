@@ -46,10 +46,15 @@ async function snapshot(panel) {
         const selectors = ['.tea-catalog', '.tea-brand', '.tea-workspace', '.tea-settings', '.tea-setting-row select',
             '.play-reading-area', '.play-prose', '.play-speaker', '.play-message-time', '.play-compose-input', '.play-send',
             '.play-header-actions .tea-icon', '.tea-settings-group>h3', '.play-person[aria-pressed=true]'];
-        return Object.fromEntries(selectors.map(selector => {
-            const element = node.querySelector(selector), style = getComputedStyle(element);
-            return [selector, Object.fromEntries(['color', 'backgroundColor', 'borderTopColor', 'fontFamily', 'fontSize', 'lineHeight', 'padding', 'borderRadius']
-                .map(property => [property, style[property]]))];
+        return Object.fromEntries(selectors.flatMap(selector => {
+            const element = node.querySelector(selector);
+            // The mobile settings view unmounts the performance-only person selector.
+            // It has no style to compare there; all shared controls remain required.
+            if (!element && selector === '.play-person[aria-pressed=true]'
+                && matchMedia('(max-width: 760px)').matches && node.dataset.mode === 'settings') return [];
+            const style = getComputedStyle(element);
+            return [[selector, Object.fromEntries(['color', 'backgroundColor', 'borderTopColor', 'fontFamily', 'fontSize', 'lineHeight', 'padding', 'borderRadius']
+                .map(property => [property, style[property]]))]];
         }));
     });
 }

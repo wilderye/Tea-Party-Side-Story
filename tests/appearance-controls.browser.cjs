@@ -101,10 +101,10 @@ async function verifyControls(page, label) {
     }
 }
 
-async function screenshot(page, name) {
+async function screenshot(page, name, target = page) {
     if (!process.env.TEA_QA_DIR) return;
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
-    await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
+    await target.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
 
 async function verify(page, url, theme, viewport) {
@@ -171,12 +171,58 @@ async function verify(page, url, theme, viewport) {
     await page.mouse.move(0, 0);
     const appearance = panel.getByRole('combobox', { name: '外观', exact: true });
     await appearance.selectOption('tavern'); await check('following appearance');
+    const tavernSwitch = panel.getByRole('switch', { name: '沿用酒馆正则', exact: true });
+    const switchColor = async (control, checked) => {
+        await control.setChecked(checked);
+        return control.evaluate(node => {
+            const canvas = document.createElement('canvas'), context = canvas.getContext('2d', { willReadFrequently: true });
+            const parse = value => {
+                context.clearRect(0, 0, 1, 1); context.fillStyle = value; context.fillRect(0, 0, 1, 1);
+                return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+            };
+            const luminance = color => color.map(value => value / 255).map(value =>
+                value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
+                .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+            const track = parse(getComputedStyle(node).backgroundColor);
+            const surface = parse(getComputedStyle(node.closest('#teahouse-panel')).getPropertyValue('--tea-theme-surface'));
+            return { track, thumb: getComputedStyle(node, '::after').backgroundColor,
+                left: getComputedStyle(node, '::after').left,
+                contrast: (Math.max(luminance(track), luminance(surface)) + .05)
+                    / (Math.min(luminance(track), luminance(surface)) + .05) };
+        });
+    };
+    const offSwitch = await switchColor(tavernSwitch, false); await check('following unchecked switch');
+    await screenshot(page, `switch-${theme.slug || 'synthetic'}-off-${viewport.width}.png`, tavernSwitch.locator('..'));
+    const onSwitch = await switchColor(tavernSwitch, true); await tavernSwitch.hover(); await check('following checked switch hover');
+    await screenshot(page, `switch-${theme.slug || 'synthetic'}-on-${viewport.width}.png`, tavernSwitch.locator('..'));
+    assert.ok(onSwitch.contrast >= 3, '跟随酒馆主题时开启状态与背景保持清楚对比');
+    assert.ok(onSwitch.track.some((value, index) => Math.abs(value - offSwitch.track[index]) >= 20),
+        '开启和关闭状态使用明显不同的轨道颜色');
+    assert.equal(offSwitch.left, '3px'); assert.equal(onSwitch.left, '27px');
+    for (const [name, key] of [['显示 G 向内容', 'showGore'], ['续写时发回原生思维链', 'playContinueSendReasoning']]) {
+        const control = panel.getByRole('switch', { name, exact: true });
+        assert.deepEqual(await switchColor(control, false), offSwitch, `${name} 共用关闭配色和圆点位置`);
+        assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem('processingSettings'))[key], key), false);
+        assert.deepEqual(await switchColor(control, true), onSwitch, `${name} 共用开启配色和圆点位置`);
+        assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem('processingSettings'))[key], key), true);
+    }
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('processingSettings')).playRegexEnabled), true);
+    if (['synthetic', 'warm', 'dark'].includes(theme.name)) {
+        assert.deepEqual(onSwitch.track, await page.evaluate(color => {
+            const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+            context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+            return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+        }, theme.underline_text_color), '清楚的主题开启色原样保留');
+    }
+    await page.mouse.move(0, 0);
     if (theme.name === 'synthetic') {
         assert.notEqual(await panel.locator('.play-prose pre').first().evaluate(node => getComputedStyle(node).color),
             await panel.locator('.play-prose').first().evaluate(node => getComputedStyle(node).color), '跟随模式仍应用主题代码颜色');
         assert.equal(await panel.locator('.play-prose hr').first().evaluate(node => getComputedStyle(node).height), '20px', '跟随模式仍应用主题分隔线');
     }
     await appearance.selectOption('default'); await check('restored default appearance');
+    assert.equal(await panel.evaluate(node => ['--tea-switch-paper', '--tea-switch-off-paper', '--tea-switch-off-ink', '--tea-switch-off-line']
+        .every(name => !node.style.getPropertyValue(name))), true, '切回默认外观清除所有开关主题颜色');
     await panel.locator('.tea-settings').evaluate(node => { node.scrollTop = 0; });
     await screenshot(page, `controls-${theme.slug || 'synthetic'}-settings-${viewport.width}.png`);
     await api.selectOption('tavern');
@@ -223,7 +269,14 @@ async function verify(page, url, theme, viewport) {
 }
 
 (async () => {
-    const themes = [synthetic];
+    const themes = [synthetic,
+        { ...synthetic, name: 'light-close', slug: 'light-close', main_text_color: '#4d4e50', blur_tint_color: '#efefef',
+            underline_text_color: '#acacac', border_color: '#acacac' },
+        { ...synthetic, name: 'warm', slug: 'warm', main_text_color: '#5a524c', blur_tint_color: '#dddad7',
+            underline_text_color: '#744728', border_color: '#744728' },
+        { ...synthetic, name: 'dark', slug: 'dark', main_text_color: '#e6e0d8', blur_tint_color: '#25272c',
+            underline_text_color: '#deae79', border_color: '#deae79' },
+    ];
     if (process.env.TEA_THEME_DIR) {
         const names = (await fs.readdir(process.env.TEA_THEME_DIR)).filter(name => name.endsWith('.json')).sort();
         assert.ok(names.length, 'The supplied directory must contain theme fixtures');
