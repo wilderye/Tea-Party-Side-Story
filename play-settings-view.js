@@ -254,8 +254,8 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
         input.value = continuation.prompt;
         sendReasoning.checked = continuation.sendReasoning;
         description.textContent = continuation.mode === 'history'
-            ? '待续写回复位于聊天历史最底部'
-            : '以 {{lastChatMessage}} 形式引用待续写回复，放在续写提示词后面，整体位于提示词最底部';
+            ? '防道歉时推荐使用，不把敏感正文放在AI注意力最强之一的底部。待续写回复作为聊天历史最新AI消息。部分Ais/PG反代由于改变了提示词顺序，可能会使得聊天记录在最底部，导致最后一条内容为AI消息而报错。'
+            : '将续写提示词+待续写内容以SYSTEM身份，放在全部提示词的最底部。';
         validate();
     }
     mode.addEventListener('change', () => { settings.playContinueMode = mode.value; saveSettings(); update(); });
