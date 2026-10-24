@@ -61,7 +61,7 @@ test('续写方式、提示词和原生思维链开关随请求捕获，切换�
 test('选中的小剧场提示词及位置随请求捕获，后来编辑只影响下一次发送', () => {
     const settings = { playPromptConfig: { presets: [
         { id: 'default', name: '默认提示词', content: '旧默认' },
-        { id: 'recommended', name: '推荐提示词', content: '旧推荐' },
+        { id: 'recommended', name: '强调完整性', content: '旧推荐' },
     ], selectedId: 'recommended', position: 'user-before' } };
     const ctx = context(), environment = capturePlayEnvironment(ctx, settings);
     settings.playPromptConfig.presets[1].content = '新推荐';

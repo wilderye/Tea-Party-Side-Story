@@ -1,4 +1,6 @@
-export const DEFAULT_PLAY_PROMPT = '本次仅输出小剧场，不生成任何状态栏或待办等附加内容。';
+export const DEFAULT_PLAY_PROMPT = '按要求输出思维链后仅输出小剧场内容，不生成任何附加模块如顶部/尾部状态栏/待办/变量命令/总结等。';
+const LEGACY_DEFAULT_PLAY_PROMPT = '本次仅输出小剧场，不生成任何状态栏或待办等附加内容。';
+const LEGACY_RECOMMENDED_PLAY_PROMPT_NAME = '推荐提示词';
 export const RECOMMENDED_PLAY_PROMPT = `按要求输出思维链后仅输出小剧场内容，不生成任何附加模块如顶部/尾部状态栏/待办/变量命令/总结等。
 小剧场需要是一个完整的故事，“小剧场”的“小”仅为特定惯性叫法，你更愿意将其称之为“新的故事”，宛如一篇短篇小说。这意味着它要有一个故事的开端，和一个结束，即使是开放式的结尾，而非仅仅给出提示词中的需求一个切面。
 它可以跨越时段来讲述一个故事。
@@ -26,10 +28,21 @@ export function readPlayPromptSettings(settings) {
     const presets = Array.isArray(saved?.presets) ? saved.presets.filter(preset =>
         preset && typeof preset.id === 'string' && typeof preset.name === 'string' && typeof preset.content === 'string') : [];
     const defaults = [
-        { id: 'default', name: '默认提示词', content: settings.playPrompt ?? DEFAULT_PLAY_PROMPT },
-        { id: 'recommended', name: '推荐提示词', content: RECOMMENDED_PLAY_PROMPT },
+        { id: 'default', name: '默认提示词', content: settings.playPrompt === LEGACY_DEFAULT_PLAY_PROMPT
+            ? DEFAULT_PLAY_PROMPT : settings.playPrompt ?? DEFAULT_PLAY_PROMPT },
+        { id: 'recommended', name: '强调完整性', content: RECOMMENDED_PLAY_PROMPT },
     ];
-    const entries = defaults.map(preset => presets.find(entry => entry.id === preset.id) ?? preset)
+    const entries = defaults.map(preset => {
+        const saved = presets.find(entry => entry.id === preset.id);
+        if (!saved) return preset;
+        if (saved.id === 'default' && saved.content === LEGACY_DEFAULT_PLAY_PROMPT) {
+            return { ...saved, content: DEFAULT_PLAY_PROMPT };
+        }
+        if (saved.id === 'recommended' && saved.name === LEGACY_RECOMMENDED_PLAY_PROMPT_NAME) {
+            return { ...saved, name: preset.name };
+        }
+        return saved;
+    })
         .concat(presets.filter(preset => !defaults.some(entry => entry.id === preset.id)));
     return {
         presets: entries,

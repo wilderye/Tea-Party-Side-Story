@@ -46,7 +46,7 @@ async function verify(page, url, viewport) {
             JSON.stringify({ enabled: true, pageSize: 5, favorites: {}, playPrompt: '原来已保存的提示词' }));
     });
     await page.goto(url); await open();
-    assert.deepEqual(await select.locator('option').allTextContents(), ['默认提示词', '推荐提示词']);
+    assert.deepEqual(await select.locator('option').allTextContents(), ['默认提示词', '强调完整性']);
     assert.equal(await select.inputValue(), 'default'); assert.equal(await select.getAttribute('multiple'), null);
     assert.equal(await position.inputValue(), 'start');
     assert.deepEqual(await position.locator('option').allTextContents(), ['全部提示词前', '最新用户消息前', '最新用户消息后']);
@@ -124,7 +124,7 @@ async function verify(page, url, viewport) {
         assert.ok(compactFooter.y >= 40 && compactFooter.y + compactFooter.height <= 340,
             '手机键盘显示及名称报错时，保存按钮仍在可见范围');
         await screenshot(page, `prompt-rename-keyboard-error-${viewport.width}.png`);
-        await name.fill('推荐提示词');
+        await name.fill('强调完整性');
         await page.evaluate(() => {
             delete window.visualViewport.height; delete window.visualViewport.offsetTop;
             window.visualViewport.dispatchEvent(new Event('resize'));
