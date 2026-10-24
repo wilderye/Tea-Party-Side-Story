@@ -37,7 +37,6 @@ export function renderDiagnostics(area, diagnostics, viewState) {
     controls.append(viewButton, exportButton, clearButton);
     function refresh() {
         const { entries, persistenceError } = diagnostics.read();
-        viewButton.textContent = `查看日志（${entries.length} 条）`;
         notice.textContent = persistenceError || '按时间记录插件运行情况和完整错误；不附带提示词或密钥。';
         clearButton.disabled = entries.length === 0;
         // Preserve the visible line and text selection while new logs arrive.
