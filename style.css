@@ -122,7 +122,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-story-title .tea-content-tag { margin-right:8px; }
 #teahouse-panel .tea-story small { display:block; font-size:11px; line-height:16px; margin-top:8px; color:var(--tea-sidebar-muted,#b6cabc); }
 #teahouse-panel .tea-story[aria-current=true] small { color:var(--tea-selected-muted,#354d3f); }
-#teahouse-panel .tea-pagination { position:relative; z-index:2; display:flex; flex:none; align-items:center; justify-content:space-between; padding:16px 8px 0; color:var(--tea-sidebar-muted,#c3d2c5); }
+#teahouse-panel .tea-pagination { position:relative; z-index:2; display:flex; flex:none; align-items:center; justify-content:space-between; padding:8px 8px 0; color:var(--tea-sidebar-muted,#c3d2c5); }
 #teahouse-panel .tea-page-display { font:16px/24px Georgia,serif; letter-spacing:4px; color:var(--tea-sidebar-accent,#f3dfb4); }
 #teahouse-panel .tea-page-jump { position:relative; }
 #teahouse-panel .tea-page-jump>.tea-page-display { display:flex; align-items:center; justify-content:center; gap:8px; height:40px; min-width:100px; list-style:none; cursor:pointer; touch-action:manipulation; white-space:nowrap; letter-spacing:0; }
