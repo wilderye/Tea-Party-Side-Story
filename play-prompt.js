@@ -3,7 +3,7 @@ import { createPreparedPlayRequest, getCustomApiConnection } from './play-reques
 import { preparePlayPreset } from './play-preset.js';
 import { legacyPlayParameters } from './play-parameters.js';
 import { getPlayPreparationCoordinator } from './play-preparation.js';
-import { readPlayContinuationSettings, playContinuationError } from './play-settings.js';
+import { DEFAULT_PLAY_PROMPT_POSITION, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
 
 async function loadTavernModules() {
     const paths = {
@@ -213,7 +213,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
     const continuationError = continueMessage && playContinuationError(continuation);
     if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
     const customPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
-    const promptPosition = environment.playPromptPosition ?? 'start';
+    const promptPosition = environment.playPromptPosition ?? DEFAULT_PLAY_PROMPT_POSITION;
     const leadingSystemPrompt = promptPosition === 'start' ? customPrompt : '';
     const scope = promptScope(core);
     try {

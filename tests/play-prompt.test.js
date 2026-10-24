@@ -29,7 +29,7 @@ for (const squash of [false, true]) test(`自定义提示词在发送前回调�
 
 test('清空自定义提示词后不附加，发送时捕获的提示词不会被后来修改覆盖', async () => {
     const f = fixture();
-    const settings = { playPrompt: '最前面的已保存内容' };
+    const settings = { playPrompt: '最前面的已保存内容', playPromptConfig: { position: 'start' } };
     const environment = capturePlayEnvironment(f.context, settings); settings.playPrompt = '后来修改';
     const request = await f.prepare({ ...f.options(), environment }); await request.send({ signal: new AbortController().signal });
     assert.equal(f.requests[0].payload.messages[0].content, '最前面的已保存内容');
@@ -38,6 +38,22 @@ test('清空自定义提示词后不附加，发送时捕获的提示词不会�
     await cleared.send({ signal: new AbortController().signal });
     assert.equal(f.requests[1].payload.messages[0].content, '当前预设 / 角色说明 / 用户人设');
     assert.equal(f.assemblies[1].leadingSystemPrompt, '');
+});
+
+for (const missingPosition of [false, true]) test(`默认提示词附在最新用户消息后，准备环境缺少位置=${missingPosition}`, async () => {
+    const f = fixture(), before = structuredClone(f.context.chat);
+    const environment = capturePlayEnvironment(f.context, { playPrompt: '附加要求{{user}}' });
+    assert.equal(environment.playPromptPosition, 'user-after');
+    if (missingPosition) delete environment.playPromptPosition;
+    const request = await f.prepare({ ...f.options(), environment });
+    await request.send({ signal: new AbortController().signal });
+    const messages = f.requests[0].payload.messages;
+    assert.equal(messages[0].content, '当前预设 / 角色说明 / 用户人设');
+    assert.equal(messages.at(-1).role, 'user');
+    assert.equal(messages.at(-1).content, '本次用户小剧场\n\n附加要求用户');
+    assert.equal(messages.filter(message => message.content.includes('附加要求用户')).length, 1);
+    assert.equal(f.assemblies[0].leadingSystemPrompt, '');
+    assert.deepEqual(f.context.chat, before);
 });
 
 for (const position of ['user-before', 'user-after']) {
@@ -253,7 +269,7 @@ function fixture() {
             settings: environment.tavern.settings, messages: modules.openai.setOpenAIMessages(options.history) }),
     });
     const options = (prompt = '本次{{user}}小剧场', api = { mode: 'tavern' }, signal = new AbortController().signal) =>
-        ({ prompt, environment: capturePlayEnvironment(context, { playApi: api }), signal });
+        ({ prompt, environment: capturePlayEnvironment(context, { playApi: api, playPromptConfig: { position: 'start' } }), signal });
     return { context, modules, source, events, prompts, order, requests, assemblies, prepare, options };
 }
 

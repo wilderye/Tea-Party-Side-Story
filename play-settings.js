@@ -6,6 +6,7 @@ export const RECOMMENDED_PLAY_PROMPT = `按要求输出思维链后仅输出小�
 它可以跨越时段来讲述一个故事。
 故事不能仅等于小剧场的提示词，需要“超过”。譬如，一个设定触及了二人任意的核心设定或二人的核心纠葛，可以从任意的更早的时间点开始写，甚至是从小时候开始，来讲述它的过往；也可以扩展未知，探索新故事中相对与现在来说属于“将来”的图景和细节。一个全新的世界观，会带来世界方方面面的变化，刻画世界对人物造成的影响，及其随之而来的故事，而非仅以人物的情感和关系来推动故事。`;
 export const DEFAULT_HIDDEN_TAGS = 'think,thinking,update,status';
+export const DEFAULT_PLAY_PROMPT_POSITION = 'user-after';
 export const DEFAULT_CONTINUE_PROMPTS = {
     history: 'Resume the preceding assistant reply exactly where it stops. Return only the added text, joining it naturally to the existing ending.',
     prompt: 'Resume the reply provided below exactly where it stops. Return only the added text, joining it naturally to the existing ending.\n\n{{lastChatMessage}}',
@@ -47,7 +48,7 @@ export function readPlayPromptSettings(settings) {
     return {
         presets: entries,
         selectedId: entries.some(preset => preset.id === saved?.selectedId) ? saved.selectedId : 'default',
-        position: ['user-before', 'user-after'].includes(saved?.position) ? saved.position : 'start',
+        position: ['start', 'user-before', 'user-after'].includes(saved?.position) ? saved.position : DEFAULT_PLAY_PROMPT_POSITION,
     };
 }
 

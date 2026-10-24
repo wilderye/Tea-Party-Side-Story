@@ -16,7 +16,7 @@ test('首次读取提供默认和强调完整性提示词，保持旧内容以�
                 { id: 'default', name: '默认提示词', content: legacy ?? DEFAULT_PLAY_PROMPT },
                 { id: 'recommended', name: '强调完整性', content: RECOMMENDED_PLAY_PROMPT },
             ],
-            selectedId: 'default', position: 'start',
+            selectedId: 'default', position: 'user-after',
         });
         assert.equal(readPlaySettings(settings).prompt, legacy ?? DEFAULT_PLAY_PROMPT);
         assert.deepEqual(settings, before);
@@ -52,6 +52,15 @@ test('升级时只替换旧内置默认提示词和名称，保留用户改过�
 test('无效选择和位置回到默认，缺少内置项时补齐', () => {
     const settings = { playPromptConfig: { presets: [], selectedId: 'removed', position: 'unknown' } };
     assert.equal(readPlaySettings(settings).prompt, DEFAULT_PLAY_PROMPT);
-    assert.equal(readPlaySettings(settings).promptPosition, 'start');
+    assert.equal(readPlaySettings(settings).promptPosition, 'user-after');
     assert.deepEqual(readPlayPromptSettings(settings).presets.map(preset => preset.id), ['default', 'recommended']);
+});
+
+test('已保存的三种插入位置均保留，缺少位置时使用最新用户消息后', () => {
+    for (const position of ['start', 'user-before', 'user-after']) {
+        const settings = { playPromptConfig: { position } };
+        assert.equal(readPlaySettings(settings).promptPosition, position);
+        assert.deepEqual(settings, { playPromptConfig: { position } });
+    }
+    assert.equal(readPlaySettings({ playPromptConfig: { presets: [] } }).promptPosition, 'user-after');
 });

@@ -48,7 +48,7 @@ async function verify(page, url, viewport) {
     await page.goto(url); await open();
     assert.deepEqual(await select.locator('option').allTextContents(), ['默认提示词', '强调完整性']);
     assert.equal(await select.inputValue(), 'default'); assert.equal(await select.getAttribute('multiple'), null);
-    assert.equal(await position.inputValue(), 'start');
+    assert.equal(await position.inputValue(), 'user-after');
     assert.deepEqual(await position.locator('option').allTextContents(), ['全部提示词前', '最新用户消息前', '最新用户消息后']);
     assert.equal(await content.inputValue(), '原来已保存的提示词');
     assert.equal(await button('删除提示词').count(), 0);
