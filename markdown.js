@@ -3,6 +3,7 @@ import MarkdownIt from './vendor/markdown-it.js';
 // Rendering never substitutes macros or modifies the source passed to SillyTavern.
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true, typographer: false });
 const quoteEnds = new Map([['“', '”'], ['"', '"'], ['«', '»'], ['「', '」'], ['『', '』'], ['＂', '＂']]);
+const englishTag = /^<\/?[a-z][a-z0-9_.:-]*(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*)?\/?>$/i;
 
 // Reserve double/triple underscores for Tavern's underline syntax. Code,
 // escapes and link destinations are consumed by their existing inline rules.
@@ -131,6 +132,14 @@ markdown.core.ruler.before('text_join', 'tea_inline_formats', state => {
     for (const inline of state.tokens) {
         if (inline.type !== 'inline') continue;
         formatTags(inline.children);
+        // Hide markers only in reply prose, after regex processing. Parsed
+        // code, escaped examples and Chinese tag names remain literal text.
+        if (state.env.hideEnglishTags) {
+            for (const token of inline.children) {
+                if (token.type !== 'text_special' || !englishTag.test(token.content)) continue;
+                token.type = 'tea_hidden_tag'; token.content = '';
+            }
+        }
         if (inline.content.includes('__')) {
             const { root, text } = inlineText(inline.children);
             const ranges = [];
@@ -154,10 +163,11 @@ markdown.core.ruler.before('text_join', 'tea_inline_formats', state => {
 });
 markdown.renderer.rules.table_open = () => '<div class="tea-table-scroll" tabindex="0" role="region" aria-label="表格，可横向滚动"><table>';
 markdown.renderer.rules.table_close = () => '</table></div>';
+markdown.renderer.rules.tea_hidden_tag = () => '';
 const linkOpen = markdown.renderer.rules.link_open;
 markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
     tokens[index].attrSet('target', '_blank');
     tokens[index].attrSet('rel', 'noopener noreferrer');
     return linkOpen ? linkOpen(tokens, index, options, env, renderer) : renderer.renderToken(tokens, index, options);
 };
-export function renderMarkdown(source) { return markdown.render(source); }
+export function renderMarkdown(source, { hideEnglishTags = false } = {}) { return markdown.render(source, { hideEnglishTags }); }

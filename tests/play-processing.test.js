@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readPlaySettings, DEFAULT_PLAY_PROMPT, DEFAULT_HIDDEN_TAGS } from '../play-settings.js';
 import { hidePlayTags, readTavernRegex, processPlayText, createPlayDisplay, compileRegexGuard } from '../play-processing.js';
+import { renderMarkdown } from '../markdown.js';
 
 test('默认值实际生效，清空标签和提示词后不会恢复默认值', () => {
     assert.equal(readPlaySettings({}).prompt, DEFAULT_PLAY_PROMPT);
@@ -42,8 +43,8 @@ test('隐藏名单支持中英文逗号、换行和空行，旧名单仍按原�
     assert.equal(hidePlayTags(source, ',，\n\r\n '), source);
 });
 
-test('正文标签在正则之后仅在显示副本隐藏，标签里的正文和完整原文都保留', () => {
-    const source = '<content>\n<内容>**正文**</内容>\n</content><正文>后续</正文>';
+test('英文标签在正则之后由正文渲染隐藏，中文标签、正文和完整原文都保留', () => {
+    const source = '<content>\n<regard>**正文**</regard>\n</content><中文>后续</中文>';
     const settings = readPlaySettings({ playHiddenTags: '' });
     const rules = [{ key: 'body', script: {} }];
     let calls = 0;
@@ -51,18 +52,21 @@ test('正文标签在正则之后仅在显示副本隐藏，标签里的正文�
         calls++; assert.equal(text, source); return text.replace('正文**', '替换后的正文**');
     });
     assert.equal(calls, 1);
-    assert.equal(shown, '\n**替换后的正文**\n后续');
-    assert.equal(source, '<content>\n<内容>**正文**</内容>\n</content><正文>后续</正文>');
-    assert.equal(processPlayText('<content>尚未闭合的正文', { ...settings, regexEnabled: false }, rules, () => assert.fail()), '尚未闭合的正文');
+    assert.equal(shown, source.replace('正文**', '替换后的正文**'));
+    assert.equal(renderMarkdown(shown, { hideEnglishTags: true }), '<p><br>\n<strong>替换后的正文</strong><br>\n&lt;中文&gt;后续&lt;/中文&gt;</p>\n');
+    assert.equal(source, '<content>\n<regard>**正文**</regard>\n</content><中文>后续</中文>');
+    const unfinished = processPlayText('<content>尚未闭合的正文', { ...settings, regexEnabled: false }, rules, () => assert.fail());
+    assert.equal(renderMarkdown(unfinished, { hideEnglishTags: true }), '<p>尚未闭合的正文</p>\n');
     assert.equal(processPlayText('<status>保留</status>', settings, [], () => assert.fail()), '<status>保留</status>');
 });
 
-test('隐藏正文标签保留网页属性、脚本、样式和网页代码示例', () => {
+test('正文处理保留网页属性、脚本、样式、标签和网页代码示例', () => {
     const html = '<!doctype html><html><head><style>p::after{content:"<content>"}</style></head>'
         + '<body data-template="<内容>"><script>window.template="<content>保留</content>"</script>'
         + '<p>正文</p><pre><code><content>代码示例</content></code></pre>'
         + '<textarea><内容>输入示例</内容></textarea><!-- <content>注释</content> --></body></html>';
-    assert.equal(processPlayText(`<content><内容>${html}</内容></content>`, readPlaySettings({}), [], () => assert.fail()), html);
+    const wrapped = `<content><内容>${html}</内容></content>`;
+    assert.equal(processPlayText(wrapped, readPlaySettings({}), [], () => assert.fail()), wrapped);
 });
 
 test('只识别大小写和写法一致的标签，代码框也处理，其他字节不改动', () => {

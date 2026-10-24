@@ -45,7 +45,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
         heading.replaceChildren(title, character); tools.replaceChildren(remove, edit);
         const text = value.cleaned ? value.text : (playground.display?.process(value.text) ?? value.text);
         if (signature === text) return;
-        if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true);
+        if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true);
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         signature = text;
     }

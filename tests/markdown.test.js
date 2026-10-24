@@ -131,3 +131,24 @@ test('过深的格式标签保留为文字，不阻止整篇正文显示', () =>
     assert.ok(html.includes('&lt;q&gt;'));
     assert.equal((html.match(/<q>/g) || []).length, (html.match(/<\/q>/g) || []).length);
 });
+
+test('回复正文隐藏英文标签本身，保留中文标签、属性里的中文和正文格式', () => {
+    const render = source => renderMarkdown(source, { hideEnglishTags: true });
+    assert.equal(render('<regard>你好</regard> <中文>保留</中文> <内容>内容</内容> <正文>正文</正文>'),
+        '<p>你好 &lt;中文&gt;保留&lt;/中文&gt; &lt;内容&gt;内容&lt;/内容&gt; &lt;正文&gt;正文&lt;/正文&gt;</p>\n');
+    assert.equal(render('<REGARD data-note="<中文>">**正文**</REGARD><story-part>后续</story-part><regard/>'),
+        '<p><strong>正文</strong>后续</p>\n');
+    assert.equal(render('<regard>尚未闭合'), '<p>尚未闭合</p>\n');
+    assert.equal(render('<regard'), '<p>&lt;regard</p>\n');
+    assert.equal(render('<q>“对白”</q> <u>下划线</u>'), '<p><q>“对白”</q> <u>下划线</u></p>\n');
+    assert.equal(renderMarkdown('<regard>提示词</regard>'), '<p>&lt;regard&gt;提示词&lt;/regard&gt;</p>\n', '提示词仍按原样显示');
+});
+
+test('回复正文隐藏英文标签时，代码和转义示例仍按原样显示，HTML 不会在正文执行', () => {
+    const render = source => renderMarkdown(source, { hideEnglishTags: true });
+    assert.equal(render('`<regard>行内代码</regard>`\n\n```text\n<regard>代码块</regard>\n```'),
+        '<p><code>&lt;regard&gt;行内代码&lt;/regard&gt;</code></p>\n<pre><code class="language-text">&lt;regard&gt;代码块&lt;/regard&gt;\n</code></pre>\n');
+    assert.equal(render('\\<regard>转义\\</regard> &lt;regard&gt;字符实体&lt;/regard&gt;'),
+        '<p>&lt;regard&gt;转义&lt;/regard&gt; &lt;regard&gt;字符实体&lt;/regard&gt;</p>\n');
+    assert.equal(render('<script>alert(1)</script><img src=x onerror="alert(1)">'), '<p>alert(1)</p>\n');
+});

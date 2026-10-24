@@ -112,12 +112,12 @@ export function playTextPreview(source, firstLine = false) {
 }
 
 /** Render prose and fenced or unfenced HTML, without changing the saved text. */
-export function renderPlayText(container, source, anchor, renderHtml = false) {
+export function renderPlayText(container, source, anchor, renderHtml = false, hideEnglishTags = false) {
     const fragment = document.createDocumentFragment();
     const prose = text => {
         if (!text.trim()) return;
         const body = element('div', undefined, 'tea-body play-prose');
-        body.innerHTML = renderMarkdown(text); fragment.append(body);
+        body.innerHTML = renderMarkdown(text, { hideEnglishTags }); fragment.append(body);
     };
     const unfenced = text => {
         const line = firstHtmlLine(text);

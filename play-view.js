@@ -866,7 +866,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}`;
         if (!output.editor && output.signature !== signature) {
             if (result.text) {
-                if (output.displayText.trim()) renderPlayText(output.box, output.displayText, `${round.id}/assistant/${result.id}`, renderHtml);
+                if (output.displayText.trim()) renderPlayText(output.box, output.displayText, `${round.id}/assistant/${result.id}`, renderHtml, true);
                 else output.box.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
             } else if (errorMessage) output.box.replaceChildren();
             else {

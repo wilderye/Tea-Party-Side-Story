@@ -189,11 +189,9 @@ export function processPlayText(source, settings, rules, runRegex) {
             }
         }
     }
-    // Hide only body-wrapper markers in the display copy, after host regexes
-    // have had a chance to use them. Keep HTML attributes, scripts, styles and
-    // literal HTML code examples intact; the saved source is never changed.
-    return text.replace(/<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|pre|code)\b(?:[^<>"']|"[^"]*"|'[^']*')*>[\s\S]*?(?:<\/\1\s*>|$)|<(?:[^<>"']|"[^"]*"|'[^']*')*>/gi,
-        tag => /^<\/?(?:content|内容|正文)>$/i.test(tag) ? '' : tag);
+    // Marker visibility belongs to the renderer; keep this copy intact for
+    // Markdown code examples and executable documents in isolated iframes.
+    return text;
 }
 
 const loadNativeRegex = () => import(new URL('../../../../scripts/extensions/regex/engine.js', import.meta.url).href);

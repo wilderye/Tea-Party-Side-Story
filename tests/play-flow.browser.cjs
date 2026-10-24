@@ -23,7 +23,7 @@ window.requestCount = 0;
 window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{prepareRequest:async()=>({send:async args=> {
  window.requestCount++; return window.reply ? window.reply(args) : '模拟回复';
 }})});
-window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml);
+window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml,true);
 document.getElementById('render').onclick=()=>window.renderText('<!doctype html><html><head><style>body{min-height:100vh}</style></head><body><p>网页回复正文</p><button id="expand">展开更多</button><div id="more"></div><script>document.getElementById("expand").onclick=()=>{document.getElementById("more").innerHTML="<p>更多内容</p>".repeat(40)};<'+ '/script></body></html>');
 </script>`;
 const allowed = new Set(['style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
@@ -81,10 +81,10 @@ async function verifyHtmlOutputs(page, host, viewport) {
     await page.screenshot({path:path.join(process.env.TEA_QA_DIR, `html-fragment-${viewport.width}.png`), fullPage:true});
   }
 
-  const wrapped = '<content><内容>' + card + '<script>document.body.dataset.template="<content>";</script></内容></content>';
+  const wrapped = '<content><regard>' + card + '<script>document.body.dataset.template="<content>";</script></regard></content>';
   await page.evaluate(text => window.renderText(runtime.display.process(text)), wrapped);
   assert.equal(await page.locator('iframe').count(), 1, '隐藏正文标签后仍显示完整网页');
-  assert.doesNotMatch(await page.locator('#output').innerText(), /<\/?(?:content|内容)>/);
+  assert.doesNotMatch(await page.locator('#output').innerText(), /<\/?(?:content|regard)>/);
   const wrappedFrame = page.frameLocator('iframe');
   await wrappedFrame.getByRole('button', {name:'展开后续'}).click();
   await wrappedFrame.getByText('炉上的茶水恰好沸腾。', {exact:true}).waitFor();

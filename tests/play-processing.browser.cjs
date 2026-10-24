@@ -449,7 +449,9 @@ if (require.main === module) (async()=>{
    assert.equal(messageLayout.againText,'','重新生成只保留图标');
    assert.match(await a.locator('.play-result').innerText(),/全局已处理/);
    assert.doesNotMatch(await a.locator('.play-result').innerText(),/默认隐藏/);
-   assert.doesNotMatch(await a.locator('.play-result').innerText(),/<\/?(?:content|内容)>/,'阅读时不显示正文标签');
+   assert.doesNotMatch(await a.locator('.play-result').innerText(),/<\/?content>/,'阅读时不显示英文正文标签');
+   assert.match(await a.locator('.play-result').innerText(),/<内容>/,'阅读时保留中文正文标签');
+   assert.match(await a.locator('.play-result').innerText(),/<\/内容>/,'中文结束标签也保留');
    const assertUnframed=async field=>{
     const styles=await field.evaluate(node=>{const s=getComputedStyle(node);return {border:[s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth],outline:s.outlineStyle,shadow:s.boxShadow,background:s.backgroundColor};});
     assert.deepEqual(styles,{border:['0px','0px','0px','0px'],outline:'none',shadow:'none',background:'rgb(215, 223, 212)'},'主题不能给输入区域重新加边框，手机和电脑都保留绿色底色');
@@ -550,6 +552,7 @@ if (require.main === module) (async()=>{
    assert.equal(await dialog.getByRole('checkbox',{name:'状态栏美化',exact:true}).isChecked(),false);
    await closeSettings(dialog);assert.equal(await a.locator('iframe').count(),0);
    assert.match(await a.locator('.play-result').innerText(),/默认隐藏状态/);
+   assert.doesNotMatch(await a.locator('.play-result').innerText(),/<\/?status>/,'排除状态栏正则后，保留正文但仍隐藏英文标签');
    // Let the mobile view finish reattaching before simulating a new scroll.
    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    const scrollTop=await panel.locator('.play-feed').evaluate(node=>{node.scrollTop=180;return node.scrollTop;});
