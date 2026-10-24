@@ -272,8 +272,14 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const tags = textSetting(section, settings, saveSettings, 'playHiddenTags', '隐藏标签', config.hiddenTags,
         '用中英文逗号或换行分隔；标签闭合后隐藏内容，原文保留。');
     tags.classList.add('play-hidden-tags');
-    const resizeTags = () => { tags.rows = Math.min(5, tags.value.split(/\r\n|\r|\n/).length); };
-    tags.addEventListener('input', resizeTags); resizeTags();
+    tags.rows = 1;
+    if (!CSS.supports('field-sizing', 'content')) {
+        const resizeTags = () => {
+            tags.style.height = 'auto';
+            tags.style.height = `${tags.scrollHeight + tags.offsetHeight - tags.clientHeight}px`;
+        };
+        tags.addEventListener('input', resizeTags); requestAnimationFrame(resizeTags);
+    }
     const toggleRow = element('label', undefined, 'tea-setting-row');
     const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = config.regexEnabled;
     toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-label', '沿用酒馆正则');

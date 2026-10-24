@@ -18,6 +18,7 @@ tests/*
 !tests/panel-flow.browser.cjs
 !tests/panel-progress.browser.cjs
 !tests/settings-navigation.browser.cjs
+!tests/settings-layout.browser.cjs
 !tests/play-api.browser.cjs
 !tests/qr-entry.test.js
 !tests/uninstall.test.js

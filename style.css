@@ -239,7 +239,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings-group>.tea-field { margin-top:14px; }
 #teahouse-panel .tea-settings .tea-field { font-size:14px; }
 #teahouse-panel .tea-settings .tea-field textarea { min-height:88px; flex:none; font-size:14px; }
-#teahouse-panel .tea-settings .tea-field textarea.play-hidden-tags { min-height:42px; max-height:144px; }
+#teahouse-panel .tea-settings .tea-field textarea.play-hidden-tags { field-sizing:content; min-height:42px; max-height:138px; overflow-y:auto; resize:none; }
 #teahouse-panel .tea-settings .tea-setting-row { padding:12px 0; gap:12px; }
 #teahouse-panel .tea-settings .tea-setting-row small { margin-top:4px; }
 #teahouse-panel .tea-settings .tea-setting-description { line-height:20px; font-weight:400; }
