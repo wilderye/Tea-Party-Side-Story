@@ -234,18 +234,16 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings { padding-bottom:16px; }
 #teahouse-panel .tea-settings-group { padding:16px 0 24px; border-bottom:1px solid var(--tea-line); }
 #teahouse-panel .tea-settings-group:last-child { padding-bottom:0; border-bottom:0; }
-#teahouse-panel .tea-settings-group.play-display-settings { border-bottom:0; }
 #teahouse-panel .tea-settings-group>h3 { margin-bottom:16px; color:var(--tea-heading,var(--tea-forest))!important; font:700 19px/28px var(--tea-display); }
 #teahouse-panel .tea-settings-group>.tea-field { margin-top:14px; }
 #teahouse-panel .tea-settings .tea-field { font-size:14px; }
 #teahouse-panel .tea-settings .tea-field textarea { min-height:88px; flex:none; font-size:14px; }
 #teahouse-panel .tea-settings .tea-field textarea.play-hidden-tags { field-sizing:content; min-height:42px; max-height:138px; overflow-y:auto; resize:none; }
-#teahouse-panel .tea-settings .tea-setting-row { padding:12px 0; gap:12px; }
+#teahouse-panel .tea-settings .tea-setting-row { padding:12px 0; gap:12px; border-bottom:0; }
 #teahouse-panel .tea-settings .tea-setting-row small { margin-top:4px; }
 #teahouse-panel .tea-settings .tea-setting-description { line-height:20px; font-weight:400; }
-#teahouse-panel .tea-settings-group>.tea-setting-row:last-child { border-bottom:0; }
-#teahouse-panel .play-api-settings>.tea-setting-row { border-bottom:0; padding-top:0; }
-#teahouse-panel .tea-settings .tea-update-setting { padding:0 0 12px; }
+#teahouse-panel .play-api-settings>.tea-setting-row { padding-top:0; }
+#teahouse-panel .tea-settings .tea-update-setting { padding:0 0 12px; border-bottom:0; }
 #teahouse-panel .tea-settings .tea-update-controls { grid-template-columns:minmax(0,1fr) auto; grid-template-rows:40px 24px; gap:0 12px; }
 #teahouse-panel .tea-settings .tea-update-status:empty { display:none; }
 #teahouse-panel .tea-settings .tea-content-preference { padding:12px 0; border-bottom:0; }
@@ -257,10 +255,10 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-prompt-controls { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
 #teahouse-panel .play-prompt-controls select { flex:1; min-width:0; width:0; height:44px; margin:0!important; padding:8px 12px!important; border:1px solid var(--tea-line)!important; border-radius:4px!important; background:var(--tea-field-paper,#fffdf6)!important; text-overflow:ellipsis; }
 #teahouse-panel .tea-settings .play-prompt-content-field textarea { min-height:112px; max-height:360px; padding:12px!important; font-size:15px; line-height:25px!important; resize:vertical; }
-#teahouse-panel .play-prompt-note { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:6px 0 16px; }
+#teahouse-panel .play-prompt-note { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:6px 0 4px; }
 #teahouse-panel .play-prompt-note small { flex:1; }
 #teahouse-panel .play-prompt-delete { flex:none; min-height:40px; padding:0 8px; color:var(--tea-accent,#a65340)!important; font-size:12px; }
-#teahouse-panel .tea-settings .play-prompt-position { border-bottom:0; padding-bottom:8px; }
+#teahouse-panel .tea-settings .play-prompt-position { padding-bottom:8px; }
 #teahouse-panel .play-prompt-editor { position:fixed; inset:0; width:min(720px,calc(100vw - 48px)); height:min(660px,calc(100dvh - 48px)); min-height:0; max-width:none; max-height:none; margin:auto; padding:0; border:1px solid var(--tea-line)!important; border-radius:8px!important; background:var(--tea-paper)!important; color:var(--tea-ink)!important; overflow:hidden; font:14px/24px var(--tea-ui); text-align:left; box-shadow:0 24px 64px var(--tea-popup-shadow,#102f2850); }
 #teahouse-panel .play-prompt-editor::backdrop { background:#00000060; }
 #teahouse-panel .play-prompt-editor-form { display:flex; flex-direction:column; height:100%; min-height:0; margin:0; }
@@ -570,18 +568,18 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-result-opening { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:24px; }
 #teahouse-panel .play-result-time { display:block; color:var(--tea-muted); font-size:10px; line-height:21px; }
 #teahouse-panel .play-storage-notice { color:var(--tea-error,var(--play-coral-ink)); }
-#teahouse-panel .play-api-fields { display:flex; flex-direction:column; gap:16px; padding:16px 0 24px; border-bottom:1px solid var(--tea-line); }
+#teahouse-panel .play-api-fields { display:flex; flex-direction:column; gap:16px; padding:16px 0 12px; }
 #teahouse-panel .play-api-fields input { font-size:14px; }
 #teahouse-panel .play-api-model-row { display:flex; align-items:flex-end; gap:12px; min-width:0; }
 #teahouse-panel .play-api-model-row .tea-field { flex:1; min-width:0; }
 #teahouse-panel .play-api-model-refresh { flex:none; min-height:42px; padding:8px 14px; border:1px solid var(--tea-line)!important; border-radius:4px!important; background:var(--tea-control-paper,var(--tea-forest))!important; color:var(--tea-control-ink,var(--tea-paper))!important; white-space:nowrap; }
 #teahouse-panel .play-continue-settings { display:flex; flex-direction:column; gap:12px; }
-#teahouse-panel .play-continue-settings>.tea-setting-row { padding-top:0; border-bottom:0; }
+#teahouse-panel .play-continue-settings>.tea-setting-row { padding-top:0; padding-bottom:0; }
 #teahouse-panel .play-continue-settings select { max-width:100%; }
 #teahouse-panel .play-continue-settings .tea-setting-description { margin:0; }
 #teahouse-panel .play-continue-error { color:var(--tea-error,var(--play-coral-ink)); }
 #teahouse-panel .play-processing-settings { display:flex; flex-direction:column; gap:14px; padding-top:16px; }
-#teahouse-panel .play-processing-settings .tea-setting-row { padding:0; border-bottom:0; }
+#teahouse-panel .play-processing-settings .tea-setting-row { padding:0; }
 #teahouse-panel .play-processing-settings .tea-setting-description { margin:0; font-weight:400; }
 #teahouse-panel .play-regex-list { border:0; padding-top:0; }
 #teahouse-panel .play-regex-list summary { cursor:pointer; font-size:14px; font-weight:600; padding:8px 0; min-height:40px; }

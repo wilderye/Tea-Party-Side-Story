@@ -807,7 +807,12 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         font.value = state.settings.fontSource === 'tavern' ? 'tavern' : 'default';
         font.addEventListener('change', () => {
+            const settingsArea = font.closest('.tea-settings'), scrollTop = settingsArea?.scrollTop;
             state.settings.fontSource = font.value; actions.saveSettings(); applyFontSource(); measureBodies();
+            if (settingsArea && Number.isFinite(scrollTop)) {
+                settingsArea.scrollTop = scrollTop;
+                requestAnimationFrame(() => { if (settingsArea.isConnected) settingsArea.scrollTop = scrollTop; });
+            }
         });
         row.append(label, font); area.append(row);
     }

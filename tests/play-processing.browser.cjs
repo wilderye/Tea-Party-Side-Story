@@ -489,14 +489,15 @@ if (require.main === module) (async()=>{
    };
    const closeSettings=async settingsPage=>{await settingsPage.getByRole('button',{name:viewport.width<=760?'返回剧场演出':'设置',exact:true}).click();};
    let dialog=await openSettings();
-   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','小剧场续写','回复显示','阅读外观']);
+   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','小剧场续写']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
    assert.equal(await dialog.getByRole('textbox',{name:'隐藏标签'}).inputValue(),'think,thinking,update,status');
    assert.ok(await dialog.getByRole('textbox',{name:'隐藏标签'}).evaluate(node=>node.clientHeight<60),'默认隐藏名单使用紧凑的一行');
    assert.deepEqual(await dialog.getByRole('combobox',{name:'正文字号'}).locator('option').allTextContents(),Array.from({length:11},(_,i)=>String(12+i*2)));
    assert.ok(await dialog.getByRole('combobox',{name:'正文字号'}).locator('..').locator('strong').evaluate(node=>Number(getComputedStyle(node).fontWeight)>=600),'正文字号名称与其他设置一样加粗');
    assert.equal(await dialog.getByRole('combobox',{name:'自定义小剧场提示词'}).inputValue(),'default');
-   assert.equal(await dialog.getByRole('textbox',{name:'小剧场提示词内容',exact:true}).inputValue(),'本次仅输出小剧场，不生成任何状态栏或待办等附加内容。');
+   const defaultPrompt=await page.evaluate(async()=>(await import('/play-settings.js')).DEFAULT_PLAY_PROMPT);
+   assert.equal(await dialog.getByRole('textbox',{name:'小剧场提示词内容',exact:true}).inputValue(),defaultPrompt);
    assert.equal(await dialog.locator('details').evaluate(node=>node.open),false);
    await screenshot(page,`processing-settings-defaults-${viewport.width}.png`);
    await dialog.getByRole('textbox',{name:'隐藏标签'}).fill('think，thinking,\n\nupdate');
@@ -506,7 +507,7 @@ if (require.main === module) (async()=>{
    assert.deepEqual(await dialog.locator('.play-regex-owner').allTextContents(),['预设甲','测试甲']);
    assert.equal(await dialog.getByRole('searchbox').count(),0,'正则设置没有搜索控件');
    assert.equal(await dialog.locator('.play-regex-list').evaluate(node=>getComputedStyle(node).borderTopWidth),'0px');
-   assert.equal(await dialog.locator('.play-display-settings').evaluate(node=>getComputedStyle(node).borderBottomWidth),'0px');
+   assert.equal(await dialog.locator('.play-display-settings').evaluate(node=>getComputedStyle(node).borderBottomWidth),'1px','回复显示和下一板块之间保留分割线');
    assert.equal(await a.locator('iframe').count(),0,'关闭设置之前不重建已显示的回复');
    await screenshot(page,`processing-settings-${viewport.width}.png`);
    await closeSettings(dialog);
@@ -649,7 +650,7 @@ if (require.main === module) (async()=>{
    await active.getByRole('button',{name:'编辑回复原文'}).waitFor();
    assert.equal(await edit.getByRole('textbox',{name:'回复原文'}).inputValue(),'生成时保留的编辑草稿','其他消息生成和保存不覆盖当前编辑框');
    await editAction('取消').click();
-   assert.equal((await page.evaluate(()=>window.captured[0])).playPrompt,'本次仅输出小剧场，不生成任何状态栏或待办等附加内容。');
+   assert.equal((await page.evaluate(()=>window.captured[0])).playPrompt,defaultPrompt);
 
    await panel.getByRole('textbox',{name:'小剧场提示词',exact:true}).fill('停止时保留未闭合内容');
    await panel.getByRole('button',{name:'发送小剧场',exact:true}).click();

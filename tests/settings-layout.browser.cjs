@@ -1,5 +1,5 @@
 // Browser plugin not available. Use the project's Playwright/Edge workflow.
-// Flow: settings -> enter wrapped/multiline tags -> cap at five lines -> shorten -> reopen.
+// Flow: settings -> section dividers and spacing -> wrapped tags -> cap at five lines -> reopen.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { harness } = require('./play-processing.browser.cjs');
 const http = require('node:http');
@@ -7,10 +7,13 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
+const settingsHarness = harness.replace("import {createTheatrePanel}",
+    "import {createDiagnostics} from '/diagnostics.js';\nconst diagnostics = createDiagnostics();\nimport {createTheatrePanel}")
+    .replace('{...libraryActions,playground:runtime,promptFavorites}', '{...libraryActions,playground:runtime,promptFavorites,diagnostics}');
 const server = http.createServer(async (request, response) => {
     try {
         const name = new URL(request.url, 'http://localhost').pathname.slice(1);
-        if (!name) { response.setHeader('Content-Type', 'text/html; charset=utf-8'); return response.end(harness); }
+        if (!name) { response.setHeader('Content-Type', 'text/html; charset=utf-8'); return response.end(settingsHarness); }
         if (name === 'favicon.ico') { response.statusCode = 204; return response.end(); }
         const file = path.resolve(root, name);
         if (!file.startsWith(root + path.sep) || !/\.(js|css|svg|woff2)$/.test(file)) { response.statusCode = 404; return response.end(); }
@@ -27,6 +30,47 @@ async function screenshot(page, name) {
     if (!process.env.TEA_QA_DIR) return;
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
+}
+
+async function verifySections(page, viewport) {
+    const settings = page.locator('.tea-settings');
+    const checkDividers = async () => {
+        const metrics = await settings.evaluate(area => ({
+            groups: [...area.children].map(group => ({ title: group.querySelector('h3').textContent,
+                line: getComputedStyle(group).borderBottomWidth })),
+            inside: [...area.querySelectorAll('.tea-setting-row,.tea-update-setting,.play-api-fields')]
+                .filter(node => node.checkVisibility()).map(node => getComputedStyle(node).borderBottomWidth),
+        }));
+        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '回复显示', '插件日志', '阅读外观', '小剧场续写']);
+        assert.deepEqual(metrics.groups.map(group => group.line), ['1px', '1px', '1px', '1px', '1px', '0px'], '相邻板块有线，末尾不再画线');
+        assert.ok(metrics.inside.every(line => line === '0px'), '板块内部的设置之间没有分割线');
+    };
+    await checkDividers();
+    const api = settings.getByRole('combobox', { name: '生成使用的 API', exact: true });
+    await api.selectOption('custom'); await checkDividers();
+    assert.equal(await settings.getByRole('textbox', { name: '接口地址', exact: true }).isVisible(), true);
+    await settings.locator('.play-regex-list>summary').click();
+    await settings.getByRole('checkbox', { name: '状态栏美化', exact: true }).waitFor(); await checkDividers();
+    const appearance = settings.getByRole('combobox', { name: '外观', exact: true });
+    for (const source of ['tavern', 'default']) { await appearance.selectOption(source); await checkDividers(); }
+    const metrics = await settings.evaluate(area => ({
+        appearance: ['height', 'fontSize', 'backgroundColor'].map(key => getComputedStyle(area.querySelector('[aria-label="外观"]'))[key]),
+        prompt: ['height', 'fontSize'].map(key => getComputedStyle(area.querySelector('[aria-label="自定义小剧场提示词"]'))[key]),
+        noteMargin: getComputedStyle(area.querySelector('.play-prompt-note')).marginBottom,
+        apiPadding: getComputedStyle(area.querySelector('.play-api-fields')).paddingBottom,
+        continuePadding: [...area.querySelectorAll('.play-continue-settings>.tea-setting-row')].map(row => getComputedStyle(row).paddingBottom),
+    }));
+    assert.deepEqual(metrics.appearance, [viewport.width <= 760 ? '32px' : '40px', '14px', 'rgb(250, 247, 238)'], '外观下拉框保留现有尺寸、字号和底色');
+    assert.deepEqual(metrics.prompt, ['44px', viewport.width <= 760 ? '16px' : '14px'], '提示词下拉框保留现有样式');
+    assert.equal(metrics.noteMargin, '4px'); assert.equal(metrics.apiPadding, '12px');
+    assert.deepEqual(metrics.continuePadding, ['0px', '0px'], '续写设置去掉与说明之间重复的留白');
+    await api.selectOption('tavern');
+    await settings.locator('.play-regex-list>summary').click();
+    await settings.evaluate(area => {
+        const reading = [...area.children].find(group => group.querySelector('h3').textContent === '阅读外观');
+        area.scrollTop += reading.getBoundingClientRect().top - area.getBoundingClientRect().top - 16;
+    });
+    await screenshot(page, `settings-sections-${viewport.width}.png`);
 }
 
 async function verifyTags(page, viewport, fallback) {
@@ -101,9 +145,10 @@ async function verifyTags(page, viewport, fallback) {
                 await settle(page);
                 assert.ok((await page.locator('.tea-settings').innerText()).includes('回复显示'));
                 assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0);
+                if (!fallback) await verifySections(page, viewport);
                 await verifyTags(page, viewport, fallback);
                 assert.deepEqual(errors, []);
-                console.log(JSON.stringify({ url, viewport, fallback, checks: '标签自动折行、手动换行、五行上限、滚动到底、缩回一行、重新打开、留空保存、无溢出', errors }));
+                console.log(JSON.stringify({ url, viewport, fallback, checks: '板块分割线、内部无线、保留下拉框样式、已确认的空白、标签自动折行、五行上限、滚动到底、缩回一行、重新打开、留空保存、无溢出', errors }));
                 await context.close();
             }
         }
