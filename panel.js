@@ -165,6 +165,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (progress) progress.textContent = state.statusKind === 'update' ? state.status : '';
     }
     function measureBodies() {
+        settingsView?.layout();
         cancelAnimationFrame(measureFrame);
         if (scope === 'play') { if (mode === 'list') playView?.layout(); return; }
         measureFrame = requestAnimationFrame(() => {
@@ -370,7 +371,7 @@ export function createTheatrePanel(ctx, state, actions) {
         restoringCatalog = scope !== 'play';
         if (mode !== 'settings') apiSettings?.cancel();
         const keptSettings = preserveSettings && mode === 'settings' ? panel.querySelector('.tea-settings')?.parentElement : null;
-        const settingsPosition = mode === 'settings' ? settingsView?.() : null;
+        const settingsPosition = mode === 'settings' ? settingsView?.capture() : null;
         if (!keptSettings) {
             diagnosticsView?.dispose(); diagnosticsView = null;
             settingsView = null;
@@ -460,6 +461,8 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         else if (focusKey) [...panel.querySelectorAll('button, select, input[role="switch"]')].find(b => b.getAttribute('aria-label') === focusKey && b.getClientRects().length)?.focus({ preventScroll: true });
         if (list) observer?.observe(list);
+        const settingsArea = panel.querySelector('.tea-settings');
+        if (settingsArea) observer?.observe(settingsArea);
         for (const body of panel.querySelectorAll('.tea-feed-entry .tea-body')) observer?.observe(body);
         measureBodies();
     }
@@ -749,7 +752,7 @@ export function createTheatrePanel(ctx, state, actions) {
         });
         preference.append(label, description); library.append(preference);
         const help = textButton('随文剧场用法', () => { mode = 'help'; render(); }); help.className = 'tea-text-button'; library.append(help);
-        let captureRules;
+        let processingSettings;
         if (actions.playground) {
             const generation = group('小剧场生成');
             apiSettings ??= createPlayApiSettings(ctx, state.settings, actions.saveSettings, actions.diagnostics);
@@ -758,7 +761,7 @@ export function createTheatrePanel(ctx, state, actions) {
             const display = group('回复显示');
             display.classList.add('play-display-settings');
             display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
-            captureRules = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
+            processingSettings = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
         }
         if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
         const reading = group('阅读外观');
@@ -783,7 +786,10 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         if (actions.playground) renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
         workspace.append(area);
-        settingsView = () => ({ scrollTop: area.scrollTop, rules: captureRules?.(), logs: diagnosticsView?.capture() });
+        settingsView = {
+            capture: () => ({ scrollTop: area.scrollTop, rules: processingSettings?.capture(), logs: diagnosticsView?.capture() }),
+            layout: () => processingSettings?.layout(),
+        };
     }
     function renderAppearanceSetting(area) {
         const row = element('label', undefined, 'tea-setting-row'), select = element('select');

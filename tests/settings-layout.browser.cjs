@@ -88,6 +88,14 @@ async function verifyTags(page, viewport, fallback) {
     const short = await metrics();
     assert.ok(short.height >= 42 && short.height <= short.line * 2 + short.padding + short.border,
         '默认标签只占一至两行，窄屏折行时自动增加高度');
+    if ([1440, 390].includes(viewport.width)) {
+        await tags.fill(Array.from({ length: 6 }, (_, i) => `hidden_tag_${i}`).join(',')); await settle(page);
+        const wideHeight = (await metrics()).height;
+        await page.setViewportSize({ ...viewport, width: viewport.width === 1440 ? 820 : 320 }); await settle(page);
+        assert.ok((await metrics()).height > wideHeight, '窗口变窄后，已有标签自动折行并增高');
+        await page.setViewportSize(viewport); await settle(page);
+        assert.equal((await metrics()).height, wideHeight, '窗口变宽后，已有标签恢复原有高度');
+    }
     const commaTags = Array.from({ length: 18 }, (_, i) => `hidden_tag_${i}`).join(',');
     await tags.fill(commaTags); await settle(page);
     const wrapped = await metrics();

@@ -273,13 +273,13 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
         '用中英文逗号或换行分隔；标签闭合后隐藏内容，原文保留。');
     tags.classList.add('play-hidden-tags');
     tags.rows = 1;
-    if (!CSS.supports('field-sizing', 'content')) {
-        const resizeTags = () => {
-            tags.style.height = 'auto';
-            tags.style.height = `${tags.scrollHeight + tags.offsetHeight - tags.clientHeight}px`;
-        };
-        tags.addEventListener('input', resizeTags); requestAnimationFrame(resizeTags);
+    const nativeTagSizing = CSS.supports('field-sizing', 'content');
+    function resizeTags() {
+        if (nativeTagSizing || !tags.clientWidth) return;
+        tags.style.height = 'auto';
+        tags.style.height = `${tags.scrollHeight + tags.offsetHeight - tags.clientHeight}px`;
     }
+    if (!nativeTagSizing) tags.addEventListener('input', resizeTags);
     const toggleRow = element('label', undefined, 'tea-setting-row');
     const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = config.regexEnabled;
     toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-label', '沿用酒馆正则');
@@ -342,5 +342,5 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     status.hidden = true;
     if (loaded) renderList();
     details.open = !!viewState?.open;
-    return () => ({ open: details.open, loaded });
+    return { capture: () => ({ open: details.open, loaded }), layout: resizeTags };
 }
