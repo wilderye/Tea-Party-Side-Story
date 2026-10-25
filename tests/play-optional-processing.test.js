@@ -53,24 +53,55 @@ test('只调用公开编译方法，变量、人设和聊天属于本次任务�
     assert.deepEqual(target, before);
 });
 
-test('EJS 缺少变量时保留整段原文，不把表达式换成空白；禁用状态不执行', async () => {
+test('EJS 缺少变量时留空，不补默认值；插件或生成处理禁用时不执行', async () => {
     let calls = 0;
-    const host = { compileTemplate: async () => { calls++; return data => data.getvar('missing'); } };
+    const host = { compileTemplate: async () => { calls++; return data => '保留前后内容 ' + (data.getvar('missing') ?? ''); } };
     const source = '保留前后内容 <%= getvar("missing") %>';
-    assert.equal(await createPlayTemplateContext(environment(), resolved(), libraries, signal(), host).process(source), source);
-    const env = environment(); env.tavern.templateFeatures.enabled = false;
-    assert.equal(await createPlayTemplateContext(env, resolved(), libraries, signal(), host).process(source), source);
+    const target = resolved();
+    assert.equal(await createPlayTemplateContext(environment(), target, libraries, signal(), host).process(source), '保留前后内容 ');
+    assert.equal(Object.hasOwn(target.variables, 'missing'), false);
+    for (const feature of ['enabled', 'generate_enabled']) {
+        const env = environment(); env.tavern.templateFeatures[feature] = false;
+        assert.equal(await createPlayTemplateContext(env, resolved(), libraries, signal(), host).process(source), source);
+    }
     assert.equal(calls, 1);
     assert.deepEqual(readPlayTemplateFeatures({ getFeatures() { throw Error('Plugin changed'); } }), { enabled: false });
 });
 
+test('EJS 读取本任务合并后的变量，初值随后加入也可读取且不污染原资料', async () => {
+    const target = resolved(); target.variables = {};
+    const host = { compileTemplate: async () => data => [data.getvar('stat_data.year'),
+        data.getvar('chatValue'), data.getvar('globalValue'), data.variables.stat_data.year].join('/') };
+    const template = createPlayTemplateContext(environment(), target, libraries, signal(), host);
+    target.variables.stat_data = { year: 750 };
+    assert.equal(await template.process('<%= values %>'), '750/2/3/750');
+    assert.deepEqual(target.variables, { stat_data: { year: 750 } });
+});
+
 test('EJS 编译期间停止仍然停止本次任务，不作为兼容失败继续发送', async () => {
-    const controller = new AbortController(); let finish;
-    const host = { compileTemplate: () => new Promise(resolve => { finish = resolve; }) };
+    const controller = new AbortController(); let finish, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const host = { compileTemplate: () => new Promise(resolve => { finish = resolve; started(); }) };
     const template = createPlayTemplateContext(environment(), resolved(), libraries, controller.signal, host);
     const pending = template.process('<%= 1 %>');
+    await ready;
     controller.abort(new DOMException('停止测试', 'AbortError')); finish(() => '1');
     await assert.rejects(pending, { name: 'AbortError' });
+});
+
+test('可选编译器超时后本任务不再逐段等待，普通文字照常保留', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let started, calls = 0;
+    const ready = new Promise(resolve => { started = resolve; });
+    const host = { compileTemplate: () => { calls++; started(); return new Promise(() => {}); } };
+    const template = createPlayTemplateContext(environment(), resolved(), libraries, signal(), host);
+    const source = '<%= first %>', pending = template.process(source);
+    await ready;
+    t.mock.timers.tick(3000);
+    assert.equal(await pending, source);
+    assert.equal(await template.process('<%= second %>'), '<%= second %>');
+    assert.equal(await template.process('普通角色设定'), '普通角色设定');
+    assert.equal(calls, 1);
 });
 
 test('失败的模板不能把修改的变量带到下一段模板或原聊天', async () => {
@@ -106,6 +137,19 @@ test('普通初始 JSON/YAML 使用已提供的解析器，复杂初值失败不
         entries[0].content = content;
         assert.equal(await readPlayInitialVariables(environment(), context, text => text, libraries, signal()), null);
     }
+});
+
+test('初始值的 EJS 使用可选处理，失败条目不丢弃其他初值，不执行结构注册', async () => {
+    const entries = [{ comment: '[initvar]', content: '{"year":750}' },
+        { comment: '[initvar]', content: '{invalid' },
+        { comment: '[initvar]', content: '{"name":"<%= charName %>"}' },
+        { comment: '[initvar]', content: '<%= unsupported() %>' }];
+    const before = structuredClone(entries);
+    const context = { worldNames: ['fixture'], loadWorldInfo: async () => ({ entries }) };
+    const process = text => text.replace('<%= charName %>', '目标角色');
+    assert.deepEqual(await readPlayInitialVariables(environment(), context, text => text, libraries, signal(), process),
+        { stat_data: { year: 750, name: '目标角色' } });
+    assert.deepEqual(entries, before);
 });
 
 test('已打开的当前聊天才使用原入口；不发聊天、其他角色或人设不匹配时隔离处理', () => {

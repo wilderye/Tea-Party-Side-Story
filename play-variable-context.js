@@ -7,8 +7,8 @@ export function readPlayHelperVariables(value) {
     } catch { return {}; }
 }
 
-/** Optional plain initial data. No MVU/Helper scripts, schema code or host writes. */
-export async function readPlayInitialVariables(environment, worldContext, substitute, libraries, signal) {
+/** Optional initial data/templates. No MVU/Helper scripts, schema code or host writes. */
+export async function readPlayInitialVariables(environment, worldContext, substitute, libraries, signal, processTemplate = text => text) {
     const data = {};
     let found = false;
     for (const name of worldContext.worldNames) {
@@ -21,15 +21,17 @@ export async function readPlayInitialVariables(environment, worldContext, substi
                 source = source.match(/<initvar>\s*([\s\S]*?)\s*<\/initvar>/i)?.[1] ?? source;
                 source = source.match(/^```[^\n]*\n([\s\S]*?)\n```$/)?.[1] ?? source;
                 source = substitute(source);
-                // Script-dependent initial data stays unprocessed rather than guessed.
-                if (source.includes('<%') || source.includes('{{')) return null;
+                source = await processTemplate(source);
+                signal.throwIfAborted();
+                // Failed optional content does not discard other readable entries.
+                if (source.includes('<%') || source.includes('{{')) continue;
                 const value = libraries.YAML?.parse ? libraries.YAML.parse(source) : JSON.parse(source);
-                if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+                if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
                 libraries._.mergeWith(data, value, (_left, right) => Array.isArray(right) ? right : undefined);
                 found = true;
             } catch {
                 signal.throwIfAborted();
-                return null;
+                continue;
             }
         }
     }

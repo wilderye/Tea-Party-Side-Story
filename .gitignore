@@ -35,6 +35,7 @@ tests/*
 !tests/play-character-context.test.js
 !tests/play-independent-modules.test.js
 !tests/play-optional-processing.test.js
+!tests/play-template-installed.browser.cjs
 !tests/play-independent.browser.cjs
 !tests/play-concurrency.browser.cjs
 !tests/diagnostics.test.js

@@ -98,12 +98,13 @@ export async function createIndependentPlayScope(context, modules, options) {
     const { localCore, macros, refreshFields } = await buildPlayCore(context, modules, environment, resolved, events, prompt);
     const notes = await createPlayNoteContext(modules, environment, localCore);
     const worldContext = await createPlayWorldContext(context, environment, localCore, macros.substitute, events, signal, notes);
+    const template = createPlayTemplateContext(environment, resolved, { _: window._ }, signal);
     if (resolved.variableSource === 'initial') {
-        const initial = await readPlayInitialVariables(environment, worldContext, macros.substitute, { _: window._, YAML: modules.lib.yaml }, signal);
+        const initial = await readPlayInitialVariables(environment, worldContext, macros.substitute,
+            { _: window._, YAML: modules.lib.yaml }, signal, template.process);
         Object.assign(resolved.variables, initial ?? {});
         refreshFields();
     }
-    const template = createPlayTemplateContext(environment, resolved, { _: window._ }, signal);
     events.on(context.eventTypes.WORLDINFO_ENTRIES_LOADED, async groups => {
         for (const entries of Object.values(groups)) for (const entry of entries ?? []) entry.content = await template.process(entry.content);
     });

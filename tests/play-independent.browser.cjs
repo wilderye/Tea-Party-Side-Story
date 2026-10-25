@@ -21,6 +21,12 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
                 await route.fulfill({ contentType: 'text/javascript', body: await fs.readFile(file, 'utf8') });
             });
             await context.route('**/api/characters/all', route => route.fulfill({ json: cards }));
+            await context.route('**/api/settings/get', async route => {
+                const response = await route.fetch(), data = await response.json();
+                const settings = JSON.parse(data.settings); settings.firstRun = false;
+                data.settings = JSON.stringify(settings);
+                await route.fulfill({ json: data });
+            });
             await context.route('**/api/groups/all', route => route.fulfill({ json: [] }));
             await context.route('**/api/characters/chats', route => { reads.push('list');
                 const card = cards.find(item => item.avatar === route.request().postDataJSON().avatar_url);

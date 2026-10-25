@@ -230,7 +230,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try {
             if (existing) { await playground.removeFavorite(existing.id); favoriteRows.delete(key); }
             else {
-                const cleanedText = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
+                const cleanedText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
                 if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
                 const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
                     text: cleanedText,
@@ -873,9 +873,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const retryingSave = pendingSave && job.phase === 'saving';
         const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
             : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
-        const sourceSignature = JSON.stringify([result.text, playground.display?.revision ?? 0]);
+        const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);
         if (output.sourceSignature !== sourceSignature) {
-            output.displayText = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
+            output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
         const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}`;
@@ -1040,7 +1040,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const selected = selectedResult(round).id === result.id;
             option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
             const copy = element('span', undefined, 'play-result-option-copy');
-            const preview = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
+            const preview = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
             copy.append(element('span', playTextPreview(preview) || statusText[result.status] || '内容已隐藏', 'play-result-opening'),
                 element('time', messageTime(result.startedAt), 'play-result-time'));
             const check = glyph('check'); check.classList.add('play-result-check');

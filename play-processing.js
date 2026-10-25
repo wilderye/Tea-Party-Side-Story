@@ -273,7 +273,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             syncState(structuredClone(readPlaySettings(settings)), nextRules);
             return rules;
         },
-        process(source, character) {
+        process(source, character, requestContext) {
             let targetRules = rules;
             if (engine && character?.avatar) {
                 if (!roleRules.has(character.avatar)) roleRules.set(character.avatar, readTavernRegex(engine, ctx(), character));
@@ -282,13 +282,15 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             const target = character ?? selectedCharacter;
             const targetEngine = roleEngines.get(target?.avatar) ?? engine;
             return processPlayText(source, config, targetRules, (script, text) => {
-                if (targetEngine.taskBound) return targetEngine.runRegexScript(script, text);
                 // Resolve target names before the native engine consults the
                 // host's current character while substituting replacement text.
-                const names = value => String(value ?? '').replace(/\{\{char\}\}|<char>/gi, () => target?.name ?? ctx().name2 ?? '');
+                const names = value => String(value ?? '').replace(/\{\{char\}\}|<char>|\{\{user\}\}|<user>/gi,
+                    match => /char/i.test(match) ? target?.name ?? ctx().name2 ?? '' : requestContext?.userName ?? match);
                 const mode = Number(script.substituteRegex);
                 const findRegex = mode === 1 ? names(script.findRegex) : mode === 2
-                    ? String(script.findRegex).replace(/\{\{char\}\}|<char>/gi, () => escapeRegex(target?.name ?? ctx().name2 ?? '')) : script.findRegex;
+                    ? String(script.findRegex).replace(/\{\{char\}\}|<char>|\{\{user\}\}|<user>/gi,
+                        match => /char/i.test(match) ? escapeRegex(target?.name ?? ctx().name2 ?? '')
+                            : requestContext?.userName === undefined ? match : escapeRegex(requestContext.userName)) : script.findRegex;
                 return targetEngine.runRegexScript({ ...script, findRegex, replaceString: names(script.replaceString),
                     trimStrings: script.trimStrings?.map(names) }, text, { characterOverride: target?.name });
             });

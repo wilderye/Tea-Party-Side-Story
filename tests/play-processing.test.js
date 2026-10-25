@@ -94,6 +94,29 @@ function fixture() {
     return { ctx, engine, groups };
 }
 
+test('显示和收藏前处理使用该回复保存的人设名字，查找和修剪也遵守宏替换模式', async () => {
+    for (const taskBound of [false, true]) {
+        const f = fixture(), calls = [];
+        f.ctx.name1 = '当前人设';
+        f.engine.taskBound = taskBound;
+        f.engine.runRegexScript = (script, text) => { calls.push(script); return text; };
+        const display = createPlayDisplay(() => f.ctx, {}, async () => f.engine);
+        for (const mode of [0, 1, 2]) {
+            f.groups[0] = [{ id: 'names', placement: [2], findRegex: '/{{user}}/g',
+                replaceString: '{{char}}/{{user}}', trimStrings: ['<user>'], substituteRegex: mode }];
+            f.groups[1] = []; f.groups[2] = [];
+            await display.refresh(f.ctx.characters[0]);
+            display.process('正文', f.ctx.characters[0], { userName: '旧人设.[+]' });
+            const script = calls.at(-1);
+            assert.equal(script.replaceString, '角色甲/旧人设.[+]');
+            assert.deepEqual(script.trimStrings, ['旧人设.[+]']);
+            assert.equal(script.findRegex, mode === 0 ? '/{{user}}/g' : mode === 1 ? '/旧人设.[+]/g' : '/旧人设\\.\\[\\+\\]/g');
+        }
+        display.process('正文', f.ctx.characters[0]);
+        assert.equal(calls.at(-1).replaceString, '角色甲/{{user}}', '旧记录没有人设时仍由对应引擎处理');
+    }
+});
+
 test('三处规则都读取，普通回复先于显示规则执行，楼层限制不影响小剧场', () => {
     const f = fixture(), rules = readTavernRegex(f.engine, f.ctx), calls = [];
     assert.deepEqual(rules.map(rule => rule.script.id), ['display', 'same', 'same', 'same', 'both']);
