@@ -5,10 +5,29 @@ import { replacePlayVariableMacros } from '../play-macro-context.js';
 import { readPlayInitialVariables, readPlayHelperVariables } from '../play-variable-context.js';
 import { canUseNativePlayScope } from '../play-independent.js';
 
+const cloneDefinitions = (value, customizer = () => undefined) => {
+    const custom = customizer(value);
+    if (custom !== undefined) return custom;
+    if (!value || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(item => cloneDefinitions(item, customizer));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDefinitions(item, customizer)]));
+};
 const libraries = { _: {
     get(value, path, fallback) { return String(path).split('.').reduce((item, key) => item?.[key], value) ?? fallback; },
     unescape: value => value,
-    mergeWith(target, value) { Object.assign(target, value); },
+    set(target, path, value) {
+        const keys = String(path).split('.'), last = keys.pop();
+        for (const key of keys) target = target[key] ??= {};
+        target[last] = value;
+    },
+    isPlainObject: value => value?.constructor === Object,
+    cloneDeep: cloneDefinitions,
+    cloneDeepWith: cloneDefinitions,
+    mergeWith(target, value, customizer = () => undefined) {
+        for (const [key, item] of Object.entries(value)) target[key] = customizer(target[key], item)
+            ?? (item?.constructor === Object ? this.mergeWith(target[key] ?? {}, item, customizer) : item);
+        return target;
+    },
 }, YAML: { parse: JSON.parse, stringify: JSON.stringify } };
 const environment = () => ({ character: { name: '目标角色', avatar: 'A.png' }, characterCard: { name: '目标角色' },
     sourceCharacterId: 1, noChat: false, nativeChat: { chatId: 'latest' },
@@ -115,6 +134,78 @@ test('失败的模板不能把修改的变量带到下一段模板或原聊天',
     assert.equal(await template.process('<% bad %>'), '<% bad %>');
     assert.equal(await template.process('<%= year %>'), '749');
     assert.equal(target.variables.stat_data.year, 749);
+});
+
+test('模板 define 在同一次任务的后续模板可用，函数绑定本次读取的资料', async () => {
+    const target = resolved(), before = structuredClone(target);
+    const host = { compileTemplate: async source => source === '<% define %>' ? data => {
+        assert.equal(data.define('TIMELINE', { year: 750 }), undefined);
+        data.define('helpers.year', function() { return this.getvar('stat_data.year'); });
+        return String(data.TIMELINE.year);
+    } : data => [data.TIMELINE.year, data.helpers.year()].join('/') };
+    const template = createPlayTemplateContext(environment(), target, libraries, signal(), host);
+    assert.equal(await template.process('<% define %>'), '750');
+    assert.equal(await template.process('<%= defined %>'), '750/749');
+    target.variables.stat_data.year = 751;
+    assert.equal(await template.process('<%= defined %>'), '750/751');
+    target.variables.stat_data.year = 749;
+    assert.deepEqual(target, before);
+});
+
+test('define 支持路径、数组追加和对象合并，对象里的数组替换', async () => {
+    const host = { compileTemplate: async () => data => {
+        data.define('items', [1]);
+        assert.deepEqual(data.define('items', [2], true), [1]);
+        data.define('info', { nested: { first: 1, items: [1] } });
+        data.define('info', { nested: { second: 2, items: [2] } }, true);
+        data.define('info.owner', '甲');
+        return JSON.stringify({ items: data.items, info: data.info });
+    } };
+    assert.deepEqual(JSON.parse(await createPlayTemplateContext(environment(), resolved(), libraries, signal(), host).process('<% merge %>')),
+        { items: [1, 2], info: { nested: { first: 1, second: 2, items: [2] }, owner: '甲' } });
+});
+
+test('模板失败或返回无效结果时丢弃新定义及对原定义的修改', async () => {
+    const host = { compileTemplate: async source => data => {
+        if (source === '<% start %>') { data.define('info', { value: 1 }); return ''; }
+        if (source === '<% read %>') return JSON.stringify({ info: data.info, leaked: data.leaked });
+        data.define('info', { value: 2 }, true); data.define('leaked', 3);
+        if (source === '<% bad %>') throw Error('Synthetic failure');
+        return undefined;
+    } };
+    const template = createPlayTemplateContext(environment(), resolved(), libraries, signal(), host);
+    assert.equal(await template.process('<% start %>'), '');
+    for (const source of ['<% bad %>', '<% invalid %>']) {
+        assert.equal(await template.process(source), source);
+        assert.equal(await template.process('<% read %>'), '{"info":{"value":1}}');
+    }
+});
+
+test('同时进行的模板任务不串用 define，超时后完成的模板也不能留下定义', async t => {
+    const host = { compileTemplate: async () => async data => {
+        data.define('owner', data.getvar('stat_data.year'));
+        await Promise.resolve();
+        return String(data.owner);
+    } };
+    const values = await Promise.all([749, 750].map(year => {
+        const target = resolved(); target.variables.stat_data.year = year;
+        return createPlayTemplateContext(environment(), target, libraries, signal(), host).process('<% define %>');
+    }));
+    assert.deepEqual(values, ['749', '750']);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let finish, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const delayedHost = { compileTemplate: async source => source === '<% late %>' ? async data => {
+        data.define('lateValue', 1); started();
+        await new Promise(resolve => { finish = resolve; });
+        return '';
+    } : data => String(data.lateValue ?? 'empty') };
+    const template = createPlayTemplateContext(environment(), resolved(), libraries, signal(), delayedHost);
+    const pending = template.process('<% late %>');
+    await ready; t.mock.timers.tick(3000);
+    assert.equal(await pending, '<% late %>');
+    finish(); await Promise.resolve();
+    assert.equal(await template.process('<%= lateValue %>'), 'empty');
 });
 
 test('可读取的变量宏正常替换，未知宏及未知变量保持原样', () => {

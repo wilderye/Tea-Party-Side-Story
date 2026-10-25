@@ -105,11 +105,11 @@ export async function createIndependentPlayScope(context, modules, options) {
         Object.assign(resolved.variables, initial ?? {});
         refreshFields();
     }
-    events.on(context.eventTypes.WORLDINFO_ENTRIES_LOADED, async groups => {
-        for (const entries of Object.values(groups)) for (const entry of entries ?? []) entry.content = await template.process(entry.content);
-    });
-    events.on(context.eventTypes.GENERATE_AFTER_DATA, async data => {
-        for (const message of data.prompt) {
+    // Render once after native selection and assembly, as the installed template
+    // plugin does for chat completions. Rendering every loaded entry beforehand
+    // executes inactive templates and changes the scanner's empty-entry handling.
+    events.on(context.eventTypes.CHAT_COMPLETION_SETTINGS_READY, async data => {
+        for (const message of data.messages) {
             if (typeof message.content === 'string') message.content = await template.process(message.content);
             else if (Array.isArray(message.content)) for (const part of message.content) {
                 if (part.type === 'text') part.text = await template.process(part.text);

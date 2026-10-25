@@ -47,10 +47,11 @@ export function createPlayTemplateContext(environment, resolved, libraries, sign
     const enabled = features?.enabled !== false && features?.generate_enabled !== false
         && !disabled.some(name => /(?:^|\/)ST-Prompt-Template$/.test(name));
     const compiled = new Map();
+    let defines = {};
     let compilerTimedOut = false;
     // Each render gets its own data, including initial values read after this
-    // context is created. No plugin cache or previous render is modified.
-    const createData = () => {
+    // context is created. Only successful define calls carry into later renders.
+    const createData = pendingDefines => {
         const chatVariables = structuredClone(resolved.metadata.variables ?? {});
         const globalVariables = structuredClone(environment.tavern.extensionSettings?.variables?.global ?? {});
         const variables = Object.assign({}, globalVariables, chatVariables, structuredClone(resolved.variables ?? {}));
@@ -67,7 +68,7 @@ export function createPlayTemplateContext(environment, resolved, libraries, sign
             if (options.index !== undefined) value = libraries._.get(JSON.parse(value || '{}'), options.index, options.defaults);
             return value && typeof value === 'object' || options.clone ? structuredClone(value) : value;
         };
-        return {
+        const locals = {
             _: libraries._, variables, getvar,
             getMessageVar: (key, options) => getvar(key, { ...options, scope: 'message' }),
             getLocalVar: (key, options) => getvar(key, { ...options, scope: 'local' }),
@@ -77,6 +78,22 @@ export function createPlayTemplateContext(environment, resolved, libraries, sign
             getCharData: () => structuredClone(environment.characterCard),
             getCharaData: () => structuredClone(environment.characterCard),
         };
+        locals.define = (name, value, merge = false) => {
+            const oldValue = libraries._.get(pendingDefines, name);
+            if (merge && Array.isArray(value) && (oldValue === undefined || Array.isArray(oldValue))) {
+                value = (oldValue ?? []).concat(value);
+            } else if (merge && libraries._.isPlainObject(value)
+                && (oldValue === undefined || libraries._.isPlainObject(oldValue))) {
+                value = libraries._.mergeWith(oldValue ?? {}, value, (_target, source) => Array.isArray(source) ? source : undefined);
+            }
+            libraries._.set(pendingDefines, name, value);
+            libraries._.set(locals, name, value);
+            return oldValue;
+        };
+        // Keep stored functions unbound; bind their copies to this render's data.
+        Object.assign(locals, libraries._.cloneDeepWith(pendingDefines,
+            value => typeof value === 'function' ? value.bind(locals) : undefined));
+        return locals;
     };
     return {
         async process(source) {
@@ -94,8 +111,11 @@ export function createPlayTemplateContext(environment, resolved, libraries, sign
                     compiling = false;
                     if (!active) return source;
                     signal.throwIfAborted();
-                    const locals = createData();
-                    return render.call(locals, locals);
+                    const pendingDefines = libraries._.cloneDeep(defines);
+                    const locals = createData(pendingDefines);
+                    const output = await render.call(locals, locals);
+                    if (active && typeof output === 'string') defines = pendingDefines;
+                    return output;
                 })();
                 const output = await Promise.race([pending,
                     new Promise(resolve => { timer = setTimeout(() => {

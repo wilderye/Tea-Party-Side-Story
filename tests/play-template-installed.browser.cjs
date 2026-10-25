@@ -21,7 +21,7 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
         for (const url of urls) {
             const context = await browser.newContext(), page = await context.newPage(), outbound = [], assets = new Set(), errors = [];
             page.on('pageerror', error => errors.push(error.stack ?? error.message));
-            let worldContent = '已处理<%= charName %>/<%= userName %>/<%= getvar("stat_data.year") %>/<%= getvar("missing") %>';
+            let worldContent = '<% define("FLOW", {owner:charName}); %>已处理<%= FLOW.owner %>/<%= userName %>/<%= getvar("stat_data.year") %>/<%= getvar("missing") %>/<%= typeof excludedValue %>';
             for (const [prefix, directory] of [['/scripts/extensions/third-party/tea-independent/', root],
                 ['/scripts/extensions/third-party/ST-Prompt-Template/', templateRoot]]) {
                 await context.route('**' + prefix + '**', async route => {
@@ -60,6 +60,7 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
                 0: entry(0, worldContent),
                 1: { ...entry(1, '{"year":<%= 700 + 50 %>,"owner":"<%= charName %>"}', '[initvar]'), disable: true },
                 2: { ...entry(2, '<%= unsupportedInitializer() %>', '[initvar]'), disable: true },
+                3: { ...entry(3, '<% define("excludedValue", true); %>'), disable: true },
             } } }));
             await context.route('**/api/backends/chat-completions/generate', route => {
                 outbound.push(route.request().postDataJSON().messages);
@@ -71,7 +72,8 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
             await page.addInitScript(() => {
                 window.templateTestReady = false;
                 const timer = setInterval(() => {
-                    const c = window.SillyTavern?.getContext?.();
+                    let c;
+                    try { c = window.SillyTavern?.getContext?.(); } catch { return; }
                     if (!c?.eventSource) return;
                     clearInterval(timer);
                     c.eventSource.on(c.eventTypes.APP_READY, () => { window.templateTestReady = true; });
@@ -122,6 +124,18 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
                 const failureSources = ['<% if ( %>', '<%= unsupportedHelper() %>'];
                 const failures = await Promise.all(failureSources.map(source => render(source)));
                 const concurrent = await Promise.all(Array.from({ length: 12 }, (_, index) => render('<%= getvar("stat_data.year") %>', 800 + index)));
+                const definitions = await Promise.all(Array.from({ length: 12 }, async (_, index) => {
+                    const target = resolved(800 + index);
+                    const template = createPlayTemplateContext(env(1), target, { _: window._ }, new AbortController().signal);
+                    const defined = await template.process('<% define("TIMELINE", {year:getvar("stat_data.year")}); define("helpers.year", function() { return this.getvar("stat_data.year"); }); %><%= TIMELINE.year %>');
+                    target.variables.stat_data.year += 100;
+                    const later = await template.process('<%= TIMELINE.year %>/<%= helpers.year() %>');
+                    const bad = '<% define("TIMELINE", {year:1}, true); define("leaked", true); unsupportedHelper(); %>';
+                    const failed = await template.process(bad);
+                    const restored = await template.process('<%= TIMELINE.year %>/<%= typeof leaked %>');
+                    const merged = await template.process('<% define("items", [1]); define("items", [2], true); define("info", {first:1, items:[1]}); define("info", {second:2, items:[2]}, true); %><%- JSON.stringify({items,info}) %>');
+                    return { defined, later, failedUnchanged: failed === bad, restored, merged: JSON.parse(merged) };
+                }));
                 const initialScope = await createIndependentPlayScope(c, modules,
                     { environment: env(1), prompt: '', signal: new AbortController().signal });
                 const initial = structuredClone(initialScope.resolved.variables); initialScope.dispose();
@@ -133,19 +147,23 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
                 const noHostPreparation = prepareCalls === 0;
                 const afterBaseline = await host.evalTemplate('<%= getvar("stat_data.year") %>');
                 window.templatePublicTest = { env, prepare, host, modules };
-                return { supported, missing, failures, failureSources, concurrent, initial,
+                return { supported, missing, failures, failureSources, concurrent, definitions, initial,
                     unchanged, noHostPreparation, baseline, afterBaseline, compileCalls };
             });
             assert.equal(result.supported, '乙/任务人设/749/2/3'); assert.equal(result.missing, '前后');
             assert.deepEqual(result.failures, result.failureSources);
             assert.deepEqual(result.concurrent, Array.from({ length: 12 }, (_, index) => String(800 + index)));
+            assert.deepEqual(result.definitions, Array.from({ length: 12 }, (_, index) => ({
+                defined: String(800 + index), later: `${800 + index}/${900 + index}`, failedUnchanged: true,
+                restored: `${800 + index}/undefined`, merged: { items: [1, 2], info: { first: 1, items: [2], second: 2 } },
+            })));
             assert.deepEqual(result.initial, { stat_data: { year: 750, owner: '乙' } });
             assert.equal(result.unchanged, true); assert.equal(result.noHostPreparation, true);
             assert.equal(result.baseline, '101'); assert.equal(result.afterBaseline, '101');
             assert.equal(result.compileCalls, 0, '使用安装包自带的标准引擎，不调用缺少 worker 文件的接口');
             assert.equal(outbound.length, 4);
             for (let index = 0; index < 4; index++) {
-                const expected = `已处理${index % 2 ? '乙' : '甲'}/任务人设/${index < 2 ? 750 : index === 2 ? 101 : 749}/`;
+                const expected = `已处理${index % 2 ? '乙' : '甲'}/任务人设/${index < 2 ? 750 : index === 2 ? 101 : 749}//undefined`;
                 const present = outbound.some(messages => messages.some(message => typeof message.content === 'string' && message.content.includes(expected)));
                 assert.ok(present, JSON.stringify({ case: index, messages: outbound.map(messages => ({ count: messages.length,
                     processed: messages.some(message => String(message.content).includes('已处理')),
@@ -246,7 +264,8 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
             assert.equal(unavailable.first, '<%= first %>'); assert.equal(unavailable.second, '<%= second %>');
             assert.equal(unavailable.plain, '普通角色内容'); assert.equal(unavailable.immediate, true);
             console.log(JSON.stringify({ port: url.port, realInstalledEngine: true, taskIsolation: true,
-                missingValueBlank: true, concurrentTemplates: 12, processedRequests: 4, fallbackRequests: 1, nativeTemplateRequests: 1,
+                missingValueBlank: true, concurrentTemplates: 12, concurrentDefinitions: 12, failedDefinitionsDiscarded: true,
+                processedRequests: 4, fallbackRequests: 1, nativeTemplateRequests: 1,
                 personaDialogs: [1332, 390], unavailableCompilerFallback: true, mainChatUnchanged: true }));
             await context.close();
         }
