@@ -495,10 +495,10 @@ if (require.main === module) (async()=>{
    let dialog=await openSettings();
    assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','小剧场续写']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
-   const noChat=dialog.getByRole('checkbox',{name:'不发送角色聊天，仅读取预设/人设/世界书',exact:true});
-   assert.equal(await noChat.isChecked(),true,'首次默认不发送角色聊天');
-   await noChat.uncheck();assert.equal(await page.evaluate(()=>fixture.settings.playNoChat),false);
+   const noChat=dialog.getByRole('switch',{name:'不发送角色聊天，仅读取预设/人设/世界书',exact:true});
+   assert.equal(await noChat.isChecked(),false,'首次默认关闭不发送角色聊天');
    await noChat.check();assert.equal(await page.evaluate(()=>fixture.settings.playNoChat),true);
+   await noChat.uncheck();assert.equal(await page.evaluate(()=>fixture.settings.playNoChat),false);
    assert.equal(await dialog.getByRole('textbox',{name:'隐藏标签'}).inputValue(),'think,thinking,update,status');
    assert.ok(await dialog.getByRole('textbox',{name:'隐藏标签'}).evaluate(node=>node.clientHeight<60),'默认隐藏名单使用紧凑的一行');
    assert.deepEqual(await dialog.getByRole('combobox',{name:'正文字号'}).locator('option').allTextContents(),Array.from({length:11},(_,i)=>String(12+i*2)));

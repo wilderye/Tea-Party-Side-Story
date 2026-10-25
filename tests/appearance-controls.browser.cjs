@@ -199,8 +199,9 @@ async function verify(page, url, theme, viewport) {
     assert.ok(onSwitch.track.some((value, index) => Math.abs(value - offSwitch.track[index]) >= 20),
         '开启和关闭状态使用明显不同的轨道颜色');
     assert.equal(offSwitch.left, '3px'); assert.equal(onSwitch.left, '27px');
-    for (const [name, key] of [['显示 G 向内容', 'showGore'], ['续写时发回原生思维链', 'playContinueSendReasoning']]) {
+    for (const [name, key] of [['显示 G 向内容', 'showGore'], ['不发送角色聊天，仅读取预设/人设/世界书', 'playNoChat'], ['续写时发回原生思维链', 'playContinueSendReasoning']]) {
         const control = panel.getByRole('switch', { name, exact: true });
+        await control.setChecked(true);
         assert.deepEqual(await switchColor(control, false), offSwitch, `${name} 共用关闭配色和圆点位置`);
         assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem('processingSettings'))[key], key), false);
         assert.deepEqual(await switchColor(control, true), onSwitch, `${name} 共用开启配色和圆点位置`);

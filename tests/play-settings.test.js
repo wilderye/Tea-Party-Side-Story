@@ -6,6 +6,12 @@ test('默认小剧场提示词要求只输出小剧场内容', () => {
     assert.equal(DEFAULT_PLAY_PROMPT, '按要求输出思维链后仅输出小剧场内容，不生成任何附加模块如顶部/尾部状态栏/待办/变量命令/总结等。');
 });
 
+test('默认发送角色聊天，仅明确开启不发送开关时使用初始变量模式', () => {
+    assert.equal(readPlaySettings({}).noChat, false);
+    assert.equal(readPlaySettings({ playNoChat: false }).noChat, false);
+    assert.equal(readPlaySettings({ playNoChat: true }).noChat, true);
+});
+
 test('首次读取提供默认和强调完整性提示词，保持旧内容以及留空的选择，不写入设置', () => {
     for (const legacy of [undefined, '已保存的小剧场要求', '']) {
         const settings = legacy === undefined ? {} : { playPrompt: legacy };

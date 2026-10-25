@@ -1105,12 +1105,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         await refresh();
     }
-    async function chooseCurrent() {
-        syncCurrent(); if (!current) { notify(currentError); return; }
-        search.value = ''; characterQuery = ''; characterPage = 0; mobileLimit = characterBatchSize;
-        await refresh(true);
-    }
-    async function refresh(preferCurrent = false) {
+    async function refresh() {
         const id = ++refreshId;
         historyLoad = null;
         syncCurrent();
@@ -1126,7 +1121,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             for (const character of available.values()) if (!savedAvatars.has(character.avatar)) characters.push(character);
             const currentRow = current && (characters.find(item => item.avatar === current.avatar) ?? { ...current, lastPlayedAt: null });
             if (currentRow) characters = [currentRow, ...characters.filter(item => item !== currentRow)];
-            selected = preferCurrent || !selected ? currentRow ?? (mobile.matches ? null : characters[0]) ?? null
+            selected = !selected ? currentRow ?? (mobile.matches ? null : characters[0]) ?? null
                 : characters.find(item => item.id && item.id === previous.id) ?? characters.find(item => item.avatar && item.avatar === previous.avatar) ?? currentRow ?? characters[0] ?? null;
             if (!selected) browsing = true;
             const key = characterKey(selected);
@@ -1283,7 +1278,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
         async fillFromEntry(entry) {
-            await chooseCurrent(); if (!current || !selected || !canWrite()) return false;
+            await refresh(); if (!selected || !canWrite()) return false;
             browsing = false;
             replaceDraft({ text: entry.body, origin: { id: entry.id, title: entry.title }, mode: 'original' });
             return true;

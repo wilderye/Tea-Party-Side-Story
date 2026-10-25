@@ -764,7 +764,6 @@ export function createTheatrePanel(ctx, state, actions) {
             display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
             processingSettings = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
         }
-        if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
         const reading = group('阅读外观');
         renderAppearanceSetting(reading);
         renderFontSourceSetting(reading);
@@ -785,6 +784,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 render({ resetPosition: scope !== 'play' });
             }); row.append(element('strong', '每页篇数'), size); reading.append(row);
         }
+        if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
         if (actions.playground) renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
         workspace.append(area);
         settingsView = {

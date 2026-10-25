@@ -96,12 +96,15 @@ function textSetting(area, settings, saveSettings, key, name, value, note) {
 }
 
 export function renderPlayChatSetting(area, settings, saveSettings) {
-    const row = element('label', undefined, 'tea-setting-row'), description = element('span');
+    const section = element('section', undefined, 'play-chat-setting');
+    const row = element('label', undefined, 'tea-setting-row');
     const name = '不发送角色聊天，仅读取预设/人设/世界书';
-    description.append(element('strong', name), element('small', '角色设定照常使用。开启时只用初始变量；关闭时发送该角色最新聊天，使用最新有效变量。'));
     const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = readPlaySettings(settings).noChat; toggle.setAttribute('aria-label', name);
+    toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', 'play-chat-description');
+    const description = element('p', '角色设定照常使用。MVU 角色卡开启时读取初始变量；关闭时发送该角色最新聊天，读取最新有效变量。', 'tea-setting-description');
+    description.id = 'play-chat-description';
     toggle.addEventListener('change', () => { settings.playNoChat = toggle.checked; saveSettings(); });
-    row.append(description, toggle); area.append(row);
+    row.append(element('strong', name), toggle); section.append(row, description); area.append(section);
 }
 
 export function renderPlayPromptSetting(area, settings, saveSettings) {

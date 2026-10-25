@@ -41,7 +41,7 @@ async function verifySections(page, viewport) {
             inside: [...area.querySelectorAll('.tea-setting-row,.tea-update-setting,.play-api-fields')]
                 .filter(node => node.checkVisibility()).map(node => getComputedStyle(node).borderBottomWidth),
         }));
-        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '回复显示', '插件日志', '阅读外观', '小剧场续写']);
+        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '回复显示', '阅读外观', '插件日志', '小剧场续写']);
         assert.deepEqual(metrics.groups.map(group => group.line), ['1px', '1px', '1px', '1px', '1px', '0px'], '相邻板块有线，末尾不再画线');
         assert.ok(metrics.inside.every(line => line === '0px'), '板块内部的设置之间没有分割线');
     };

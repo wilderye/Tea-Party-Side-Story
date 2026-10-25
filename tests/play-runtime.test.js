@@ -31,10 +31,13 @@ function context() {
     };
 }
 
-test('捕获目标角色和 API 选择，不提前读取主聊天或计算宏、不修改主聊天', () => {
+test('捕获目标角色和 API 选择，默认复制当前聊天供后续处理、不计算宏、不修改主聊天', () => {
     const ctx = context(), original = structuredClone({ chat: ctx.chat, metadata: ctx.chatMetadata, settings: ctx.extensionSettings });
     const env = capturePlayEnvironment(ctx, { playApi: { mode: 'custom', key: 'custom-secret' } });
-    assert.deepEqual(env.chat, []); assert.equal(env.noChat, true); assert.equal(env.context.chatId, '');
+    assert.deepEqual(env.chat, []); assert.equal(env.noChat, false); assert.equal(env.context.chatId, '');
+    assert.equal(env.context.chatMode, 'latest');
+    assert.deepEqual(env.nativeChat, { chatId: 'A-main', messages: ctx.chat, metadata: ctx.chatMetadata });
+    env.nativeChat.messages[0].mes = '修改聊天副本';
     env.characterCard.data.description = '修改副本';
     env.api.key = '修改';
     assert.deepEqual({ chat: ctx.chat, metadata: ctx.chatMetadata, settings: ctx.extensionSettings }, original);

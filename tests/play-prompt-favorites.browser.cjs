@@ -187,7 +187,34 @@ async function verify(page, url, viewport) {
     assert.deepEqual(await page.evaluate(() => ctx.chat), [{ mes: '原聊天', is_user: false }]);
     assert.equal(await panel.locator('vite-error-overlay, #webpack-dev-server-client-overlay').count(), 0);
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1), '面板没有横向溢出');
-    return { viewport, url, checks: '原篇目收藏、改写另存、第一行标题、28字截断、原文保留、取消与重收藏、保存失败与重复点击、刷新恢复、过期消息、删除后保留、三个按钮布局' };
+
+    const input = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
+    const choose = async name => {
+        if (viewport.width <= 760) await button('选择角色').click();
+        await panel.locator('.play-people').getByRole('button', { name, exact: true }).click();
+        await panel.locator('.play-record:visible .play-assistant-meta .play-speaker').getByText(name, { exact: true }).first().waitFor();
+    };
+    await input.fill('甲的未发送草稿');
+    await choose('测试乙');
+    await input.fill('乙的未发送草稿');
+    const requestCount = await page.evaluate(() => captured.length);
+    await button('茶会选集').click(); await button('在插件中游玩').click();
+    await panel.locator('.play-record:visible .play-assistant-meta .play-speaker').getByText('测试乙', { exact: true }).first().waitFor();
+    assert.equal(await input.inputValue(), source.body.replace(/\r\n/g, '\n'), '原文填入所选角色的输入框');
+    assert.equal(await input.evaluate(node => document.activeElement === node), true, '填入后聚焦输入框');
+    assert.equal(await page.evaluate(() => captured.length), requestCount, '在插件中游玩只填入提示词，不立即生成');
+    await screenshot(page, `entry-fill-selected-character-${viewport.width}.png`);
+    await choose('测试甲');
+    assert.equal(await input.inputValue(), '甲的未发送草稿', '没有覆盖主聊天角色在小剧场中的草稿');
+    await choose('测试乙');
+    assert.equal(await input.inputValue(), source.body.replace(/\r\n/g, '\n'), '切回所选角色仍保留选集原文');
+    const selectedId = await send(); await finish();
+    const selectedRound = await page.evaluate(id => runtime.getRound(id), selectedId);
+    assert.equal((await page.evaluate(() => runtime.listCharacters())).find(character => character.id === selectedRound.characterId).avatar, 'B.png', '发送时实际使用演出页所选角色');
+    assert.equal(selectedRound.origin.id, source.id, '保留选集来源');
+    assert.equal(await page.evaluate(() => ctx.characterId), 0, '酒馆主聊天仍为甲');
+    assert.deepEqual(await page.evaluate(() => ctx.chat), [{ mes: '原聊天', is_user: false }]);
+    return { viewport, url, checks: '原篇目收藏、改写另存、原文保留、取消与重收藏、保存失败与重复点击、刷新恢复、三个按钮布局、选集填入所选角色并保留各自草稿及主聊天' };
 }
 
 (async () => {
