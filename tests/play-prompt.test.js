@@ -1,9 +1,26 @@
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createNativePlayPreparer } from '../play-prompt.js';
-import { capturePlayEnvironment } from '../play-runtime.js';
+import { capturePlayEnvironment as captureIndependentEnvironment } from '../play-runtime.js';
+
+// Prompt assembly tests supply already-resolved synthetic chat data. Real card,
+// worldbook and template resolution is covered separately by integration tests.
+function capturePlayEnvironment(context, settings) {
+    const environment = captureIndependentEnvironment(context, settings);
+    environment.noChat = false;
+    environment.chat = structuredClone(context.chat);
+    environment.chatId = context.chatId;
+    environment.context.chatId = context.chatId;
+    environment.context.chatMode = 'latest';
+    for (let index = 0; index < context.chat.length; index++) {
+        if (context.chat[index].extra?.[Symbol.for('ignore')]) environment.ignoredMessages.push(index);
+    }
+    environment.unfinishedMessageId = context.streamingProcessor?.isFinished === false ? context.streamingProcessor.messageId : -1;
+    return environment;
+}
 import { DEFAULT_PLAY_PROMPT } from '../play-settings.js';
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import { createPlayLocalEvents } from '../play-template-context.js';
 import { testStreaming, streamResponse } from './play-fixture.js';
 
 let sendResponse;
@@ -202,6 +219,7 @@ function fixture() {
         mesExamples: '角色示例', system: '角色主提示', jailbreak: '角色后置提示', charDepthPrompt: '本次角色备注', creatorNotes: '作者说明' };
     const modules = {
         core: {
+            chat: [],
             extension_prompts: prompts, extension_prompt_types: { NONE: -1, IN_PROMPT: 0, IN_CHAT: 1 },
             chat_metadata: {}, depth_prompt_depth_default: 4, depth_prompt_role_default: 'system',
             getCharacterCardFields() { order.push('fields'); return fields; },
@@ -265,6 +283,7 @@ function fixture() {
     context.chatCompletionSettings = modules.openai.oai_settings;
     context.getChatCompletionModel = () => modules.openai.getChatCompletionModel(context.chatCompletionSettings);
     const prepare = createNativePlayPreparer(() => context, { loadModules: async () => modules,
+        createScope: async () => ({ context, modules, events: source, dispose() {} }),
         prepareMessages: (_context, _modules, environment, options) => modules.openai.prepareOpenAIMessages({ ...options,
             settings: environment.tavern.settings, messages: modules.openai.setOpenAIMessages(options.history) }),
     });
@@ -272,6 +291,91 @@ function fixture() {
         ({ prompt, environment: capturePlayEnvironment(context, { playApi: api, playPromptConfig: { position: 'start' } }), signal });
     return { context, modules, source, events, prompts, order, requests, assemblies, prepare, options };
 }
+
+test('两份准备同时进行，主聊天事件不等待任务；停止和资料只属于各自请求', async () => {
+    const f = fixture(), entered = [], gates = new Map(), disposed = [], scopedCores = [];
+    const hostPrompts = { ...f.prompts }, hostMetadata = structuredClone(f.modules.core.chat_metadata);
+    const prepare = createNativePlayPreparer(() => f.context, {
+        loadModules: async () => f.modules,
+        createScope: async (_context, modules, options) => {
+            const gate = deferred(); gates.set(options.prompt, gate);
+            const core = { ...modules.core, extension_prompts: {}, chat_metadata: {}, chat: [] };
+            core.setExtensionPrompt = (key, value, position, depth, scan, role) => { core.extension_prompts[key] = { value, position, depth, scan, role }; };
+            scopedCores.push(core);
+            return { context: { ...f.context, chat: core.chat, chatMetadata: core.chat_metadata },
+                modules: { ...modules, core,
+                    notes: { ...modules.notes, setFloatingPrompt() {} },
+                    world: { ...modules.world, getWorldInfoPrompt: async () => { entered.push(options.prompt); await gate.promise; return { worldInfoBefore: options.prompt }; } } },
+                events: eventBus(), dispose: () => disposed.push(options.prompt) };
+        },
+        prepareMessages: async (_context, _modules, _environment, options) => [[{ role: 'system', content: options.worldInfoBefore }]],
+    });
+    const controller = new AbortController();
+    const a = prepare({ ...f.options('甲'), signal: controller.signal });
+    const rejected = assert.rejects(a, { name: 'AbortError' });
+    const b = prepare(f.options('乙'));
+    await nextTurn(); assert.deepEqual(entered, ['甲', '乙']);
+    let mainStarted = false;
+    f.source.on(f.events.GENERATION_STARTED, () => { mainStarted = true; });
+    await f.source.emit(f.events.GENERATION_STARTED);
+    assert.equal(mainStarted, true);
+    controller.abort(); gates.get('甲').resolve(); await rejected;
+    gates.get('乙').resolve(); const request = await b; await request.send({ signal: new AbortController().signal });
+    assert.deepEqual(f.requests.at(-1).payload.messages.map(m => m.content), [DEFAULT_PLAY_PROMPT, '乙']);
+    assert.deepEqual(f.prompts, hostPrompts); assert.deepEqual(f.modules.core.chat_metadata, hostMetadata);
+    assert.notEqual(scopedCores[0], scopedCores[1]); assert.deepEqual(disposed.sort(), ['乙', '甲'].sort());
+});
+
+test('当前角色保留原生发送前回调和预设处理，不要求 EJS/MVU 独立兼容接口', async () => {
+    const f = fixture(); let disposed = 0;
+    const prepare = createNativePlayPreparer(() => f.context, { loadModules: async () => f.modules,
+        createScope: async () => ({ native: true, dispose() { disposed++; } }),
+        prepareMessages: (_context, _modules, environment, options) => f.modules.openai.prepareOpenAIMessages({ ...options,
+            settings: environment.tavern.settings, messages: f.modules.openai.setOpenAIMessages(options.history) }),
+    });
+    const options = f.options(); options.environment.sourceCharacterId = f.context.characterId;
+    const request = await prepare(options); await request.send({ signal: options.signal });
+    assert.equal(disposed, 1); assert.equal(f.requests.length, 1);
+    assert.ok(f.order.includes('before')); assert.ok(f.order.includes('assembled')); assert.ok(f.order.includes('preset'));
+});
+
+test('当前角色的第三方回调报错后回退基础处理，EJS 原文保留且只发送一次', async () => {
+    const f = fixture(), attempts = [];
+    f.source.on(f.events.GENERATION_AFTER_COMMANDS, () => { throw Error('Third-party plugin changed'); });
+    const prepare = createNativePlayPreparer(() => f.context, { loadModules: async () => f.modules,
+        createScope: async (_context, modules, options) => {
+            attempts.push(!!options.forceIndependent);
+            return options.forceIndependent ? { context: f.context, modules, events: createPlayLocalEvents(), dispose() {} }
+                : { native: true, dispose() {} };
+        },
+        prepareMessages: (_context, _modules, environment, options) => f.modules.openai.prepareOpenAIMessages({ ...options,
+            settings: environment.tavern.settings, messages: f.modules.openai.setOpenAIMessages(options.history) }),
+    });
+    const options = f.options(); options.environment.sourceCharacterId = f.context.characterId;
+    const request = await prepare(options); await request.send({ signal: options.signal });
+    assert.deepEqual(attempts, [false, true]); assert.equal(f.requests.length, 1);
+    assert.ok(f.requests[0].payload.messages.some(message => message.content.includes('<%= 世界书内容 %>')));
+});
+
+test('原入口明确取消请求时不通过兼容回退绕过取消', async () => {
+    const f = fixture(); let scopes = 0;
+    f.modules.extensions.runGenerationInterceptors = async () => true;
+    const prepare = createNativePlayPreparer(() => f.context, { loadModules: async () => f.modules,
+        createScope: async () => { scopes++; return { native: true, dispose() {} }; },
+    });
+    const options = f.options();
+    await assert.rejects(prepare(options), error => error.code === 'generation_cancelled');
+    assert.equal(scopes, 1); assert.equal(f.requests.length, 0);
+});
+
+for (const hadHash of [false, true]) test(`旧版原生宏读取产生的聊天缓存不保留到主聊天，原缓存存在=${hadHash}`, async () => {
+    const f = fixture(), metadata = f.modules.core.chat_metadata;
+    if (hadHash) metadata.chat_id_hash = '';
+    const before = structuredClone(metadata), substitute = f.modules.core.substituteParams;
+    f.modules.core.substituteParams = (...args) => { metadata.chat_id_hash = 'synthetic-lazy-hash'; return substitute(...args); };
+    await f.prepare(f.options());
+    assert.deepEqual(metadata, before);
+});
 
 test('原生流程保留预设、人设、主聊天和本次用户消息，等待发送前处理；回复不通知其他插件', async () => {
     const f = fixture(), before = structuredClone(f.context.chat), oldPrompts = { ...f.prompts };
@@ -452,147 +556,6 @@ test('元数据容器替换后只清理仍属于本次扫描的计时字段', as
     await f.prepare(f.options());
     assert.equal(core.chat_metadata.timedWorldInfo, replacement, '不覆盖其他操作换入的计时数据');
     assert.equal(core.chat_metadata.user_edit, '新的元数据');
-});
-
-for (const event of ['GENERATION_STARTED', 'GENERATION_AFTER_COMMANDS']) {
-    for (const dryRun of [false, true]) test(`主聊天准备等待迟到世界书清理，再写自己的注释：${event}，dryRun=${dryRun}`, { timeout: 2000 }, async () => {
-        const f = fixture(), entered = deferred(), finish = deferred(), core = f.modules.core;
-        const originalPrompts = { ...f.prompts }, timers = { sticky: {}, cooldown: {} };
-        core.chat_metadata = { note_prompt: '保持第三人称叙述。', timedWorldInfo: timers };
-        f.modules.world.getWorldInfoPrompt = async () => {
-            entered.resolve(); await finish.promise;
-            // Native WI writes its A/N and timers after the async scan returns.
-            f.prompts['2_floating_prompt'] = { value: '保持第三人称叙述。\n夜市中有售卖花灯的摊位。' };
-            core.chat_metadata.timedWorldInfo.sticky.nightMarket = { start: 2, end: 5 };
-            return {};
-        };
-        const preparation = f.prepare(f.options());
-        const rejected = assert.rejects(preparation, error => error.code === 'main_preparation_started');
-        await entered.promise;
-        let started = false;
-        const newPrompt = { value: '主聊天新请求' };
-        f.source.on(f.events[event], () => {
-            assert.deepEqual(f.prompts, originalPrompts, '主聊天的第一个准备回调已看不到小剧场临时内容');
-            assert.equal(core.chat_metadata.timedWorldInfo, timers);
-            assert.deepEqual(timers, { sticky: {}, cooldown: {} });
-            f.prompts.DEPTH_PROMPT = newPrompt;
-            f.prompts['2_floating_prompt'] = { value: core.chat_metadata.note_prompt };
-            started = true;
-        });
-        const main = f.source.emit(f.events[event], 'normal', {}, dryRun);
-        await nextTurn(); assert.equal(started, false, '扫描仍在运行，主聊天尚未开始改共享提示词');
-        finish.resolve(); await rejected; await main;
-        assert.equal(started, true);
-        assert.equal(f.prompts.DEPTH_PROMPT, newPrompt);
-        assert.equal(f.prompts['2_floating_prompt'].value, '保持第三人称叙述。');
-        assert.equal(core.chat_metadata.note_prompt, '保持第三人称叙述。');
-        assert.equal(f.requests.length, 0);
-    });
-}
-
-for (const outcome of ['failure', 'abort']) test(`小剧场扫描${outcome}后仍释放正在等待的主聊天`, { timeout: 2000 }, async () => {
-    const f = fixture(), entered = deferred(), finish = deferred(), controller = new AbortController();
-    const original = { ...f.prompts };
-    f.modules.world.getWorldInfoPrompt = async () => {
-        entered.resolve(); await finish.promise;
-        f.prompts['2_floating_prompt'] = { value: '迟到的世界书' };
-        if (outcome === 'failure') throw new Error('world failure');
-        return {};
-    };
-    const task = f.prepare(f.options('等待中的扫描', undefined, controller.signal));
-    const rejected = assert.rejects(task, outcome === 'failure' ? /world failure/ : { name: 'AbortError' });
-    await entered.promise;
-    const main = f.source.emit(f.events.GENERATION_STARTED, 'normal', {}, false);
-    if (outcome === 'abort') controller.abort();
-    finish.resolve(); await rejected; await main;
-    assert.deepEqual(f.prompts, original);
-    assert.equal(f.requests.length, 0);
-});
-
-test('取消后的下一次小剧场继续等主聊天准备结束；主聊天预览结束也会释放等待', { timeout: 2000 }, async () => {
-    const f = fixture(), entered = deferred(), finish = deferred(), world = f.modules.world.getWorldInfoPrompt;
-    f.modules.world.getWorldInfoPrompt = async (...args) => { entered.resolve(); await finish.promise; return world(...args); };
-    const first = f.prepare(f.options());
-    const rejected = assert.rejects(first, error => error.code === 'main_preparation_started');
-    await entered.promise;
-    const main = f.source.emit(f.events.GENERATION_STARTED, 'normal', {}, true);
-    const next = f.prepare(f.options('下一次请求'));
-    finish.resolve(); await rejected; await main;
-    await nextTurn();
-    assert.equal(f.assemblies.length, 0, '排在后面的小剧场不能抢在已等待的主聊天前准备');
-    await f.source.emit(f.events.GENERATE_AFTER_DATA, { prompt: [] }, true);
-    await next;
-    assert.equal(f.assemblies.length, 1);
-});
-
-test('主聊天全部发送前回调完成后即可并行，不等待主聊天生成结束', { timeout: 2000 }, async () => {
-    const f = fixture(); await f.prepare.ready();
-    f.modules.core.is_send_press = true;
-    await f.source.emit(f.events.GENERATION_STARTED, 'normal', {}, false);
-    const entered = deferred(), finish = deferred();
-    let processed = false;
-    // Registered after the coordinator: the observer must still await it.
-    f.source.on(f.events.CHAT_COMPLETION_SETTINGS_READY, async data => {
-        if (!data.isMain) return;
-        entered.resolve(); await finish.promise; processed = true;
-    });
-    const mainReady = f.source.emit(f.events.CHAT_COMPLETION_SETTINGS_READY, { isMain: true });
-    await entered.promise;
-    const playTask = f.prepare(f.options()); await nextTurn();
-    assert.equal(f.order.includes('world'), false, '不在主聊天尚未处理完提示词时扫描世界书');
-    finish.resolve(); await mainReady;
-    const request = await playTask;
-    assert.equal(processed, true); assert.equal(f.modules.core.is_send_press, true, '主聊天仍在等回复');
-    await request.send({ signal: new AbortController().signal });
-    assert.equal(f.requests.length, 1); assert.equal(f.requests[0].payload.stream, true);
-});
-
-test('尚未打开剧场时已观察主聊天准备，打开后不用等整篇生成完', { timeout: 2000 }, async () => {
-    const f = fixture();
-    f.modules.core.is_send_press = true;
-    await f.source.emit(f.events.GENERATION_STARTED, 'normal', {}, false);
-    await f.source.emit(f.events.CHAT_COMPLETION_SETTINGS_READY, { messages: [] });
-    const request = await f.prepare(f.options());
-    await request.send({ signal: new AbortController().signal });
-    assert.equal(f.requests.length, 1); assert.equal(f.modules.core.is_send_press, true);
-});
-
-test('正在输出的主聊天回复不进入小剧场消息，也不参与世界书扫描', async () => {
-    const f = fixture(); await f.prepare.ready();
-    f.context.chat.push({ is_user: false, name: '角色甲', mes: '尚未生成完的片段', extra: {} });
-    f.context.streamingProcessor = { messageId: 1, isFinished: false };
-    let scanned;
-    const world = f.modules.world.getWorldInfoPrompt;
-    f.modules.world.getWorldInfoPrompt = (...args) => { scanned = args[0]; return world(...args); };
-    const request = await f.prepare(f.options()); await request.send({ signal: new AbortController().signal });
-    assert.doesNotMatch(JSON.stringify(f.requests[0].payload.messages), /尚未生成完/);
-    assert.doesNotMatch(JSON.stringify(scanned), /尚未生成完/);
-    assert.match(JSON.stringify(f.requests[0].payload.messages), /主聊天旧回复/);
-    assert.equal(f.context.chat[1].mes, '尚未生成完的片段', '主聊天原文保留');
-});
-
-test('主聊天返回时等小剧场临时提示词恢复后再运行回复处理', { timeout: 2000 }, async () => {
-    const f = fixture(), entered = deferred(), finish = deferred();
-    const original = { ...f.prompts }, world = f.modules.world.getWorldInfoPrompt;
-    f.modules.world.getWorldInfoPrompt = async (...args) => { entered.resolve(); await finish.promise; return world(...args); };
-    const preparation = f.prepare(f.options()); await entered.promise;
-    let rendered = false;
-    f.source.on(f.events.CHARACTER_MESSAGE_RENDERED, () => { assert.deepEqual(f.prompts, original); rendered = true; });
-    const render = f.source.emit(f.events.CHARACTER_MESSAGE_RENDERED, 1, 'normal');
-    await nextTurn(); assert.equal(rendered, false);
-    finish.resolve(); await preparation; await render;
-    assert.equal(rendered, true);
-});
-
-test('等主聊天准备期间仍可停止，停止后不偷偷发送', { timeout: 2000 }, async () => {
-    const f = fixture(); await f.prepare.ready();
-    await f.source.emit(f.events.GENERATION_STARTED, 'normal', {}, false);
-    const controller = new AbortController();
-    const task = f.prepare(f.options('待发送', undefined, controller.signal));
-    await nextTurn(); controller.abort();
-    await assert.rejects(task, error => error.name === 'AbortError');
-    await f.source.emit(f.events.GENERATION_ENDED);
-    assert.equal(f.requests.length, 0); assert.equal(f.order.includes('world'), false);
 });
 
 for (const legacy of [false, true]) for (const prefill of [false, true]) {

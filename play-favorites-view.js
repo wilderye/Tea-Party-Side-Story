@@ -43,7 +43,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
         title.textContent = value.title; title.hidden = !value.title.trim();
         character.textContent = value.characterName;
         heading.replaceChildren(title, character); tools.replaceChildren(remove, edit);
-        const text = value.cleaned ? value.text : (playground.display?.process(value.text) ?? value.text);
+        const text = value.cleaned ? value.text : (playground.display?.process(value.text, { avatar: value.characterAvatar, name: value.characterName }) ?? value.text);
         if (signature === text) return;
         if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true);
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
@@ -56,7 +56,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
     function beginEdit() {
         if (!value || editor || removing) return;
         const original = value;
-        const initialText = original.cleaned ? original.text : (playground.display?.process(original.text) ?? original.text);
+        const initialText = original.cleaned ? original.text : (playground.display?.process(original.text, { avatar: original.characterAvatar, name: original.characterName }) ?? original.text);
         editor = createPlayEditor({ text: initialText, title: original.title, autoGrow: false, onCancel: finish,
             async onSave({ text, title }) {
                 value = await playground.editFavorite(original.id,
@@ -76,6 +76,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
         if (!value) body.replaceChildren(element('p', '正在读取收藏…', 'play-result-empty'));
         try {
             const next = await playground.getFavorite(row.id);
+            if (!next.cleaned) await playground.display?.ensure?.({ avatar: next.characterAvatar, name: next.characterName });
             if (id !== loadingId) return;
             value = next; requestedRevision = next.revision; render();
         } catch (error) {

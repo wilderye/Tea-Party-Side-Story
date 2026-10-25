@@ -369,18 +369,21 @@ test('准备提示词期间切聊天，会停止发送；处理未成功也不�
     assert.equal((await f.restart().getRound(failed.roundId)).results[0].error.message, preparationError);
 });
 
-test('其他角色只能阅读；重复点击不会生成第二份请求', async () => {
+test('多个任务可以并发，任务目标与历史角色不符时不发送', async () => {
     const f = fixture(), started = deferred(), finish = deferred();
     f.control.response = async () => { started.resolve(); await finish.promise; return '回复'; };
     const task = f.service.send({ prompt: '测试' });
     await started.promise;
-    await assert.rejects(f.service.send({ prompt: '重复点击' }), error => error.code === 'busy');
+    const second = f.service.send({ prompt: '另一份提示词' });
+    await nextTurn();
+    assert.equal(f.service.getStates().length, 2);
     finish.resolve();
     const first = await task;
+    await second;
     f.current.character = { ...characterB };
     assert.equal((await f.service.getRound(first.roundId)).prompt, '测试');
-    await assert.rejects(f.service.regenerate(first.roundId, first.result.id), /只能查看历史/);
-    assert.equal(f.sent.length, 1);
+    await assert.rejects(f.service.regenerate(first.roundId, first.result.id), { code: 'other_character' });
+    assert.equal(f.sent.length, 2);
     assert.equal(f.service.getState().phase, 'idle');
 });
 
@@ -449,7 +452,8 @@ test('提示词保存失败不请求模型；回复保存失败可独立重试�
     assert.equal(f.service.getState().phase, 'save-failed');
     assert.equal(f.service.getState().text, '需要保留的完整回复');
     assert.equal(f.service.getState().error.message, 'disk full');
-    await assert.rejects(f.service.send({ prompt: '不能丢掉未保存回复' }), error => error.code === 'unsaved_result');
+    assert.equal(f.service.availability().available, true);
+    await assert.rejects(f.service.regenerate(f.service.getState().roundId, f.service.getState().resultId), error => error.code === 'unsaved_result');
     await assert.rejects(f.service.retrySave(), /disk full/);
     assert.equal(f.service.getState().text, '需要保留的完整回复');
     f.io.beforeWrite = null;
@@ -670,9 +674,9 @@ test('续写读取前文期间立即阻止重复请求，停止后不发送也�
     const task = f.service.continueResult(first.roundId, first.result.id);
     await entered.promise;
     assert.equal(f.service.getState().phase, 'preparing');
-    assert.equal(f.service.availability().available, false);
+    assert.equal(f.service.availability().available, true);
+    assert.equal(f.service.availability({ resultId: first.result.id }).available, false);
     await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'busy');
-    await assert.rejects(f.service.send({ prompt: '重复发送' }), error => error.code === 'busy');
     assert.equal(f.service.stop(), true);
     assert.equal(await task, null);
     f.io.beforeRead = null; gate.resolve(); await nextTurn();

@@ -113,13 +113,13 @@ test('相同毫秒内发送也保持先后顺序；角色按最近一次游玩�
     assert.deepEqual((await f.store.listCharacters()).map(character => character.id), [a.characterId, b.characterId]);
 });
 
-test('同名角色靠头像文件标识区分；查看其他角色不能替他新发或再生成', async () => {
+test('同名角色靠头像文件标识区分；拒绝角色卡与记录归属不一致的请求', async () => {
     const f = memoryFiles();
     const a = await f.begin();
     const b = { avatar: 'other-A.png', name: characterA.name };
     const before = f.writes.length;
-    await assert.rejects(f.begin({ character: b, characterId: a.characterId }), /只能查看历史/);
-    await assert.rejects(f.begin({ character: b, roundId: a.id }), /只能查看历史/);
+    await assert.rejects(f.begin({ character: b, characterId: a.characterId }), { code: 'other_character' });
+    await assert.rejects(f.begin({ character: b, roundId: a.id }), { code: 'other_character' });
     assert.equal(f.writes.length, before);
 });
 
@@ -211,7 +211,7 @@ test('改名保留历史身份，删卡保留历史，但同文件名的新卡�
     await f.begin({ roundId: round.id, character: renamed, startedAt: time(1) });
     assert.equal((await f.store.listCharacters())[0].id, round.characterId);
     await f.store.renameCharacter('A-new.png', null);
-    await assert.rejects(f.begin({ roundId: round.id, character: renamed }), /只能查看历史/);
+    await assert.rejects(f.begin({ roundId: round.id, character: renamed }), { code: 'other_character' });
     const newCard = await f.begin({ character: renamed, startedAt: time(2) });
     assert.notEqual(newCard.characterId, round.characterId);
     assert.equal((await f.store.getRound(round.id)).results.length, 2);

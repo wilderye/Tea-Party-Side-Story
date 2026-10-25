@@ -31,6 +31,12 @@ tests/*
 !tests/play-history.test.js
 !tests/play-storage.test.js
 !tests/playground.test.js
+!tests/play-concurrency.test.js
+!tests/play-character-context.test.js
+!tests/play-independent-modules.test.js
+!tests/play-optional-processing.test.js
+!tests/play-independent.browser.cjs
+!tests/play-concurrency.browser.cjs
 !tests/diagnostics.test.js
 !tests/play-request.test.js
 !tests/play-runtime.test.js

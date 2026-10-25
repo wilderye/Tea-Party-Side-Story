@@ -2,12 +2,15 @@ import { PlaygroundError } from './playground.js';
 import { createPreparedPlayRequest, getCustomApiConnection } from './play-request.js';
 import { preparePlayPreset } from './play-preset.js';
 import { legacyPlayParameters } from './play-parameters.js';
-import { getPlayPreparationCoordinator } from './play-preparation.js';
 import { DEFAULT_PLAY_PROMPT_POSITION, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
+import { loadPlayModuleSource } from './play-task-module.js';
+import { getPlayPreparationCoordinator } from './play-preparation.js';
+import { readPlayTemplateFeatures } from './play-template-context.js';
+import { readPlayHelperVariables } from './play-variable-context.js';
 
 async function loadTavernModules() {
     const paths = {
-        core: 'script.js', openai: 'scripts/openai.js', world: 'scripts/world-info.js',
+        core: 'script.js', lib: 'lib.js', openai: 'scripts/openai.js', world: 'scripts/world-info.js',
         notes: 'scripts/authors-note.js', persona: 'scripts/power-user.js',
         regex: 'scripts/extensions/regex/engine.js', chats: 'scripts/chats.js',
         extensions: 'scripts/extensions.js',
@@ -16,16 +19,25 @@ async function loadTavernModules() {
         utils: 'scripts/utils.js',
         reasoning: 'scripts/reasoning.js',
         sse: 'scripts/sse-stream.js',
+        personas: 'scripts/personas.js', presetManager: 'scripts/preset-manager.js',
     };
     const entries = await Promise.all(Object.entries(paths).map(async ([name, path]) =>
         [name, await import(new URL('../../../../' + path, import.meta.url).href)]));
-    return Object.fromEntries(entries);
+    const modules = Object.fromEntries(entries);
+    const managerSource = await loadPlayModuleSource('/scripts/PromptManager.js');
+    const defaultOrder = managerSource.match(/const promptManagerDefaultPromptOrder\s*=\s*(\[[\s\S]*?\n\]);/)?.[1];
+    if (!defaultOrder) throw new PlaygroundError('preset_version_not_supported', '当前酒馆的默认预设顺序接口尚未支持独立角色处理，本次没有发送。');
+    modules.defaultPromptOrder = new Function(`return ${defaultOrder};`)();
+    return modules;
 }
 
 // Native depth/outlet prompts are shared by ST's prompt builder. Restore only
 // the temporary entries this preparation installed, never another request's.
 function promptScope(core) {
     const prompts = core.extension_prompts;
+    const metadata = core.chat_metadata;
+    const hadHash = Object.hasOwn(metadata, 'chat_id_hash'), previousHash = metadata.chat_id_hash;
+    let ownedHash;
     const managed = key => key === 'DEPTH_PROMPT' || key.startsWith('DEPTH_PROMPT_')
         || key === 'PERSONA_DESCRIPTION' || key === '2_floating_prompt'
         || key.startsWith('customDepthWI_') || key.startsWith('customWIOutlet_');
@@ -33,6 +45,7 @@ function promptScope(core) {
     const owned = new Map();
     return {
         remember() {
+            if (metadata.chat_id_hash !== previousHash) ownedHash = metadata.chat_id_hash;
             for (const key of new Set([...before.keys(), ...Object.keys(prompts).filter(managed)])) {
                 if (prompts[key] !== before.get(key)) owned.set(key, prompts[key]);
             }
@@ -45,6 +58,13 @@ function promptScope(core) {
             this.remember();
         },
         restore() {
+            // Older Tavern macro evaluation lazily writes this cache even when
+            // only reading a prompt. Keep theatre preparation read-only.
+            for (const target of new Set([metadata, core.chat_metadata])) {
+                if (ownedHash === undefined || target.chat_id_hash !== ownedHash) continue;
+                if (hadHash) target.chat_id_hash = previousHash;
+                else delete target.chat_id_hash;
+            }
             for (const [key, value] of owned) {
                 if (prompts[key] !== value) continue;
                 if (before.has(key)) prompts[key] = before.get(key);
@@ -201,9 +221,11 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
     const context = ctx(), events = context.eventTypes;
     const guard = () => {
         signal.throwIfAborted();
+        if (environment.independent) return;
         const current = ctx();
         if (isInterrupted()) throw new PlaygroundError('main_preparation_started', '主聊天开始准备新请求，本次小剧场没有发送，请重新发送。');
-        if (current.characterId !== environment.characterId
+        if (String(current.characterId) !== String(environment.characterId)
+            || current.characters?.[current.characterId]?.avatar !== environment.character.avatar
             || current.getCurrentChatId() !== environment.chatId) {
             throw new PlaygroundError('chat_changed', '聊天环境已经改变，本次没有发送，请重新发送。');
         }
@@ -212,11 +234,11 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
     const continuation = environment.continuation ?? readPlayContinuationSettings({});
     const continuationError = continueMessage && playContinuationError(continuation);
     if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
-    const customPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
-    const promptPosition = environment.playPromptPosition ?? DEFAULT_PLAY_PROMPT_POSITION;
-    const leadingSystemPrompt = promptPosition === 'start' ? customPrompt : '';
     const scope = promptScope(core);
     try {
+        const customPrompt = core.substituteParams(environment.playPrompt ?? '').trim();
+        const promptPosition = environment.playPromptPosition ?? DEFAULT_PLAY_PROMPT_POSITION;
+        const leadingSystemPrompt = promptPosition === 'start' ? customPrompt : '';
         // Same preparation notification used by independent generators.
         // Do not emit GENERATION_STARTED or any main-chat message/reply event.
         await emit(events.GENERATION_AFTER_COMMANDS, continueMessage ? 'continue' : 'normal', {}, false);
@@ -247,6 +269,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         if (continueMessage) {
             chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}) });
         }
+        if (environment.independent) core.chat.splice(0, core.chat.length, ...chat);
         const { history, continuationReasoning, reasoningPrefix } = await formatHistory(modules, chat, environment, !!continueMessage);
         guard();
         const maxContext = environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens;
@@ -333,38 +356,68 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
     }
 }
 
-/** Lazy native imports; queue preparation cleanup even if a caller stops early. */
-export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules, prepareMessages = preparePlayPreset } = {}) {
-    // Observe main-chat requests from plugin startup, before the theatre is
-    // opened. Otherwise opening it while an API is waiting misses preparation.
+/** Each preparation uses its own scope; native modules are loaded once. */
+export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules, prepareMessages = preparePlayPreset,
+    createScope = async (...args) => (await import('./play-independent.js')).createIndependentPlayScope(...args) } = {}) {
+    let loading, modules, tokenCountOffset = 0;
     let coordinator = typeof ctx().eventSource?.emit === 'function' ? getPlayPreparationCoordinator(ctx()) : null;
-    let loading, modules, tokenCountOffset = 0, pending = Promise.resolve();
     const ready = () => loading ??= loadModules().then(async value => {
-        coordinator ??= getPlayPreparationCoordinator(ctx(), value.core);
         // An empty full count measures ST's fixed accounting offset without
         // sending text or depending on a particular model/version's constants.
         tokenCountOffset = await value.tokenizers?.countTokensOpenAIAsync?.([], true) ?? 0;
         modules = value;
+        coordinator ??= typeof ctx().eventSource?.emit === 'function' ? getPlayPreparationCoordinator(ctx(), modules.core) : null;
         return value;
     }).catch(error => { loading = null; throw error; });
-    const prepare = options => {
-        const task = pending.then(async () => {
-            options.signal.throwIfAborted();
-            await ready();
-            options.signal.throwIfAborted();
-            return coordinator.run(options.signal, isInterrupted =>
-                prepareNativeRequest(ctx, modules, options, prepareMessages, coordinator.emit, isInterrupted));
-        });
-        pending = task.catch(() => {});
-        return task;
+    const prepare = async options => {
+        options.signal.throwIfAborted(); await ready(); options.signal.throwIfAborted();
+        let scope = await createScope(ctx(), modules, options);
+        try {
+            if (scope.native) {
+                try {
+                    const request = await coordinator.run(options.signal, isInterrupted => prepareNativeRequest(ctx, modules,
+                        { ...options, environment: { ...options.environment, independent: false, characterId: options.environment.sourceCharacterId } },
+                        prepareMessages, coordinator.emit, isInterrupted));
+                    return { ...request, context: { ...options.environment.context, ...request.context } };
+                } catch (error) {
+                    options.signal.throwIfAborted();
+                    if (error instanceof PlaygroundError || error?.name === 'AbortError') throw error;
+                    scope.dispose();
+                    scope = await createScope(ctx(), modules, { ...options, forceIndependent: true });
+                }
+            }
+            const request = await prepareNativeRequest(() => scope.context, scope.modules, options, prepareMessages,
+                (...args) => scope.events.emit(...args), () => false);
+            return { ...request, context: { ...options.environment.context, ...request.context } };
+        } finally { scope.dispose(); }
     };
     prepare.ready = ready;
     prepare.isReady = () => !!modules;
-    prepare.capture = () => {
+    prepare.capture = character => {
         // ST 1.14 applies this option; newer hosts ignore the obsolete setting.
         // Query the native formatter without substituting macros or sending data.
         const user = modules.openai.setOpenAIMessages([{ name: ctx().name1, is_user: true, mes: '', extra: {} }])[0]?.content ?? '';
+        const extensionSettings = Object.fromEntries(['regex', 'character_allowed_regex', 'preset_allowed_regex', 'variables', 'note', 'disabledExtensions']
+            .filter(key => modules.extensions.extension_settings[key] !== undefined).map(key => [key, structuredClone(modules.extensions.extension_settings[key])]));
+        const manager = modules.presetManager?.getPresetManager();
+        let presetHelper = {};
+        try {
+            const saved = manager?.readPresetExtensionField({ path: 'tavern_helper' });
+            presetHelper = { variables: readPlayHelperVariables(saved) };
+        } catch { /* Optional helper data must not prevent native card processing. */ }
+        const targetScripts = extensionSettings.character_allowed_regex?.includes(character?.avatar) ? character?.data?.extensions?.regex_scripts ?? [] : [];
+        const regexScripts = extensionSettings.disabledExtensions?.includes('regex') ? [] : character
+            ? [...modules.regex.getScriptsByType(modules.regex.SCRIPT_TYPES.GLOBAL, { allowedOnly: true }),
+                ...modules.regex.getScriptsByType(modules.regex.SCRIPT_TYPES.PRESET, { allowedOnly: true }), ...targetScripts]
+            : modules.regex.getRegexScripts?.({ allowedOnly: true });
         return {
+            extensionSettings, presetHelper, presetApi: manager?.apiId,
+            tagMap: character?.avatar ? { [character.avatar]: structuredClone(ctx().tagMap?.[character.avatar] ?? []) } : {},
+            presetFields: { regex_scripts: manager?.readPresetExtensionField({ path: 'regex_scripts' }) ?? [] },
+            promptManagerConfiguration: structuredClone(modules.openai.promptManager?.configuration),
+            defaultPromptOrder: structuredClone(modules.defaultPromptOrder),
+            worldSettings: structuredClone(modules.world.getWorldInfoSettings?.() ?? {}), globalWorlds: structuredClone(modules.world.selected_world_info ?? []),
+            templateFeatures: readPlayTemplateFeatures(), userAvatar: modules.personas?.user_avatar,
             tokenizerModel: modules.tokenizers?.getTokenizerModel(), tokenCountOffset,
             wrapUserMessages: user.startsWith('"') && user.endsWith('"'),
             canUseTools: modules.tools.ToolManager.isToolCallingSupported(),
@@ -372,7 +425,7 @@ export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules,
             imageInlining: modules.openai.isImageInliningSupported?.(),
             videoInlining: modules.openai.isVideoInliningSupported?.(),
             audioInlining: modules.openai.isAudioInliningSupported?.(),
-            regexScripts: modules.extensions.extension_settings.disabledExtensions?.includes('regex') ? [] : modules.regex.getRegexScripts?.({ allowedOnly: true }),
+            regexScripts,
         };
     };
     return prepare;

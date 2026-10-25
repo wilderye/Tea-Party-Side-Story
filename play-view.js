@@ -67,22 +67,19 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const inputRow = element('div', undefined, 'play-input-row');
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.spellcheck = false;
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
-    const send = iconButton('send', '发送小剧场', () => {
-        if (activePhases.has(playground.getState().phase)) playground.stop();
-        else void sendDraft();
-    }); send.classList.add('play-send');
+    const send = iconButton('send', '发送小剧场', () => void sendDraft()); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
-    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, pendingSend, pendingReveal, storageFailed = false;
+    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
     let cachedRowHeight = 0, lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
-    let lastJob = playground.getState();
+    const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
     const storageKey = 'teahouse-play-view-v1';
 
@@ -113,7 +110,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (!drafts.has(key)) drafts.set(key, { text: '', origin: null });
         return drafts.get(key);
     }
-    function canWrite() { return !!current && selected?.avatar === current.avatar && settings.enabled !== false; }
+    function canWrite() { return !!selected?.avatar && settings.enabled !== false; }
+    function readTarget() {
+        return { characterId: selected?.id, character: { avatar: selected?.avatar, name: selected?.name } };
+    }
+    function jobsHere() {
+        return playground.getStates().filter(job => job.characterAvatar === selected?.avatar || (job.characterId && job.characterId === selected?.id));
+    }
+    function roundBusy(roundId) {
+        return playground.getStates().some(job => (job.roundId ?? job.requestedRoundId) === roundId);
+    }
     function syncCurrent() {
         try { current = readPlayTarget(ctx()).character; currentError = ''; }
         catch (error) { current = null; currentError = error.message; }
@@ -143,12 +149,14 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function updateUserMessage(round, view) {
         view.user.hidden = round.prompt === null && !view.userEditor;
-        const signature = JSON.stringify(user);
+        const context = selectedResult(round)?.context;
+        const identity = context?.userName ? { name: context.userName, avatar: context.userAvatar || null } : user;
+        const signature = JSON.stringify(identity);
         if (view.userSignature !== signature) {
             view.userSignature = signature;
-            view.userHeader.speaker.textContent = user.name; view.userHeader.speaker.title = user.name;
-            view.userHead.querySelector('.play-message-avatar').replaceWith(avatar(user, 'play-message-avatar', 'persona'));
-            view.user.setAttribute('aria-label', `${user.name} 发送的小剧场提示词`);
+            view.userHeader.speaker.textContent = identity.name; view.userHeader.speaker.title = identity.name;
+            view.userHead.querySelector('.play-message-avatar').replaceWith(avatar(identity, 'play-message-avatar', 'persona'));
+            view.user.setAttribute('aria-label', `${identity.name} 发送的小剧场提示词`);
         }
         const tools = view.userEditor ? [view.userEditor.actions] : [view.userFavorite, view.edit, view.removePrompt];
         if (view.userTools.firstChild !== tools[0]) view.userTools.replaceChildren(...tools);
@@ -157,7 +165,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             return;
         }
         // Expand only display names; keep the saved prompt and other macros untouched.
-        const names = { user: user.name, char: roundCharacter(round).name };
+        const names = { user: identity.name, char: roundCharacter(round).name };
         const text = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
         if (!view.userEditor && view.promptText !== text) {
             renderPlayText(view.userText, text, `${round.id}/user/text`);
@@ -222,7 +230,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try {
             if (existing) { await playground.removeFavorite(existing.id); favoriteRows.delete(key); }
             else {
-                const cleanedText = playground.display?.process(result.text) ?? result.text;
+                const cleanedText = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
                 if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
                 const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
                     text: cleanedText,
@@ -501,10 +509,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 syncMessageActions(id, view);
             }
             if (!feedHeight || displayedCharacter !== characterKey(selected)) return;
-            const activeJob = playground.getState();
             // Finish restoring a reopened panel during generation too, so later
             // user scrolls can replace the saved position before completion.
-            if (activePhases.has(activeJob.phase) && !restoringPosition) {
+            if (jobsHere().some(job => activePhases.has(job.phase)) && !restoringPosition) {
                 if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) feed.scrollTop = feed.scrollHeight;
                 updateJump();
                 return;
@@ -519,6 +526,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     feed.addEventListener('scroll', () => {
         if (!visible) return;
         const moved = cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2;
+        if (moved && !restoringPosition) { pendingReveal = null; latestRequest = null; }
         // A scroll event queued before opening the menu may arrive afterwards.
         // Only dismiss it if the content has moved since the menu was positioned.
         if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
@@ -556,17 +564,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         inputRow.hidden = editing || !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
         page.classList.toggle('is-message-editing', editing);
         compose.hidden = editing || (inputRow.hidden && contextLine.hidden);
-        const job = playground.getState(), active = activePhases.has(job.phase), available = playground.availability();
-        const belongsHere = job.characterId ? job.characterId === selected?.id : pendingSend?.key === characterKey(selected);
-        const stopping = active && belongsHere;
-        const icon = stopping ? 'stop' : 'send';
-        if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
-        send.title = stopping ? '停止生成' : !available.available ? available.message : '发送小剧场';
-        send.setAttribute('aria-label', stopping ? '停止生成' : '发送小剧场');
-        send.disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
+        const available = playground.availability();
+        send.title = !available.available ? available.message : '发送小剧场';
+        send.disabled = !canWrite() || !input.value.trim() || !available.available;
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
-            const retry = round && pendingSaveFor(selectedResult(round), job);
+            const result = round && selectedResult(round), job = playground.getState(result?.id);
+            const retry = round && pendingSaveFor(result, job);
+            view.stop.hidden = !result || !activePhases.has(job.phase);
+            view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id);
             view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting;
             view.removePrompt.hidden = view.removeReply.hidden = isEditing(id);
@@ -574,7 +580,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.generate.hidden = !own || !round?.prompt || !!round.results.length;
             view.generate.disabled = !canGenerate(round);
             view.again.hidden = !(own && round.prompt !== null) && !retry;
-            view.again.disabled = retry ? job.phase === 'saving' : !canGenerate(round);
+            view.again.disabled = retry ? job.phase === 'saving' : !canRewrite(round, result);
             view.again.title = retry ? '重试保存' : '重新生成';
             view.again.setAttribute('aria-label', view.again.title);
             view.again.setAttribute('aria-busy', String(!!retry && job.phase === 'saving'));
@@ -590,8 +596,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return !!round && round.prompt !== null && canWrite() && round.characterId === selected?.id
             && playground.availability().available && !isEditing(round.id) && !views.get(round.id)?.removing;
     }
+    function canRewrite(round, result) {
+        return canGenerate(round) && !!result && playground.availability({ resultId: result.id }).available;
+    }
     function canContinue(round, result) {
-        return canGenerate(round) && !!result?.text?.trim() && !pendingSaveFor(result, playground.getState());
+        return canRewrite(round, result) && !!result?.text?.trim() && !pendingSaveFor(result);
     }
     function updateResultNavigation(round, view) {
         const index = round.results.indexOf(selectedResult(round)), atEnd = index === round.results.length - 1;
@@ -602,7 +611,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function syncMessageActions(id, view) {
         view.userActions.hidden = !!view.userEditor || (view.userTop.hidden && view.generate.hidden);
-        view.actions.hidden = isEditing(id) || [view.swipes, view.again, view.continueBtn, view.assistantTop].every(node => node.hidden);
+        view.actions.hidden = isEditing(id) || [view.swipes, view.again, view.continueBtn, view.stop, view.assistantTop].every(node => node.hidden);
     }
     function replaceDraft(next) {
         const key = characterKey(selected), previous = draftFor();
@@ -615,8 +624,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function canRemoveMessage(round) {
         if (!round || settings.enabled === false || isEditing(round.id)) return false;
-        const view = views.get(round.id), job = playground.getState();
-        return !view?.removing && !view?.favoriting && job.roundId !== round.id;
+        const view = views.get(round.id);
+        return !view?.removing && !view?.favoriting && !roundBusy(round.id);
     }
     async function removeMessage(id, role) {
         const round = records.get(id)?.round, view = views.get(id);
@@ -674,27 +683,33 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function hasPendingSave(job) {
         return job.phase === 'save-failed' || (job.unsaved && job.phase === 'saving');
     }
-    function pendingSaveFor(result, job = playground.getState()) {
+    function pendingSaveFor(result, job = playground.getState(result?.id)) {
         return !!result && job.resultId === result.id && hasPendingSave(job);
     }
-    function notifyRequestError(error) {
+    function notifyRequestError(error, resultId) {
         // Failed saves show their explanation and retry control in the reply.
-        if (error.code !== 'history_save_failed' || !hasPendingSave(playground.getState())) notify(error.message);
+        if (error.code !== 'history_save_failed' || !hasPendingSave(playground.getState(resultId))) notify(error.message);
+    }
+    async function runGeneration(run, { draft, prompt, role = 'assistant' } = {}) {
+        const request = { key: characterKey(selected), draft, prompt, role, accepted: false, resultId: null };
+        latestRequest = request; startingRequest = request;
+        let task;
+        try { task = run(); }
+        finally { startingRequest = null; }
+        try { await task; }
+        catch (error) { notifyRequestError(error, request.resultId); }
+        finally { if (request.resultId) requests.delete(request.resultId); await refresh(); }
     }
     async function sendDraft() {
         if (!canWrite() || !playground.availability().available || !input.value.trim()) return;
-        const draft = draftFor(), key = characterKey(selected);
-        pendingSend = { key, draft, prompt: input.value, accepted: false };
-        try { await playground.send({ characterId: selected.id, prompt: input.value, origin: draft.origin }); }
-        catch (error) { notifyRequestError(error); }
-        finally { pendingSend = null; await refresh(); }
+        const draft = draftFor(), prompt = input.value, target = readTarget();
+        await runGeneration(() => playground.send({ ...target, prompt, origin: draft.origin }), { draft, prompt, role: 'latest' });
     }
     async function regenerate(round) {
-        if (!canGenerate(round)) return;
-        pendingReveal = { roundId: round.id, role: 'assistant' };
-        try { await playground.regenerate(round.id, selectedResult(round).id); }
-        catch (error) { notifyRequestError(error); }
-        finally { await refresh(); }
+        const result = selectedResult(round);
+        if (!canRewrite(round, result)) return;
+        const target = readTarget();
+        await runGeneration(() => playground.regenerate(round.id, result.id, target));
     }
     async function continueReply(round) {
         const result = selectedResult(round);
@@ -703,19 +718,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 32) {
             positions.set(characterKey(selected), { bottom: true });
         }
-        try { await playground.continueResult(round.id, result.id); }
-        catch (error) { notifyRequestError(error); }
-        finally { await refresh(); }
+        const target = readTarget();
+        await runGeneration(() => playground.continueResult(round.id, result.id, target), { role: null });
     }
     async function advanceResult(id) {
         const round = records.get(id)?.round;
         if (!round || isEditing(id) || views.get(id)?.removing) return;
         if (selectedResult(round) !== round.results.at(-1)) { changeResult(id, 1); return; }
         if (!canGenerate(round)) return;
-        pendingReveal = { roundId: id, role: 'assistant' };
-        try { await playground.generateAnother(id); }
-        catch (error) { notifyRequestError(error); }
-        finally { await refresh(); }
+        const target = readTarget();
+        await runGeneration(() => playground.generateAnother(id, target));
     }
     function canEditResult(result) {
         return result && settings.enabled !== false && !['preparing', 'generating', 'saving', 'unfinished'].includes(result.status);
@@ -800,7 +812,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const actionGroup = element('div', undefined, 'play-action-group');
         const again = iconButton('refresh', '重新生成', () => {
             const currentRound = records.get(round.id).round;
-            if (pendingSaveFor(selectedResult(currentRound))) void playground.retrySave().catch(notifyRequestError);
+            const result = selectedResult(currentRound);
+            if (pendingSaveFor(result)) void playground.retrySave(result.id).catch(error => notifyRequestError(error, result.id));
             else void regenerate(currentRound);
         }); again.classList.add('play-again');
         const continueBtn = iconButton('forward', '续写', () => {
@@ -809,10 +822,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }); continueBtn.classList.add('play-continue');
         actionGroup.append(again, continueBtn);
         const assistantTop = iconButton('top', '回到这条消息开头', () => jumpToMessage(round.id, 'assistant')); assistantTop.hidden = true;
-        actions.append(actionGroup, swipes, assistantTop);
+        const stop = iconButton('stop', '停止这份回复', () => playground.stop(stop.dataset.resultId)); stop.classList.add('play-stop'); stop.hidden = true;
+        const rightActions = element('div', undefined, 'play-right-actions'); rightActions.append(stop, assistantTop);
+        actions.append(actionGroup, swipes, rightActions);
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, userFavorite, favorite, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, swipes, prev, count, next, outputs: new Map() };
+            userTools, replyTools, userFavorite, favorite, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) { return round.results.find(result => result.id === selections.get(round.id)) ?? round.results.at(-1); }
     function createOutput(round, result) {
@@ -854,13 +869,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         updateFavoriteStar(round, view);
         const tools = output.editor ? [output.editor.actions] : [view.favorite, view.editReply, view.removeReply];
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
-        const job = playground.getState(), pendingSave = pendingSaveFor(result, job);
+        const job = playground.getState(result.id), pendingSave = pendingSaveFor(result, job);
         const retryingSave = pendingSave && job.phase === 'saving';
         const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
             : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
         const sourceSignature = JSON.stringify([result.text, playground.display?.revision ?? 0]);
         if (output.sourceSignature !== sourceSignature) {
-            output.displayText = playground.display?.process(result.text) ?? result.text;
+            output.displayText = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
         const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}`;
@@ -1010,6 +1025,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const index = round.results.indexOf(selectedResult(round));
         const result = resultId ? round.results.find(item => item.id === resultId) : round.results[index + direction];
         if (!result) return;
+        latestRequest = null; pendingReveal = null;
         closeResults(); selections.set(id, result.id); renderRecord(round, views.get(id)); updateControls();
         jumpToMessage(id, 'assistant'); scheduleSave();
     }
@@ -1024,7 +1040,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const selected = selectedResult(round).id === result.id;
             option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
             const copy = element('span', undefined, 'play-result-option-copy');
-            const preview = playground.display?.process(result.text) ?? result.text;
+            const preview = playground.display?.process(result.text, roundCharacter(round)) ?? result.text;
             copy.append(element('span', playTextPreview(preview) || statusText[result.status] || '内容已隐藏', 'play-result-opening'),
                 element('time', messageTime(result.startedAt), 'play-result-time'));
             const check = glyph('check'); check.classList.add('play-result-check');
@@ -1079,9 +1095,14 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     async function chooseCharacter(character) {
         if (characterKey(selected) === characterKey(character)) { if (mobile.matches) setBrowsing(false); return; }
+        latestRequest = null; pendingReveal = null;
         closeResults(false); rememberPosition(); selected = character;
         if (mobile.matches) setBrowsing(false);
         renderPeople(); renderHistory(); updateComposer(); restorePosition(positions.get(characterKey(selected)));
+        if (playground.display) {
+            try { await playground.display.refresh(character); if (visible) keepReading(renderHistory); }
+            catch { notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'); }
+        }
         await refresh();
     }
     async function chooseCurrent() {
@@ -1110,8 +1131,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (!selected) browsing = true;
             const key = characterKey(selected);
             if (previous && !previous.id && selected?.id && previous.avatar === selected.avatar) {
-                for (const map of [positions, drafts]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
-                if (pendingSend?.key === previousKey) pendingSend.key = key;
+                for (const map of [positions, drafts, historyWindows]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
+                for (const request of requests.values()) if (request.key === previousKey) request.key = key;
+                if (pendingReveal?.key === previousKey) pendingReveal.key = key;
             }
             if (visible) { renderPeople(); updateBrowser(); updateComposer(); }
             const characterId = selected?.id;
@@ -1120,20 +1142,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const previousRange = historyRange(previousRows, key);
             rowsByCharacter.set(characterId, rows);
             loaded = true;
-            const targetId = pendingReveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
+            const reveal = pendingReveal?.key === key ? pendingReveal : null;
+            const targetId = reveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
             const savedWindow = historyWindows.get(key);
             if (!savedWindow?.first || !rows.some(row => row.id === savedWindow.first)
-                || (pendingReveal && !rows.slice(historyRange(rows, key).start, historyRange(rows, key).end).some(row => row.id === targetId))) {
+                || (reveal && !rows.slice(historyRange(rows, key).start, historyRange(rows, key).end).some(row => row.id === targetId))) {
                 resetHistoryWindow(rows, targetId, key);
             } else if (positions.get(key)?.bottom && previousRange.end === previousRows.length) {
                 setHistoryRange(rows, Math.max(0, rows.length - Math.max(historyPageSize, previousRange.end - previousRange.start)), rows.length, key);
             }
             function showBatch() {
-                readError.hidden = true; applyJob(playground.getState());
+                readError.hidden = true;
+                for (const job of playground.getStates()) applyJob(job);
                 if (visible) {
                     const position = positions.get(key);
                     renderHistory(); updateComposer(); restorePosition(position);
-                    if (pendingReveal && views.get(pendingReveal.roundId)?.item.getClientRects().length) {
+                    if (pendingReveal?.key === key && views.get(pendingReveal.roundId)?.item.getClientRects().length) {
                         if (pendingReveal.role === 'latest') jumpToLatest(); else jumpToMessage(pendingReveal.roundId, pendingReveal.role);
                         pendingReveal = null;
                     }
@@ -1142,10 +1166,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             const { start, end } = historyRange(rows, key);
             const visibleRows = rows.slice(start, end);
-            const job = playground.getState();
+            const liveRounds = new Set(playground.getStates().map(job => job.roundId));
             const pending = visibleRows.filter(row => {
                 const cached = records.get(row.id);
-                return cached?.revision !== row.revision || cached?.error || row.id === job.roundId;
+                return cached?.revision !== row.revision || cached?.error || liveRounds.has(row.id);
             }).sort((a, b) => {
                 if (a.id === targetId) return -1;
                 if (b.id === targetId) return 1;
@@ -1164,60 +1188,54 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function applyJob(job) {
         const round = records.get(job.roundId)?.round;
         const result = round?.results.find(item => item.id === job.resultId);
-        if (result && job.phase !== 'idle') { result.text = job.text; result.status = job.phase; result.error = job.error ?? undefined; }
+        if (result && job.phase !== 'idle') { result.text = job.text; result.status = job.phase; result.error = job.error ?? undefined; if (job.context) result.context = job.context; }
     }
-    function renderStreamingJob(job) {
+    function renderChangedJobs() {
         streamFrame = 0;
-        if (!visible) return;
-        const rows = rowsByCharacter.get(selected?.id) ?? [];
-        const atBottom = historyRange(rows).end === rows.length && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24;
-        applyJob(job);
-        const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
-        if (record && view && !view.item.hidden) {
-            renderRecord(record, view);
-            view.assistantTop.hidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feed.clientHeight;
-            syncMessageActions(job.roundId, view);
-        }
-        updateComposer();
-        if (atBottom) {
-            feed.scrollTop = feed.scrollHeight;
-            commitPosition({ bottom: true });
-        } else {
-            pendingReveal = null;
-            rememberPosition(false);
-        }
-        updateJump();
-    }
-    playground.subscribe(job => {
-        const previous = lastJob; lastJob = job;
-        if (pendingSend && job.roundId && !pendingSend.accepted) {
-            pendingSend.accepted = true;
-            const draft = drafts.get(pendingSend.key);
-            if (draft === pendingSend.draft && draft.text === pendingSend.prompt) drafts.set(pendingSend.key, draft.previous ?? { text: '', origin: null });
-            pendingReveal = { roundId: job.roundId, role: 'latest' }; scheduleSave();
-        }
-        if (job.roundId && job.resultId !== previous.resultId) selections.set(job.roundId, job.resultId);
-        if (job.roundId && !records.get(job.roundId)?.round?.results.some(result => result.id === job.resultId)) selections.set(job.roundId, job.resultId);
-        if (job.phase === 'generating' && visible) {
-            applyJob(job);
-            if (!streamFrame) streamFrame = requestAnimationFrame(() => renderStreamingJob(lastJob));
-        } else {
-            if (streamFrame) { cancelAnimationFrame(streamFrame); streamFrame = 0; }
-            if (visible) keepReading(() => {
+        const updates = [...changedJobs.values()]; changedJobs.clear();
+        const change = () => {
+            const rendered = new Set();
+            for (const job of updates) {
                 applyJob(job);
                 const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
-                if (record && view && !view.item.hidden) renderRecord(record, view);
-                updateComposer();
-            });
-            else applyJob(job);
+                if (visible && record && view && !view.item.hidden && selectedResult(record)?.id === job.resultId && !rendered.has(job.roundId)) {
+                    rendered.add(job.roundId); renderRecord(record, view);
+                    view.assistantTop.hidden = view.results.scrollHeight + view.aiHead.offsetHeight <= feed.clientHeight;
+                }
+            }
+            if (visible) updateControls();
+        };
+        if (visible) keepReading(change); else change();
+    }
+    playground.subscribe(job => {
+        const previous = previousJobs.get(job.resultId);
+        if (job.phase === 'idle') previousJobs.delete(job.resultId); else previousJobs.set(job.resultId, job);
+        if (startingRequest && !requests.has(job.resultId)) {
+            startingRequest.resultId = job.resultId; requests.set(job.resultId, startingRequest);
+            const existing = records.get(job.requestedRoundId)?.round;
+            if (existing && !selections.has(existing.id)) selections.set(existing.id, selectedResult(existing)?.id);
         }
-        if (job.roundId !== previous.roundId || job.phase === 'idle' || job.phase === 'save-failed') void refresh();
+        const request = requests.get(job.resultId);
+        if (request && job.roundId && !request.accepted) {
+            request.accepted = true;
+            const draft = drafts.get(request.key);
+            if (request.draft && draft === request.draft && draft.text === request.prompt) drafts.set(request.key, draft.previous ?? { text: '', origin: null });
+            if (request === latestRequest && request.key === characterKey(selected) && visible) {
+                selections.set(job.roundId, job.resultId);
+                if (request.role) pendingReveal = { key: request.key, roundId: job.roundId, role: request.role };
+            } else if (job.replaceResultId && selections.get(job.roundId) === job.replaceResultId) {
+                selections.set(job.roundId, job.resultId);
+            }
+            scheduleSave();
+        }
+        changedJobs.set(job.resultId, job);
+        if (!streamFrame) streamFrame = requestAnimationFrame(renderChangedJobs);
+        if (job.roundId && (!previous?.roundId || job.phase === 'idle' || job.phase === 'save-failed')) void refresh();
     });
     const events = ctx().eventTypes ?? {};
     if (events.CHAT_CHANGED) ctx().eventSource.on(events.CHAT_CHANGED, () => {
-        const wasCurrent = !selected || selected.avatar === current?.avatar;
         if (visible) rememberPosition();
-        void refresh(wasCurrent);
+        void refresh();
         if (visible) void refreshUser();
     });
     if (events.PERSONA_CHANGED) ctx().eventSource.on(events.PERSONA_CHANGED, () => { if (visible) void refreshUser(); });
@@ -1243,7 +1261,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 activationTimer = setTimeout(() => {
                     if (!visible) return;
                     renderPeople(); layout(); void refreshUser(); void refreshFavorites(); void refresh();
-                    if (playground.display) void playground.display.refresh().finally(() => {
+                    if (playground.display) void playground.display.refresh(selected).finally(() => {
                         if (visible) keepReading(renderHistory);
                     }).catch(() => notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'));
                     if (playground.initialize) void playground.initialize().then(() => {

@@ -95,6 +95,15 @@ function textSetting(area, settings, saveSettings, key, name, value, note) {
     return input;
 }
 
+export function renderPlayChatSetting(area, settings, saveSettings) {
+    const row = element('label', undefined, 'tea-setting-row'), description = element('span');
+    const name = '不发送角色聊天，仅读取预设/人设/世界书';
+    description.append(element('strong', name), element('small', '角色设定照常使用。开启时只用初始变量；关闭时发送该角色最新聊天，使用最新有效变量。'));
+    const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = readPlaySettings(settings).noChat; toggle.setAttribute('aria-label', name);
+    toggle.addEventListener('change', () => { settings.playNoChat = toggle.checked; saveSettings(); });
+    row.append(description, toggle); area.append(row);
+}
+
 export function renderPlayPromptSetting(area, settings, saveSettings) {
     const section = element('section', undefined, 'play-prompt-settings');
     const heading = element('div', undefined, 'play-prompt-heading');
@@ -293,7 +302,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const status = element('p', '', 'tea-setting-description'); status.setAttribute('role', 'status');
     const list = element('div', undefined, 'play-regex-groups'); let loading = false, loaded = !!viewState?.loaded;
     const refresh = iconButton('refresh', '刷新列表', () => void load());
-    toolbar.append(element('p', '跟随酒馆当前选择；取消勾选即可停用，忽略楼层限制。', 'tea-setting-description'), refresh);
+    toolbar.append(element('p', '角色正则跟随小剧场选中的角色，预设正则使用当前预设。取消勾选即可停用，忽略楼层限制。', 'tea-setting-description'), refresh);
     details.append(toolbar, status, list);
     section.append(details); area.append(section);
 

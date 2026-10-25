@@ -5,7 +5,7 @@ import { element, textButton, glyph, iconButton, copyText, createPageJump } from
 import { renderDiagnostics } from './diagnostics-view.js';
 import { createPlayView } from './play-view.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
-import { createPlayApiSettings, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
+import { createPlayApiSettings, renderPlayChatSetting, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
 export { element, textButton } from './ui.js';
 function art() {
     const node = element('div', undefined, 'tea-art'); node.setAttribute('aria-hidden', 'true');
@@ -757,6 +757,7 @@ export function createTheatrePanel(ctx, state, actions) {
             const generation = group('小剧场生成');
             apiSettings ??= createPlayApiSettings(ctx, state.settings, actions.saveSettings, actions.diagnostics);
             generation.append(apiSettings.node);
+            renderPlayChatSetting(generation, state.settings, actions.saveSettings);
             renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
             const display = group('回复显示');
             display.classList.add('play-display-settings');

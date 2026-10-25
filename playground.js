@@ -43,33 +43,45 @@ function publicError(error, phase) {
  */
 export function createPlayground({ history, captureEnvironment, isCurrent, prepareRequest,
     diagnostics, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString(), checkpointMs = 2000 }) {
-    let active = null, unsaved = null, retryingSave = false;
+    const jobs = new Map();
     const listeners = new Set();
-    function getState() {
-        const job = active ?? unsaved?.job;
+    function findJob(resultId) {
+        return jobs.get(resultId) ?? [...jobs.values()].find(job => job.replaceResultId === resultId);
+    }
+    function readJob(job) {
         if (!job) return { phase: 'idle', unsaved: false };
-        return { phase: retryingSave ? 'saving' : active?.phase ?? 'save-failed',
+        return { phase: job.phase,
             roundId: job.round?.id ?? null, resultId: job.resultId, characterId: job.round?.characterId ?? null,
-            characterName: job.characterName, text: job.text, error: clone(job.saveError ?? job.error ?? null),
-            unsaved: !!unsaved || !!job.checkpointError };
+            requestedRoundId: job.requestedRoundId ?? null, replaceResultId: job.replaceResultId ?? null,
+            characterName: job.characterName, characterAvatar: job.characterAvatar,
+            text: job.text, error: clone(job.saveError ?? job.error ?? null),
+            context: clone(job.context),
+            unsaved: !!job.pendingUpdate || !!job.checkpointError };
+    }
+    function getState(resultId) {
+        return readJob(resultId ? findJob(resultId) : [...jobs.values()].at(-1));
+    }
+    function hasRoundJob(roundId) {
+        return [...jobs.values()].some(job => (job.round?.id ?? job.requestedRoundId) === roundId);
     }
     // File contents can lag behind streamed or unsaved text. Returned rounds
     // use the same current result for reads and user-message edits.
     function withLiveResults(round) {
         for (const result of round.results) {
-            const job = active?.resultId === result.id ? active : unsaved?.job.resultId === result.id ? unsaved.job : null;
+            const job = findJob(result.id);
             if (job) {
                 result.text = job.text;
                 if (job.extra) result.extra = clone(job.extra);
-                result.status = active === job ? job.phase : 'save-failed';
+                result.status = job.phase;
+                if (job.context) result.context = clone(job.context);
                 if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
             }
         }
         return round;
     }
-    function notify() {
+    function notify(job) {
         for (const listener of listeners) {
-            try { listener(getState()); }
+            try { listener(readJob(job)); }
             catch (error) { diagnostics?.error('更新剧场演出界面', error); /* A view cannot interrupt a save or request. */ }
         }
     }
@@ -80,10 +92,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             return result;
         } catch (error) { diagnostics?.error(operation, error); throw error; }
     }
-    function availability() {
+    function availability({ resultId } = {}) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
-        if (active || retryingSave) return { available: false, code: 'busy', message: '已有小剧场正在生成或保存，请先等待或停止' };
-        if (unsaved) return { available: false, code: 'unsaved_result', message: '有一份回复尚未保存，请先重试保存' };
+        const job = resultId && findJob(resultId);
+        if (job?.phase === 'save-failed') return { available: false, code: 'unsaved_result', message: '这份回复尚未保存，请先重试保存' };
+        if (job) return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
         if (typeof prepareRequest !== 'function') return { available: false, code: 'generation_unavailable', message: PLAY_GENERATION_UNAVAILABLE };
         if (prepareRequest.isReady && !prepareRequest.isReady()) return { available: false, code: 'generation_loading', message: '正在载入酒馆的生成接口…' };
         return { available: true };
@@ -108,8 +121,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                     if (isRemovedResult(error)) job.controller.abort(new DOMException('这条消息已在其他窗口删除或替换', 'AbortError'));
                 }
                 finally { job.checkpointPending = false; }
-                if (active === job && !job.closed) {
-                    notify();
+                if (jobs.get(job.resultId) === job && !job.closed) {
+                    notify(job);
                     // Coalesce text received during a slow upload; never build
                     // a queue of obsolete full-text checkpoints behind it.
                     if (job.text !== text || job.extra !== extra) scheduleCheckpoint(job);
@@ -118,14 +131,14 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         }, checkpointMs);
         job.timer?.unref?.();
     }
-    async function start({ roundId, replaceResultId, continueResultId, characterId, prompt, origin }) {
-        const available = availability();
+    async function start({ roundId, replaceResultId, continueResultId, characterId, character, prompt, origin }) {
+        const available = availability({ resultId: replaceResultId || continueResultId });
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
         // Synchronous capture: later settings changes do not change this request.
         // Only the public context below is saved; environment may contain keys.
         let environment;
-        try { environment = clone(captureEnvironment()); }
+        try { environment = clone(captureEnvironment({ characterId, character, roundId })); }
         catch (error) { diagnostics?.error('读取小剧场生成环境', error); throw error; }
         const continuationError = continueResultId && playContinuationError(environment.continuation);
         if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
@@ -134,12 +147,14 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let baseText = '';
         let continueExtra;
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
-            characterName: environment.character.name, text: '', closed: false, checkpoint: Promise.resolve() };
+            requestedRoundId: roundId, replaceResultId,
+            characterName: environment.character.name, characterAvatar: environment.character.avatar,
+            text: '', context, closed: false, checkpoint: Promise.resolve() };
         const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成', { phase: 'preparing', apiMode: environment.api?.mode },
             [environment.api?.key, environment.tavern?.settings?.proxy_password]);
         let generationError;
-        active = job;
-        notify();
+        jobs.set(job.resultId, job);
+        notify(job);
         let finalStatus = 'complete';
         let resultContext = context;
         try {
@@ -157,7 +172,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             job.round = await history.begin({ roundId, replaceResultId, continueResultId, characterId, character: environment.character,
                 prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
                 ...(continueResultId ? { expectedText: baseText } : {}) }, { signal: job.controller.signal });
-            notify();
+            notify(job);
             job.controller.signal.throwIfAborted();
             assertCurrent(environment);
             const request = await abortable(() => prepareRequest({
@@ -168,19 +183,20 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             }), job.controller.signal);
             if (typeof request?.send !== 'function') throw new PlaygroundError('invalid_prepared_request', '提示词处理没有返回可发送的请求，本次没有发送到模型。');
             if (request.context) resultContext = readPlayContext({ ...context, ...request.context,
-                chatId: context.chatId, apiMode: context.apiMode, characterName: context.characterName });
+                ...(environment.independent ? {} : { chatId: context.chatId }), apiMode: context.apiMode, characterName: context.characterName });
+            job.context = resultContext;
             assertCurrent(environment);
             job.phase = 'generating';
             diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now() });
-            notify();
+            notify(job);
             const result = await abortable(() => request.send({ signal: job.controller.signal,
                 onReasoning(extra) {
-                    if (active !== job || job.closed || job.controller.signal.aborted) return;
+                    if (jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                     job.extra = readPlayReasoning(extra);
                     scheduleCheckpoint(job);
                 },
                 onText(text) {
-                    if (active !== job || job.closed || job.controller.signal.aborted) return;
+                    if (jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                     if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的内容格式不正确');
                     if (diagnostic && text && text !== job.text) {
                         const receivedAt = now(), first = !job.text;
@@ -189,7 +205,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                     }
                     job.text = text;
                     scheduleCheckpoint(job);
-                    notify();
+                    notify(job);
                 },
             }), job.controller.signal);
             const text = typeof result === 'string' ? result : result?.text;
@@ -199,7 +215,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             job.text = text;
         } catch (error) {
             generationError = error;
-            finalStatus = job.controller.signal.aborted ? 'stopped' : 'failed';
+            finalStatus = job.controller.signal.aborted || error?.name === 'AbortError' ? 'stopped' : 'failed';
             if (!job.round) {
                 if (job.controller.signal.aborted) return null;
                 throw error;
@@ -210,9 +226,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             job.finishedAt = now();
             diagnostic?.finish(finalStatus, generationError, { phase: job.phase, receivedCharacters: job.text.length });
             clearTimeout(job.timer);
-            if (job.round) { job.phase = 'saving'; notify(); }
+            if (job.round) { job.phase = 'saving'; notify(job); }
             await job.checkpoint;
-            if (!job.round) { if (active === job) active = null; notify(); }
+            if (!job.round) { jobs.delete(job.resultId); job.phase = 'idle'; notify(job); }
         }
         const update = { text: job.text, status: finalStatus, finishedAt: job.finishedAt, context: resultContext,
             ...(job.extra ? { extra: job.extra } : {}),
@@ -227,51 +243,57 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             // recreate it or leave an impossible save retry blocking new sends.
             if (isRemovedResult(error)) return null;
             job.saveError = publicError(error, 'saving');
-            unsaved = { job, update };
+            job.pendingUpdate = update;
+            job.phase = 'save-failed';
             throw new PlaygroundError('history_save_failed', job.saveError.message);
         } finally {
-            if (active === job) active = null;
-            notify();
+            if (!job.pendingUpdate) { jobs.delete(job.resultId); job.phase = 'idle'; }
+            notify(job);
         }
     }
 
     return {
         availability,
         getState,
+        getStates: () => [...jobs.values()].map(readJob),
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-        send({ characterId, prompt, origin = null }) { return start({ characterId, prompt, origin }); },
-        generateAnother(roundId) { return start({ roundId }); },
-        regenerate(roundId, resultId) {
+        send({ characterId, character, prompt, origin = null }) { return start({ characterId, character, prompt, origin }); },
+        generateAnother(roundId, target = {}) { return start({ ...target, roundId }); },
+        regenerate(roundId, resultId, target = {}) {
             if (!resultId) throw new PlaygroundError('result_missing', '请先选择要重新生成的结果');
-            return start({ roundId, replaceResultId: resultId });
+            return start({ ...target, roundId, replaceResultId: resultId });
         },
-        continueResult(roundId, resultId) {
+        continueResult(roundId, resultId, target = {}) {
             if (!resultId) throw new PlaygroundError('result_missing', '请先选择要续写的结果');
-            return start({ roundId, continueResultId: resultId });
+            return start({ ...target, roundId, continueResultId: resultId });
         },
-        stop() {
-            if (!active || active.closed) return false;
-            active.controller.abort(new DOMException('用户停止了本次小剧场生成', 'AbortError'));
+        stop(resultId) {
+            const active = [...jobs.values()].filter(job => !job.closed);
+            const job = resultId ? findJob(resultId) : active.length === 1 ? active[0] : null;
+            if (!job || job.closed) return false;
+            job.controller.abort(new DOMException('用户停止了本次小剧场生成', 'AbortError'));
             return true;
         },
-        async retrySave() {
-            if (active || retryingSave) throw new PlaygroundError('busy', '正在保存，请稍后再试');
-            if (!unsaved) return null;
-            const pending = unsaved;
-            retryingSave = true;
-            notify();
+        async retrySave(resultId) {
+            const pending = [...jobs.values()].filter(job => job.pendingUpdate);
+            if (!resultId && pending.length > 1) throw new PlaygroundError('save_target_required', '请选择要重新保存的回复');
+            const job = resultId ? findJob(resultId) : pending[0];
+            if (!job) return null;
+            if (job.phase !== 'save-failed') throw new PlaygroundError('busy', '这份回复正在生成或保存，请稍后再试');
+            job.phase = 'saving';
+            notify(job);
             try {
-                const round = await history.saveResult(pending.job.round.id, pending.job.resultId, pending.update);
-                unsaved = null;
+                const round = await history.saveResult(job.round.id, job.resultId, job.pendingUpdate);
+                jobs.delete(job.resultId); job.pendingUpdate = null;
                 diagnostics?.info('小剧场回复重新保存成功');
                 return round;
             } catch (error) {
                 diagnostics?.error('重试保存小剧场回复', error, { phase: 'saving' });
-                if (isRemovedResult(error)) { unsaved = null; return null; }
-                pending.job.saveError = publicError(error, 'saving');
-                throw new PlaygroundError('history_save_failed', pending.job.saveError.message);
+                if (isRemovedResult(error)) { jobs.delete(job.resultId); job.pendingUpdate = null; return null; }
+                job.saveError = publicError(error, 'saving');
+                throw new PlaygroundError('history_save_failed', job.saveError.message);
             }
-            finally { retryingSave = false; notify(); }
+            finally { job.phase = job.pendingUpdate ? 'save-failed' : 'idle'; notify(job); }
         },
         listCharacters: () => historyAction('读取演出角色列表', () => history.listCharacters()),
         listRounds: characterId => historyAction('读取演出历史目录', () => history.listRounds(characterId)),
@@ -279,7 +301,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         getFavorite: id => historyAction('读取演出收藏', () => history.getFavorite(id)),
         async addFavorite(input) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (active?.resultId === input.resultId || unsaved?.job.resultId === input.resultId) {
+            if (findJob(input.resultId)) {
                 throw new PlaygroundError('busy', '请在这份回复结束并保存后收藏');
             }
             return historyAction('收藏演出记录', () => history.addFavorite(input), true);
@@ -299,15 +321,16 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         },
         async editResult(roundId, resultId, text, expectedText) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (active?.resultId === resultId) throw new PlaygroundError('busy', '这条回复正在生成或保存，请结束后再编辑。');
+            const job = findJob(resultId);
+            if (job && job.phase !== 'save-failed') throw new PlaygroundError('busy', '这条回复正在生成或保存，请结束后再编辑。');
             // A failed final save must be settled before replacing its text, so
             // retrying the generation save can never restore the pre-edit body.
-            if (unsaved?.job.resultId === resultId) await this.retrySave();
+            if (job?.pendingUpdate) await this.retrySave(job.resultId);
             return historyAction('保存回复修改', () => history.editResult(roundId, resultId, text, expectedText), true);
         },
         async removePrompt(roundId, expectedText) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (active?.round?.id === roundId || unsaved?.job.round.id === roundId) {
+            if (hasRoundJob(roundId)) {
                 throw new PlaygroundError('busy', '这轮回复正在生成或尚未保存，请结束并保存后再删除。');
             }
             const round = await historyAction('删除用户消息', () => history.removePrompt(roundId, expectedText), true);
@@ -315,7 +338,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         },
         async removeReply(roundId, expectedResults) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (active?.round?.id === roundId || unsaved?.job.round.id === roundId) {
+            if (hasRoundJob(roundId)) {
                 throw new PlaygroundError('busy', '这条回复正在生成或尚未保存，请结束并保存后再删除。');
             }
             return historyAction('删除 AI 消息及全部版本', () => history.removeReply(roundId, expectedResults), true);

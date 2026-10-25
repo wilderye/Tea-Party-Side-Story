@@ -52,15 +52,19 @@ export function hidePlayTags(source, names) {
 }
 
 /** Keep the host's source order, with source identity attached for exclusions. */
-export function readTavernRegex(engine, context) {
+export function readTavernRegex(engine, context, character) {
     if (context.extensionSettings?.disabledExtensions?.includes('regex')) return [];
+    const current = context.characters?.[context.characterId];
+    const target = character?.avatar ? context.characters?.find(item => item.avatar === character.avatar) : current;
     const owner = {
         GLOBAL: [],
         PRESET: [engine.getCurrentPresetAPI(), engine.getCurrentPresetName()],
-        SCOPED: [context.characters?.[context.characterId]?.avatar ?? ''],
+        SCOPED: [target?.avatar ?? ''],
     };
     return Object.entries(engine.SCRIPT_TYPES).flatMap(([source, type]) =>
-        engine.getScriptsByType(type, { allowedOnly: true })
+        (source === 'SCOPED' && target?.avatar !== current?.avatar
+            ? (context.extensionSettings?.character_allowed_regex?.includes(target?.avatar) ? target?.data?.extensions?.regex_scripts ?? [] : [])
+            : engine.getScriptsByType(type, { allowedOnly: true }))
             .filter(script => !script.disabled && script.placement?.includes(engine.regex_placement.AI_OUTPUT)
                 && (!script.promptOnly || script.markdownOnly))
             .map(script => ({ source, key: JSON.stringify([source, ...owner[source], script.id]), script: structuredClone(script) })));
@@ -209,6 +213,25 @@ function displaySnapshot(config, rules) {
 export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, diagnostics) {
     let loading, engine, rules = [], sources = {}, config = structuredClone(readPlaySettings(settings)), revision = 0;
     let lastSnapshot = displaySnapshot(config, rules);
+    let selectedCharacter;
+    const roleRules = new Map();
+    const roleEngines = new Map(), roleLoading = new Map();
+    let refreshId = 0;
+
+    async function ensure(character) {
+        if (!character?.avatar || roleEngines.has(character.avatar)) return;
+        if (!roleLoading.has(character.avatar)) {
+            const id = refreshId;
+            const task = (async () => {
+                const loaded = await loadEngine(character);
+                if (id !== refreshId) return;
+                roleEngines.set(character.avatar, loaded);
+                roleRules.set(character.avatar, readTavernRegex(loaded, ctx(), character));
+            })().finally(() => { if (roleLoading.get(character.avatar) === task) roleLoading.delete(character.avatar); });
+            roleLoading.set(character.avatar, task);
+        }
+        await roleLoading.get(character.avatar);
+    }
 
     function syncState(nextConfig, nextRules) {
         const nextSnapshot = displaySnapshot(nextConfig, nextRules);
@@ -225,23 +248,51 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
         get rules() { return rules; },
         get sources() { return sources; },
         updateSettings() { syncState(structuredClone(readPlaySettings(settings)), rules); },
-        async refresh() {
+        ensure,
+        async refresh(character) {
+            const id = ++refreshId;
+            if (character) selectedCharacter = character;
             let nextRules = rules;
             try {
-                engine = await (loading ??= loadEngine());
                 const context = ctx();
-                nextRules = readTavernRegex(engine, context);
-                sources = { PRESET: engine.getCurrentPresetName(), SCOPED: context.characters?.[context.characterId]?.name ?? '' };
+                const target = selectedCharacter ?? context.characters?.[context.characterId];
+                roleEngines.clear(); roleRules.clear(); roleLoading.clear();
+                await ensure(target);
+                if (id !== refreshId) return rules;
+                engine = roleEngines.get(target?.avatar) ?? await (loading ??= loadEngine(target));
+                nextRules = readTavernRegex(engine, context, target);
+                if (target?.avatar) roleRules.set(target.avatar, nextRules);
+                sources = { PRESET: engine.getCurrentPresetName(), SCOPED: target?.name ?? '' };
             } catch (error) {
+                if (id !== refreshId) return rules;
                 diagnostics?.error('载入酒馆回复显示规则', error);
-                loading = null; sources = {};
+                loading = null; sources = {}; roleRules.clear(); roleEngines.clear(); roleLoading.clear(); engine = null;
                 syncState(structuredClone(readPlaySettings(settings)), []);
                 throw error;
             }
             syncState(structuredClone(readPlaySettings(settings)), nextRules);
             return rules;
         },
-        process(source) { return processPlayText(source, config, rules, (script, text) => engine.runRegexScript(script, text)); },
+        process(source, character) {
+            let targetRules = rules;
+            if (engine && character?.avatar) {
+                if (!roleRules.has(character.avatar)) roleRules.set(character.avatar, readTavernRegex(engine, ctx(), character));
+                targetRules = roleRules.get(character.avatar);
+            }
+            const target = character ?? selectedCharacter;
+            const targetEngine = roleEngines.get(target?.avatar) ?? engine;
+            return processPlayText(source, config, targetRules, (script, text) => {
+                if (targetEngine.taskBound) return targetEngine.runRegexScript(script, text);
+                // Resolve target names before the native engine consults the
+                // host's current character while substituting replacement text.
+                const names = value => String(value ?? '').replace(/\{\{char\}\}|<char>/gi, () => target?.name ?? ctx().name2 ?? '');
+                const mode = Number(script.substituteRegex);
+                const findRegex = mode === 1 ? names(script.findRegex) : mode === 2
+                    ? String(script.findRegex).replace(/\{\{char\}\}|<char>/gi, () => escapeRegex(target?.name ?? ctx().name2 ?? '')) : script.findRegex;
+                return targetEngine.runRegexScript({ ...script, findRegex, replaceString: names(script.replaceString),
+                    trimStrings: script.trimStrings?.map(names) }, text, { characterOverride: target?.name });
+            });
+        },
     };
 }
 

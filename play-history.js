@@ -54,9 +54,10 @@ export function readPlayOrigin(value) {
 // A request's full settings can contain API keys and proxy passwords. Only
 // these explanatory fields are allowed into the history, including on retries.
 export function readPlayContext(value) {
-    assert(value && isText(value.chatId) && ['tavern', 'custom'].includes(value.apiMode), '本次生成的聊天或 API 信息不完整');
+    assert(value && (isText(value.chatId) || (value.chatId === '' && ['initial', 'latest'].includes(value.chatMode))) && ['tavern', 'custom'].includes(value.apiMode), '本次生成的聊天或 API 信息不完整');
     const result = { chatId: value.chatId, apiMode: value.apiMode };
-    for (const key of ['characterName', 'presetName', 'model', 'source']) {
+    if (value.chatMode !== undefined) { assert(['initial', 'latest'].includes(value.chatMode)); result.chatMode = value.chatMode; }
+    for (const key of ['characterName', 'presetName', 'model', 'source', 'userName', 'userAvatar']) {
         if (value[key] !== undefined) {
             assert(typeof value[key] === 'string');
             result[key] = value[key];
@@ -364,13 +365,13 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 const directory = await index();
                 let owner = directory.characters.find(item => item.avatar === input.character.avatar);
                 if (input.characterId && owner?.id !== input.characterId) {
-                    throw new PlayHistoryError('other_character', '只能为酒馆当前聊天的角色生成；其他角色只能查看历史');
+                    throw new PlayHistoryError('other_character', '这张角色卡与选择的演出记录不对应，请重新选择角色。');
                 }
                 let round;
                 if (input.roundId) {
                     round = await readRoundFromRow(directory.rounds.find(item => item.id === input.roundId));
                     if (!owner || round.characterId !== owner.id) {
-                        throw new PlayHistoryError('other_character', '这轮记录不属于酒馆当前聊天的角色，只能查看历史');
+                        throw new PlayHistoryError('other_character', '这轮记录不属于本次选择的角色，请重新选择角色。');
                     }
                     if (round.prompt === null) throw new PlayHistoryError('prompt_missing', '这条用户消息已删除，无法使用原提示词生成。');
                 } else {
@@ -419,8 +420,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 if (!result) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
                 const next = readResult({ ...result, ...patch, id: result.id, startedAt: result.startedAt,
                     context: patch.context ? { ...result.context, ...readPlayContext(patch.context) } : result.context });
-                assert(next.context.chatId === result.context.chatId && next.context.apiMode === result.context.apiMode
-                    && next.context.characterName === result.context.characterName, '保存结果时不能更换它所属的聊天或 API 选择');
+                assert((next.context.chatId === result.context.chatId || (result.context.chatId === '' && result.context.chatMode === 'latest' && next.context.chatMode === 'latest')) && next.context.apiMode === result.context.apiMode
+                    && next.context.characterName === result.context.characterName && next.context.chatMode === result.context.chatMode, '保存结果时不能更换它所属的聊天或 API 选择');
                 // A delayed streaming checkpoint must never replace a finished
                 // result. An identical terminal write is a harmless save retry.
                 if (result.status !== 'unfinished') {

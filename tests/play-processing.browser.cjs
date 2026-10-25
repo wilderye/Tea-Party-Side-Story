@@ -41,6 +41,8 @@ const presetRules=[script('same','状态栏美化','<status>([\\s\\S]*?)</status
 const characterRules=[
  [script('same','角色替换','角色标记','甲的规则')],
  [script('same','角色替换','角色标记','乙的规则')]];
+ctx.characters.forEach((character,index)=>character.data={extensions:{regex_scripts:characterRules[index]}});
+ctx.extensionSettings.character_allowed_regex=['A.png','B.png'];
 const engine={SCRIPT_TYPES:{GLOBAL:0,PRESET:2,SCOPED:1},regex_placement:{AI_OUTPUT:2},
 getCurrentPresetAPI:()=>'openai',getCurrentPresetName:()=>ctx.chatCompletionSettings.preset_settings,
 getScriptsByType:type=>{if(window.failRegex)throw Error('模拟读取正则失败');return type===0?globalRules:type===2?presetRules:characterRules[ctx.characterId];},
@@ -78,7 +80,7 @@ document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
 const allowed = new Set(['panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
- 'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
+ 'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
 const server = http.createServer(async (request,response) => {
@@ -493,6 +495,10 @@ if (require.main === module) (async()=>{
    let dialog=await openSettings();
    assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','小剧场续写']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
+   const noChat=dialog.getByRole('checkbox',{name:'不发送角色聊天，仅读取预设/人设/世界书',exact:true});
+   assert.equal(await noChat.isChecked(),true,'首次默认不发送角色聊天');
+   await noChat.uncheck();assert.equal(await page.evaluate(()=>fixture.settings.playNoChat),false);
+   await noChat.check();assert.equal(await page.evaluate(()=>fixture.settings.playNoChat),true);
    assert.equal(await dialog.getByRole('textbox',{name:'隐藏标签'}).inputValue(),'think,thinking,update,status');
    assert.ok(await dialog.getByRole('textbox',{name:'隐藏标签'}).evaluate(node=>node.clientHeight<60),'默认隐藏名单使用紧凑的一行');
    assert.deepEqual(await dialog.getByRole('combobox',{name:'正文字号'}).locator('option').allTextContents(),Array.from({length:11},(_,i)=>String(12+i*2)));
@@ -519,7 +525,7 @@ if (require.main === module) (async()=>{
    assert.equal(await a.frameLocator('iframe').locator('body').getAttribute('data-reading-state'),'kept','设置未影响显示时保留网页内部状态');
    dialog=await openSettings();await dialog.locator('summary').click();
    await dialog.getByRole('checkbox',{name:'状态栏美化',exact:true}).uncheck();
-   assert.equal(await dialog.getByRole('checkbox').count(),3,'直接显示三处可用规则');
+   assert.equal(await dialog.locator('.play-display-settings').getByRole('checkbox').count(),3,'直接显示三处可用规则');
    const settingTop=await dialog.locator('.tea-settings').evaluate(node=>{node.scrollTop=500;return node.scrollTop;});
    await page.evaluate(()=>ui.refresh());
    assert.equal(await dialog.locator('details').evaluate(node=>node.open),true,'重新显示设置时保留正则展开状态');
@@ -660,23 +666,23 @@ if (require.main === module) (async()=>{
    await page.waitForFunction(()=>runtime.getState().phase==='generating');
    const stoppedId=await page.evaluate(()=>runtime.getState().roundId), stopped=panel.locator(`[data-record="${stoppedId}"]`);
    await page.evaluate(()=>window.emitGeneration('<thinking>停止后也保留'));
-   await panel.getByRole('button',{name:'停止生成',exact:true}).click();
+   await stopped.getByRole('button',{name:'停止这份回复',exact:true}).click();
    await stopped.getByRole('button',{name:'编辑回复原文'}).waitFor();
    assert.match(await stopped.locator('.play-result').innerText(),/停止后也保留/);
 
    if(viewport.width<=760)await panel.getByRole('button',{name:'选择角色',exact:true}).click();
    await panel.locator('.play-people').getByRole('button',{name:'测试乙',exact:true}).click();
-   assert.equal(await panel.locator('.play-compose').isVisible(),false,'其他角色只显示历史，不占用输入区域');
+   assert.equal(await panel.locator('.play-compose').isVisible(),true,'选择其他角色仍可输入并生成小剧场');
    const b=panel.locator(`[data-record="${ids.b}"]`);
    await b.locator('.play-assistant-meta .play-speaker').getByText('测试乙',{exact:true}).waitFor();
-   await b.getByText('甲的规则',{exact:false}).waitFor();
+   await b.getByText('乙的规则',{exact:false}).waitFor();
    await b.getByRole('button',{name:'编辑回复原文'}).click();
    edit=b.getByRole('group',{name:'编辑回复原文',exact:true});
    await edit.getByRole('textbox',{name:'回复原文'}).fill('编辑乙的旧记录 角色标记');
    await editAction('保存').click();
-   await b.getByText('编辑乙的旧记录 甲的规则',{exact:true}).waitFor();
+   await b.getByText('编辑乙的旧记录 乙的规则',{exact:true}).waitFor();
    await page.evaluate(()=>{ctx.characterId=1;ctx.name2='测试乙';ctx.chatId='B-main';ctx.chatCompletionSettings.preset_settings='预设乙';ctx.eventSource.emit('chatChanged');});
-   assert.match(await b.locator('.play-result').innerText(),/甲的规则/,'面板开着时不强行更新规则');
+   assert.match(await b.locator('.play-result').innerText(),/乙的规则/,'主聊天切换不改变内容所属角色的正则');
    await panel.getByRole('button',{name:'关闭面板',exact:true}).click();await panel.waitFor({state:'detached'});
    await page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
    await panel.locator(`[data-record="${ids.b}"]`).getByText('编辑乙的旧记录 乙的规则',{exact:true}).waitFor();
@@ -701,6 +707,7 @@ if (require.main === module) (async()=>{
    await verifyFontSource(page,viewport,openSettings,closeSettings);
    const overflow=await panel.evaluate(node=>node.scrollWidth-node.clientWidth);assert.ok(overflow<=1,'手机和桌面面板均无横向溢出');
    assert.deepEqual(errors,[]);
+   if(process.env.PLAY_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.PLAY_SCREENSHOT_DIR,'play-processing-'+viewport.width+'.png')});
    console.log(JSON.stringify({viewport,checks:'settings, regex, streaming, reply/user inline edit including during generation, unsaved reply preserved on prompt edit, save failure/conflict, history, reopen, regenerate edited prompt, repeated entry fill and focus, font source switch and persistence',errors}));
    await context.close();
   }

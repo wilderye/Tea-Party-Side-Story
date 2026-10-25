@@ -9,27 +9,35 @@ export function readPlayTarget(context) {
         throw new PlaygroundError('group_not_supported', '剧场演出目前只为单个角色的当前聊天生成，群聊尚未接入。');
     }
     const character = context.characters?.[context.characterId];
-    const chatId = context.getCurrentChatId?.() ?? context.chatId;
-    if (!character?.avatar || !character.name || typeof chatId !== 'string' || !chatId) {
-        throw new PlaygroundError('no_current_character', '请先在酒馆中打开一个角色的聊天。');
+    if (!character?.avatar || !character.name) {
+        throw new PlaygroundError('no_current_character', '请在小剧场中选择一张角色卡。');
     }
-    return { character: { avatar: character.avatar, name: character.name }, chatId };
+    return { character: { avatar: character.avatar, name: character.name }, chatId: context.getCurrentChatId?.() ?? context.chatId ?? '' };
 }
 
 // Capture only the data this request needs. Extension prompt filters are
 // native callbacks, not serializable history or a second variable environment.
-export function capturePlayEnvironment(context, settings) {
-    const target = readPlayTarget(context);
+export function capturePlayEnvironment(context, settings, requested = {}) {
+    const card = requested.character?.avatar
+        ? context.characters?.find(character => character.avatar === requested.character.avatar)
+        : context.characters?.[context.characterId];
+    if (!card?.avatar || !card.name) throw new PlaygroundError('target_character_missing', '请在小剧场中选择一张仍然存在的角色卡。');
+    const target = { character: { avatar: card.avatar, name: card.name }, chatId: '' };
     if (context.mainApi !== 'openai') throw new PlaygroundError('api_not_supported', '剧场演出目前支持酒馆的聊天补全预设。');
     const api = settings.playApi ?? { mode: 'tavern' };
     if (!['tavern', 'custom'].includes(api.mode)) throw new PlaygroundError('invalid_api_mode', '游玩的 API 选择不正确');
-    const streaming = context.streamingProcessor;
-    const unfinished = streaming && !streaming.isFinished ? streaming.messageId : -1;
     const playSettings = readPlaySettings(settings);
+    const noChat = playSettings.noChat;
+    const chatId = context.getCurrentChatId?.() ?? context.chatId;
+    const nativeChat = !noChat && context.characters?.[context.characterId]?.avatar === card.avatar
+        && !context.groupId && typeof chatId === 'string' && chatId
+        ? { chatId, messages: context.chat, metadata: context.chatMetadata ?? {} } : null;
     try {
         return structuredClone({
             ...target,
-            context: { chatId: target.chatId, characterName: target.character.name, apiMode: api.mode,
+            independent: true, noChat, characterCard: card,
+            ...(nativeChat ? { nativeChat } : {}),
+            context: { chatId: '', chatMode: noChat ? 'initial' : 'latest', characterName: target.character.name, apiMode: api.mode,
                 presetName: String(context.chatCompletionSettings?.preset_settings ?? '') },
             api,
             playPrompt: playSettings.prompt,
@@ -39,18 +47,15 @@ export function capturePlayEnvironment(context, settings) {
                 settings: context.chatCompletionSettings,
                 power: context.powerUserSettings ?? {},
                 model: context.getChatCompletionModel?.(),
-                name1: context.name1, name2: context.name2,
+                name1: context.name1, name2: card.name,
             },
-            chat: context.chat,
-            unfinishedMessageId: Number.isInteger(unfinished) ? unfinished : -1,
-            // structuredClone drops symbol keys; retain ST's "ignore" marker
-            // separately so its native formatter still honors hidden messages.
-            ignoredMessages: context.chat.flatMap((message, index) =>
-                context.symbols?.ignore && message.extra?.[context.symbols.ignore] ? [index] : []),
-            characterId: context.characterId,
+            chat: [], ignoredMessages: nativeChat ? (context.chat ?? []).flatMap((message, index) =>
+                context.symbols?.ignore && message.extra?.[context.symbols.ignore] ? [index] : []) : [],
+            unfinishedMessageId: nativeChat && context.streamingProcessor?.isFinished === false ? context.streamingProcessor.messageId : -1,
+            characterId: context.characters.indexOf(card), sourceCharacterId: context.characters.indexOf(card),
         });
     } catch (cause) {
-        throw new PlaygroundError('context_not_copyable', '本次聊天内容无法读取，请重新打开聊天后再试。', { cause });
+        throw new PlaygroundError('context_not_copyable', '本次角色资料无法复制，尚未发送到模型。', { cause });
     }
 }
 
@@ -60,12 +65,13 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
     history ??= createBrowserPlayHistory(ctx, diagnostics);
     const playground = createPlayground({ history, prepareRequest, diagnostics, enabled: () => settings.enabled !== false,
         uuid: () => ctx().uuidv4(),
-        captureEnvironment: () => {
-            const environment = capturePlayEnvironment(ctx(), settings);
-            Object.assign(environment.tavern, structuredClone(prepareRequest.capture?.() ?? {}));
+        captureEnvironment: target => {
+            const environment = capturePlayEnvironment(ctx(), settings, target);
+            Object.assign(environment.tavern, structuredClone(prepareRequest.capture?.(environment.characterCard) ?? {}));
             return environment;
         },
         isCurrent(environment) {
+            if (environment.independent) return true;
             try {
                 const current = readPlayTarget(ctx());
                 return current.character.avatar === environment.character.avatar && current.chatId === environment.chatId;
@@ -85,7 +91,14 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         void history.renameCharacter(character.avatar, null)
             .catch(error => { diagnostics?.error('删除角色后更新演出历史', error); onError('删除角色后，游玩历史中的角色标识更新失败；原历史仍保留。'); });
     });
-    return { ...playground, display: createPlayDisplay(ctx, settings, loadRegex, diagnostics),
+    const loadDisplayRegex = loadRegex ?? (async character => {
+        const modules = await prepareRequest.ready();
+        const context = ctx();
+        if (!character?.avatar || character.avatar === context.characters?.[context.characterId]?.avatar) return modules.regex;
+        const { createPlayDisplayRegex } = await import('./play-independent.js');
+        return createPlayDisplayRegex(context, modules, character, prepareRequest.capture(character));
+    });
+    return { ...playground, display: createPlayDisplay(ctx, settings, loadDisplayRegex, diagnostics),
         async getUserIdentity() {
             try {
                 const persona = await loadPersona();

@@ -61,5 +61,6 @@ export function readPlaySettings(settings) {
         hiddenTags: settings.playHiddenTags ?? DEFAULT_HIDDEN_TAGS,
         regexEnabled: settings.playRegexEnabled !== false,
         excludedRegex: settings.playRegexExclusions ?? [],
+        noChat: settings.playNoChat !== false,
     };
 }

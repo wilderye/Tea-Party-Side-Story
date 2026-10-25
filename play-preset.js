@@ -64,9 +64,18 @@ export async function preparePlayPreset(context, modules, environment, options) 
     const continuationError = options.type === 'continue' && playContinuationError(continuation);
     if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
     const messages = requestMessages(context, modules, environment.tavern, options.signal);
-    const manager = Object.assign(Object.create(openai.promptManager), {
-        serviceSettings: settings, activeCharacter: structuredClone(openai.promptManager.activeCharacter),
-    });
+    const configuration = environment.tavern.promptManagerConfiguration ?? openai.promptManager.configuration;
+    const activeCharacter = environment.independent
+        ? configuration?.promptOrder?.strategy === 'global'
+            ? { id: configuration.promptOrder.dummyId }
+            : { ...environment.characterCard, id: environment.sourceCharacterId }
+        : structuredClone(openai.promptManager.activeCharacter);
+    const manager = Object.assign(Object.create(openai.promptManager), { serviceSettings: settings, activeCharacter, configuration });
+    // Selecting a character normally adds its default order in the host UI.
+    // Do the same only in the task's settings copy when it has never been opened.
+    if (environment.independent && !manager.getPromptOrderForCharacter(activeCharacter).length) {
+        manager.addPromptOrderForCharacter(activeCharacter, environment.tavern.defaultPromptOrder ?? []);
+    }
     const substitute = (text, original) => core.substituteParams(text || '', name1, name2, original, undefined, true, { model });
     // Only this object uses the snapshot. The host's prompt manager keeps its
     // live settings and remains available to the settings UI and other requests.

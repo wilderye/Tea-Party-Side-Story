@@ -31,15 +31,17 @@ function context() {
     };
 }
 
-test('捕获本次角色、聊天和 API 选择，不提前计算宏、不修改主聊天', () => {
+test('捕获目标角色和 API 选择，不提前读取主聊天或计算宏、不修改主聊天', () => {
     const ctx = context(), original = structuredClone({ chat: ctx.chat, metadata: ctx.chatMetadata, settings: ctx.extensionSettings });
     const env = capturePlayEnvironment(ctx, { playApi: { mode: 'custom', key: 'custom-secret' } });
-    env.chat[0].variables[0].stat_data.好感度 = 80;
+    assert.deepEqual(env.chat, []); assert.equal(env.noChat, true); assert.equal(env.context.chatId, '');
+    env.characterCard.data.description = '修改副本';
     env.api.key = '修改';
     assert.deepEqual({ chat: ctx.chat, metadata: ctx.chatMetadata, settings: ctx.extensionSettings }, original);
     assert.equal(ctx.chatCompletionSettings.proxy_password, 'secret');
     assert.equal(env.context.apiMode, 'custom');
     assert.equal(env.character.avatar, 'A.png');
+    assert.equal(ctx.characters[0].data.description, '原始角色说明');
     ctx.chatCompletionSettings.preset_settings = '后来切换的预设';
     ctx.powerUserSettings.persona_description = '后来修改的人设';
     assert.equal(env.tavern.settings.preset_settings, '当前预设');
@@ -72,7 +74,8 @@ test('选中的小剧场提示词及位置随请求捕获，后来编辑只影�
 });
 
 test('当前角色和接口范围明确；无关的扩展回调不会阻止生成', () => {
-    assert.throws(() => readPlayTarget({ ...context(), characters: [] }), /打开一个角色/);
+    assert.throws(() => readPlayTarget({ ...context(), characters: [] }), error => error.code === 'no_current_character');
+    assert.equal(readPlayTarget({ ...context(), chatId: '' }).character.avatar, 'A.png');
     assert.throws(() => readPlayTarget({ ...context(), groupId: 'group-a' }), /群聊尚未接入/);
     assert.throws(() => capturePlayEnvironment({ ...context(), mainApi: 'textgenerationwebui' }, {}), /聊天补全预设/);
     const ctx = context(); ctx.extensionPrompts.note.filter = () => true;
