@@ -625,6 +625,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 /* The cup fills more of its viewBox; match the neighboring icons' visible size. */
 #teahouse-panel .play-in-plugin svg { width:18px; height:18px; }
 #teahouse-panel .play-favorite-reading { padding:12px 28px 24px; overflow-x:hidden; scrollbar-gutter:stable; }
+#teahouse-panel .play-favorite-navigation { position:sticky; top:calc(50% - 22px); z-index:2; display:flex; justify-content:space-between; height:0; margin:0 -28px; pointer-events:none; }
+#teahouse-panel .play-favorite-navigation>.tea-icon { width:44px; min-width:44px; height:44px; pointer-events:auto; background:none!important; user-select:none; -webkit-user-select:none; }
+#teahouse-panel .play-favorite-navigation>.tea-icon:hover { background:none!important; }
+#teahouse-panel .play-favorite-navigation>.tea-icon:disabled { pointer-events:none; }
+#teahouse-panel .play-favorite-navigation .tea-glyph svg { width:22px; height:22px; }
 #teahouse-panel .play-favorite-article { max-width:var(--play-reading-width); margin:0 auto; padding-top:20px; }
 #teahouse-panel .play-favorite-head { display:flex; align-items:flex-start; gap:16px; margin-bottom:24px; }
 #teahouse-panel .play-favorite-heading { flex:1; min-width:0; }
@@ -667,6 +672,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-favorite-mobile-head h2 { font-size:20px; line-height:32px; }
     #teahouse-panel .play-favorite-mobile-head>.tea-icon:not(:first-child) { margin-left:0; width:40px; min-width:40px; }
     #teahouse-panel .play-favorite-reading { padding:8px 8px 24px; scrollbar-gutter:auto; }
+    #teahouse-panel .play-favorite-navigation { margin:0 -8px; }
+    #teahouse-panel .play-favorite-reading:not(:has(.play-edit-form)) .play-favorite-article { --play-message-inset:36px; padding-left:36px; padding-right:36px; }
     #teahouse-panel .play-favorite-article { padding-top:10px; }
     #teahouse-panel .play-favorite-head { gap:8px; margin-bottom:18px; }
     #teahouse-panel .play-favorite-title { font-size:24px; }

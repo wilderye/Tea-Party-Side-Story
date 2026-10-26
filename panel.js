@@ -362,7 +362,26 @@ export function createTheatrePanel(ctx, state, actions) {
         const header = topbar(); header.classList.add('play-topbar');
         playWorkspace.append(header, view.page); panel.append(playCatalog, playWorkspace);
     }
-    function renderFavoriteWorkspace(visible) {
+    async function openRecordFavorite(id, direction) {
+        const current = favoriteReaders.get(catalog.selectedId);
+        if (!isRecordFavorites() || (direction && current?.canNavigate() === false) || !await canLeave()) return;
+        const result = matches();
+        const anchor = result.findIndex(item => item.id === id);
+        if (anchor < 0) return;
+        const index = anchor + (direction ?? 0);
+        const item = result[index];
+        if (!item || (direction && id !== catalog.selectedId)) return;
+        captureCatalogPosition();
+        const nextPage = pageForIndex(index);
+        if (nextPage !== catalog.page) catalog.listScroll = 0;
+        catalog.page = nextPage; catalog.selectedId = item.id;
+        catalog.readingId = item.id; catalog.readingScroll = 0;
+        showCatalog(media.matches ? 'record' : 'list'); message = '';
+        const reader = favoriteReaders.get(item.id);
+        if (reader) reader.node.scrollTop = 0;
+        restoringCatalog = true; render();
+    }
+    function renderFavoriteWorkspace(visible, result) {
         if (!favoriteWorkspace) {
             favoriteWorkspace = element('section', undefined, 'tea-workspace play-favorite-workspace');
             favoriteWorkspace.setAttribute('aria-label', '演出记录收藏');
@@ -381,6 +400,7 @@ export function createTheatrePanel(ctx, state, actions) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
                 reader = createPlayFavoriteReader(actions.playground, { notify: showMessage,
+                    onNavigate: direction => void openRecordFavorite(item.id, direction),
                     onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
                     onRemove(id) {
                         favoriteLoadId++;
@@ -391,6 +411,8 @@ export function createTheatrePanel(ctx, state, actions) {
                 favoriteReaders.set(item.id, reader);
             }
             reader.node.dataset.id = item.id;
+            const index = result.findIndex(entry => entry.id === item.id);
+            reader.setNavigation({ previous: index > 0, next: index >= 0 && index + 1 < result.length });
             if (reader.node.parentElement !== favoriteWorkspace) favoriteWorkspace.append(reader.node);
             reader.node.hidden = false; void reader.load(item.favorite);
         }
@@ -458,7 +480,7 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         let workspace = keptSettings;
         if (mode === 'favorite-editor' && favoriteComposer) workspace = favoriteComposer.node;
-        else if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible);
+        else if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible, result);
         else if (!workspace) {
             workspace = element('section', undefined, 'tea-workspace'); workspace.setAttribute('aria-label', '阅读与编辑');
             if (mode === 'list' || mode === 'settings' && !media.matches) {
@@ -640,10 +662,11 @@ export function createTheatrePanel(ctx, state, actions) {
             if (media.matches && !isRecordFavorites()) list.append(renderFeedEntry(item, pageStart() + i + 1));
             else {
                 const button = textButton('', async () => {
+                    if (isRecordFavorites()) { await openRecordFavorite(item.id); return; }
                     if (!await canLeave()) return;
                     captureCatalogPosition();
                     catalog.selectedId = item.id; catalog.readingId = null; catalog.readingScroll = 0;
-                    showCatalog(media.matches && isRecordFavorites() ? 'record' : 'list'); message = '';
+                    showCatalog(); message = '';
                     restoringCatalog = true; render();
                 });
                 const row = catalogItem(item, pageStart() + i + 1);

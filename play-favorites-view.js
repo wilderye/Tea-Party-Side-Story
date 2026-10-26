@@ -17,8 +17,13 @@ export function favoriteSourceKey({ roundId, resultId, startedAt }) {
 }
 
 /** A reader owns its inline draft; saved content stays in the history service. */
-export function createPlayFavoriteReader(playground, { onChange, onRemove, notify }) {
+export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, notify }) {
     const node = element('article', undefined, 'play-favorite-reading tea-scroll');
+    const navigation = element('nav', undefined, 'play-favorite-navigation');
+    navigation.setAttribute('aria-label', '演出记录收藏切换');
+    const previous = navigationButton('left', '上一条收藏', -1);
+    const next = navigationButton('right', '下一条收藏', 1);
+    navigation.append(previous, next);
     const article = element('div', undefined, 'play-favorite-article play-message');
     const head = element('header', undefined, 'play-favorite-head');
     const heading = element('div', undefined, 'play-favorite-heading');
@@ -29,14 +34,52 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
     const edit = iconButton('edit', '编辑演出记录收藏', beginEdit);
     const remove = iconButton('star', '取消收藏', async () => {
         if (!value || removing || editor) return;
-        removing = true; remove.disabled = true; edit.disabled = true;
+        removing = true; remove.disabled = true; edit.disabled = true; updateNavigation();
         try { await playground.removeFavorite(value.id); onRemove(value.id); }
         catch (error) { notify(error.message); }
-        finally { removing = false; remove.disabled = false; edit.disabled = false; }
+        finally { removing = false; remove.disabled = false; edit.disabled = false; updateNavigation(); }
     });
     remove.classList.add('tea-star'); remove.setAttribute('aria-pressed', 'true');
-    heading.append(title, character); head.append(heading, tools); article.append(head, body); node.append(article);
+    heading.append(title, character); head.append(heading, tools); article.append(head, body); node.append(navigation, article);
     let value, editor, signature, loadingId = 0, requestedRevision, removing = false;
+    let canPrevious = false, canNext = false;
+
+    function navigationButton(icon, label, direction) {
+        let press, cancelled = false;
+        const button = iconButton(icon, label, event => {
+            // Keyboard and assistive activation have no pointer click count.
+            if (event.detail && cancelled) { event.preventDefault(); return; }
+            if (!editor && !removing) onNavigate?.(direction);
+        });
+        button.disabled = true;
+        button.addEventListener('pointerdown', event => {
+            cancelled = !event.isPrimary || event.button !== 0;
+            press = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        });
+        const checkMovement = event => {
+            if (press?.id !== event.pointerId) return;
+            if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 10) cancelled = true;
+        };
+        button.addEventListener('pointermove', checkMovement);
+        button.addEventListener('pointerup', event => {
+            checkMovement(event);
+            const bounds = button.getBoundingClientRect();
+            if (event.clientX < bounds.left || event.clientX > bounds.right
+                || event.clientY < bounds.top || event.clientY > bounds.bottom) cancelled = true;
+            press = null;
+        });
+        button.addEventListener('pointercancel', () => { cancelled = true; press = null; });
+        button.addEventListener('pointerleave', () => { if (press) cancelled = true; });
+        return button;
+    }
+    function updateNavigation() {
+        navigation.hidden = !!editor;
+        previous.disabled = !canPrevious || removing;
+        next.disabled = !canNext || removing;
+    }
+    function setNavigation({ previous, next }) {
+        canPrevious = previous; canNext = next; updateNavigation();
+    }
 
     function render() {
         if (!value || editor) return;
@@ -51,7 +94,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
     }
     function finish() {
         editor?.dispose();
-        editor = null; signature = null; render(); edit.focus({ preventScroll: true });
+        editor = null; signature = null; updateNavigation(); render(); edit.focus({ preventScroll: true });
     }
     function beginEdit() {
         if (!value || editor || removing) return;
@@ -65,6 +108,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
                 finish(); onChange(value);
             },
         });
+        updateNavigation();
         heading.replaceChildren(character); tools.replaceChildren(editor.actions);
         body.replaceChildren(editor.titleInput, editor.body); editor.titleInput.focus({ preventScroll: true });
     }
@@ -86,5 +130,5 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, notif
             body.replaceChildren(element('p', error.message, 'play-result-error'), retry);
         }
     }
-    return { node, load, canLeave: () => !removing && !editor?.saving };
+    return { node, load, setNavigation, canLeave: () => !removing && !editor?.saving, canNavigate: () => !removing && !editor };
 }
