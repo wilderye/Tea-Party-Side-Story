@@ -48,6 +48,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function findJob(resultId) {
         return jobs.get(resultId) ?? [...jobs.values()].find(job => job.replaceResultId === resultId);
     }
+    function stopJob(job) {
+        if (!job || job.closed) return false;
+        job.controller.abort(new DOMException('用户停止了本次小剧场生成', 'AbortError'));
+        return true;
+    }
     function readJob(job) {
         if (!job) return { phase: 'idle', unsaved: false };
         return { phase: job.phase,
@@ -270,9 +275,12 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         stop(resultId) {
             const active = [...jobs.values()].filter(job => !job.closed);
             const job = resultId ? findJob(resultId) : active.length === 1 ? active[0] : null;
-            if (!job || job.closed) return false;
-            job.controller.abort(new DOMException('用户停止了本次小剧场生成', 'AbortError'));
-            return true;
+            return stopJob(job);
+        },
+        stopAll() {
+            const active = [...jobs.values()].filter(job => !job.closed);
+            for (const job of active) stopJob(job);
+            return active.length;
         },
         async retrySave(resultId) {
             const pending = [...jobs.values()].filter(job => job.pendingUpdate);

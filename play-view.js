@@ -67,7 +67,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const inputRow = element('div', undefined, 'play-input-row');
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.spellcheck = false;
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
-    const send = iconButton('send', '发送小剧场', () => void sendDraft()); send.classList.add('play-send');
+    const send = iconButton('send', '发送小剧场', () => {
+        if (composerStopsGeneration()) playground.stopAll();
+        else void sendDraft();
+    }); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
@@ -111,6 +114,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return drafts.get(key);
     }
     function canWrite() { return !!selected?.avatar && settings.enabled !== false; }
+    function composerStopsGeneration() {
+        return !input.value.trim() && playground.getStates().some(job => activePhases.has(job.phase));
+    }
     function readTarget() {
         return { characterId: selected?.id, character: { avatar: selected?.avatar, name: selected?.name } };
     }
@@ -564,9 +570,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         inputRow.hidden = editing || !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
         page.classList.toggle('is-message-editing', editing);
         compose.hidden = editing || (inputRow.hidden && contextLine.hidden);
-        const available = playground.availability();
-        send.title = !available.available ? available.message : '发送小剧场';
-        send.disabled = !canWrite() || !input.value.trim() || !available.available;
+        const available = playground.availability(), stopping = composerStopsGeneration();
+        const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送小剧场';
+        if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
+        send.title = !stopping && !available.available ? available.message : label;
+        send.setAttribute('aria-label', label);
+        send.disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = playground.getState(result?.id);

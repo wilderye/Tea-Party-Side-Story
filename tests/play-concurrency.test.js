@@ -77,6 +77,57 @@ test('十二份跨角色请求同时发送，单独停止不影响其余请求�
     assert.ok([...f.files.values()].every(text => !text.includes('synthetic-private-key')));
 });
 
+test('停止全部同时取消生成和准备中的请求，保留已完成回复及收到的片段', { timeout: 5000 }, async t => {
+    const preparing = deferred();
+    const f = fixture(t, request => request.prompt === '准备中的请求' ? preparing.promise : undefined);
+    const first = await completed(f);
+    const running = f.service.send({ prompt: '生成中的请求' });
+    const waiting = f.service.send({ character: characterB, prompt: '准备中的请求' });
+    await until(() => f.calls.size === 2 && f.service.getStates().some(job => job.phase === 'preparing' && job.roundId));
+    assert.equal(f.service.stopAll(), 2);
+    const [stopped, cancelled] = await Promise.all([running, waiting]);
+    assert.equal(stopped.result.status, 'stopped');
+    assert.equal(stopped.result.text, '片段：生成中的请求');
+    assert.equal(cancelled.result.status, 'stopped');
+    preparing.resolve(); await turn();
+    assert.equal(f.calls.size, 2, '迟到的准备结果不会发送到模型');
+    assert.equal((await f.store.getRound(first.roundId)).results[0].text, '原来的完整回复');
+    assert.equal((await f.store.getRound(first.roundId)).results[0].status, 'complete');
+    assert.equal(f.service.stopAll(), 0);
+});
+
+test('停止全部不取消已经结束生成的保存，保存失败也不算正在生成', { timeout: 5000 }, async t => {
+    const f = fixture(t), saving = deferred();
+    const saveResult = f.store.saveResult.bind(f.store);
+    f.store.saveResult = async (roundId, resultId, update) => {
+        if (update.text === '等待保存的完整回复') await saving.promise;
+        return saveResult(roundId, resultId, update);
+    };
+    const first = f.service.send({ prompt: '第一份' });
+    const firstId = f.service.getState().resultId;
+    const second = f.service.send({ character: characterB, prompt: '第二份' });
+    await until(() => f.calls.size === 2);
+    f.calls.get(firstId).gate.resolve('等待保存的完整回复');
+    await until(() => f.service.getState(firstId).phase === 'saving');
+    assert.equal(f.service.stopAll(), 1);
+    assert.equal(f.calls.get(firstId).options.signal.aborted, false);
+    assert.equal((await second).result.status, 'stopped');
+    saving.resolve();
+    assert.equal((await first).result.status, 'complete');
+
+    f.store.saveResult = () => { throw new Error('模拟保存失败'); };
+    const failed = f.service.send({ prompt: '保存失败的请求' }).catch(error => error);
+    await until(() => f.calls.size === 3);
+    const [failedId, failedCall] = [...f.calls.entries()].at(-1);
+    failedCall.gate.resolve('已完成但保存失败的正文');
+    assert.equal((await failed).code, 'history_save_failed');
+    assert.equal(f.service.stopAll(), 0);
+    assert.equal(f.service.getState(failedId).phase, 'save-failed');
+    assert.equal(f.service.getState(failedId).text, '已完成但保存失败的正文');
+    f.store.saveResult = saveResult;
+    await f.service.retrySave(failedId);
+});
+
 test('同一轮新版本和重新生成并发，完成顺序不改变结果位置或互相覆盖', { timeout: 5000 }, async t => {
     const f = fixture(t), first = await completed(f);
     const tasks = [f.service.regenerate(first.roundId, first.result.id),
