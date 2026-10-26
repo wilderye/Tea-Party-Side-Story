@@ -207,7 +207,7 @@ export async function preparePlayPreset(context, modules, environment, options) 
             }
             const nudgeContent = substitute(continuation.prompt.replace(/\{\{lastChatMessage\}\}/gi,
                 () => (continuation.mode === 'prompt' ? options.cycleReasoning || '' : '') + options.cyclePrompt.trim()));
-            const continueNudgeMessage = await messages.create('system', nudgeContent, 'continueNudge');
+            const continueNudgeMessage = await messages.create(continuation.mode === 'prompt' ? 'user' : 'system', nudgeContent, 'continueNudge');
             continueCollection.add(continueNudgeMessage);
             completion.reserveBudget(continueCollection);
         }

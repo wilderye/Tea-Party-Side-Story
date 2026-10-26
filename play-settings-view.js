@@ -267,7 +267,7 @@ export function renderPlayContinuationSettings(area, settings, saveSettings) {
         sendReasoning.checked = continuation.sendReasoning;
         description.textContent = continuation.mode === 'history'
             ? '防道歉时推荐使用，不把敏感正文放在AI注意力最强之一的底部。待续写回复作为聊天历史最新AI消息。部分Ais/PG反代由于改变了提示词顺序，可能会使得聊天记录在最底部，导致最后一条内容为AI消息而报错。'
-            : '将续写提示词+待续写内容以SYSTEM身份，放在全部提示词的最底部。';
+            : '将续写提示词+待续写内容以用户身份，放在全部提示词的最底部。';
         validate();
     }
     mode.addEventListener('change', () => { settings.playContinueMode = mode.value; saveSettings(); update(); });

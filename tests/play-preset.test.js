@@ -83,7 +83,7 @@ test('续写保留酒馆的空消息替代文字设置', async () => {
     assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令', '继续', '原回复，', '接着写']);
 });
 
-test('第二种移除独立 AI 消息，在系统提示词中先放思维链再放保存原正文', async () => {
+test('第二种移除独立 AI 消息，在底部用户消息中先放续写提示词、思维链再放保存原正文', async () => {
     const f = fixture();
     f.environment.continuation = { mode: 'prompt', prompt: '接着下面写：\n{{lastChatMessage}}' };
     f.options.cyclePrompt = '原回复，【保存原文】$&';
@@ -93,7 +93,7 @@ test('第二种移除独立 AI 消息，在系统提示词中先放思维链再�
     const chat = await f.prepare();
     assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令',
         '接着下面写：\n<think>目标思维链</think>\n原回复，【保存原文】$&']);
-    assert.equal(chat.at(-1).role, 'system');
+    assert.equal(chat.at(-1).role, 'user');
     assert.deepEqual(f.options.history, before, '只改变请求副本，不删除保存的消息');
 });
 
@@ -118,6 +118,7 @@ for (const mode of ['history', 'prompt']) test(`关闭原生思维链发送时�
     const before = structuredClone(f.options.history);
     const chat = await f.prepare();
     assert.equal(chat.at(-1).content, '接着写：\n' + body);
+    assert.equal(chat.at(-1).role, mode === 'prompt' ? 'user' : 'system');
     if (mode === 'history') assert.equal(chat.at(-2).content, body);
     else assert.equal(chat.filter(message => message.content.includes(body)).length, 1);
     assert.ok(chat.every(message => !message.signature));
