@@ -80,7 +80,7 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             assert.equal(await page.evaluate(() => ctx.characterId), 0, '没有切换酒馆主角色');
             await choose('测试甲');
             assert.equal(await a.locator('.play-result:visible').getAttribute('data-play-result'), selected, '切回来仍看原来选择的版本');
-            await a.getByRole('button', { name: '停止这份回复', exact: true }).click();
+            await a.getByRole('button', { name: '停止这份回复', exact: true }).click({ position: { x: 3, y: 3 } });
             await page.waitForFunction(() => tasks[0].signal.aborted && runtime.getStates().length === 2);
             assert.deepEqual(await page.evaluate(() => tasks.map(task => task.signal.aborted)), [true, false, false]);
             await page.evaluate(() => { tasks[1].text('隐藏版本继续生成'); tasks[2].finish('乙的完成回复 角色标记'); });
@@ -112,11 +112,13 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             const palette = () => page.evaluate(() => {
                 const single = document.querySelector('.play-stop:not([hidden])'), all = document.querySelector('.play-send');
                 const read = node => { const style = getComputedStyle(node); return [style.backgroundColor, style.color, style.borderRadius]; };
-                return { single: read(single), all: read(all), filled: getComputedStyle(single.querySelector('rect')).fill === getComputedStyle(single).color };
+                const glyph = single.querySelector('.tea-glyph');
+                return { single: read(glyph), all: read(all), size: [glyph.offsetWidth, glyph.offsetHeight], filled: getComputedStyle(single.querySelector('rect')).fill === getComputedStyle(single).color };
             });
             await page.mouse.move(0, 0);
             const originalPalette = await palette();
             assert.deepEqual(originalPalette.single, originalPalette.all, '单独停止沿用输入框停止的底色和图标颜色');
+            assert.deepEqual(originalPalette.size, [24, 24], '单独停止的可见方块缩为24像素，点击范围不缩小');
             assert.equal(originalPalette.filled, true, '实心方块清楚表示停止');
             await send.hover(); assert.deepEqual((await palette()).all, originalPalette.all, '鼠标停留或触屏发送后保留停止方块底');
             await reply.getByRole('button', { name: '停止这份回复', exact: true }).hover();
