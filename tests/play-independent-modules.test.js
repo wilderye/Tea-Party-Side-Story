@@ -15,7 +15,17 @@ test('任务模块绑定目标资料，保留原生别名/命名空间和变量�
     const b = run({ chat: [], name2: '乙', originalImports: imports, console });
     assert.deepEqual(a.value(), [1, '甲', 2]); assert.equal(a.count, 1); assert.equal(b.count, 0);
     assert.deepEqual(b.value(), [0, '乙', 2]); assert.ok(source.includes('import { chat'));
-    assert.throws(() => bindPlayModuleSource('export { foo };', 'https://test.invalid/a.js', []), error => error.code === 'independent_module_exports');
+    assert.throws(() => bindPlayModuleSource('export * from "./foo.js";', 'https://test.invalid/a.js', []), error => error.code === 'independent_module_exports');
+});
+
+test('原生单例的别名导出指向各自任务的实例', () => {
+    const source = `export const version = 1; let instance;
+        export { instance as Engine };
+        class Engine { run() { return version; } }
+        instance = new Engine();`;
+    const run = new Function('__teaArguments', bindPlayModuleSource(source, 'https://test.invalid/engine.js', []));
+    const a = run({ console }), b = run({ console });
+    assert.equal(a.Engine.run(), 1); assert.notEqual(a.Engine, b.Engine);
 });
 
 test('任务事件有顺序且可撤销，不广播到主聊天', async () => {

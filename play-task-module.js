@@ -20,10 +20,21 @@ export function bindPlayModuleSource(source, sourceUrl, bindings) {
         declarations.push(`const ${name} = __teaEnvironment.originalImports[${JSON.stringify(new URL(path, sourceUrl).href)}];`); return '';
     });
     const exported = [...adapted.matchAll(/\bexport\s+(?:async\s+)?(?:function|class|const|let|var)\s+(\w+)/g)].map(match => match[1]);
-    const body = adapted.replace(/\bexport\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/g, '');
+    const body = adapted.replace(/\bexport\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/g, '')
+        .replace(/\bexport\s*\{([^}]+)\}\s*;/g, (_whole, items) => {
+            for (const item of items.split(',').map(value => value.trim()).filter(Boolean)) {
+                const match = item.match(/^(\w+)(?:\s+as\s+(\w+))?$/);
+                if (!match) throw new PlaygroundError('independent_module_exports', '当前酒馆的模块导出形式尚未支持独立处理。');
+                exported.push([match[2] ?? match[1], match[1]]);
+            }
+            return '';
+        });
     if (/\bexport\s/.test(body)) throw new PlaygroundError('independent_module_exports', '当前酒馆的模块导出形式尚未支持独立处理。');
     return prefix + declarations.join('\n') + '\n' + body + '\nreturn Object.defineProperties({}, {\n'
-        + exported.map(name => `${JSON.stringify(name)}: { enumerable: true, get: () => ${name} }`).join(',\n') + '\n});';
+        + exported.map(entry => {
+            const [name, local] = Array.isArray(entry) ? entry : [entry, entry];
+            return `${JSON.stringify(name)}: { enumerable: true, get: () => ${local} }`;
+        }).join(',\n') + '\n});';
 }
 
 /** Each imported module closes over one task; imports never replace host state. */

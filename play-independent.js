@@ -4,6 +4,7 @@ import { createPlayWorldContext, createPlayRegexContext } from './play-world-con
 import { createPlayLocalEvents, createPlayTemplateContext } from './play-template-context.js';
 import { readPlayInitialVariables } from './play-variable-context.js';
 import { createPlayNoteContext } from './play-note-context.js';
+import { createPlayExampleFormatter } from './play-example-context.js';
 
 const personaQueues = new WeakMap();
 
@@ -96,6 +97,7 @@ export async function createIndependentPlayScope(context, modules, options) {
     }
     const events = createPlayLocalEvents();
     const { localCore, macros, refreshFields } = await buildPlayCore(context, modules, environment, resolved, events, prompt);
+    const setOpenAIMessageExamples = await createPlayExampleFormatter(environment);
     const notes = await createPlayNoteContext(modules, environment, localCore);
     const worldContext = await createPlayWorldContext(context, environment, localCore, macros.substitute, events, signal, notes);
     const template = createPlayTemplateContext(environment, resolved, { _: window._ }, signal);
@@ -118,6 +120,7 @@ export async function createIndependentPlayScope(context, modules, options) {
     });
     environment.characterId = 0;
     return { context: worldContext.context, modules: { ...modules, core: localCore, world: worldContext.world, regex: worldContext.regex, notes,
+        openai: { ...modules.openai, setOpenAIMessageExamples },
         extensions: { ...modules.extensions, extension_settings: environment.tavern.extensionSettings, runGenerationInterceptors: async () => false } },
         template, worldContext, macros, resolved, events, dispose: () => events.clear() };
 }

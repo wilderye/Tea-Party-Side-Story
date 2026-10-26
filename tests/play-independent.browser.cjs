@@ -93,6 +93,93 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
             for (const messages of outbound) assert.ok(messages.some(m => typeof m.content === 'string' && /世界(?:甲|乙)/.test(m.content)));
             assert.equal(outbound.filter(messages => messages.some(m => typeof m.content === 'string' && /[甲乙].*\/测试用户/.test(m.content))).length, 4, '仅发送聊天的四份任务对历史 AI 消息执行角色正则');
             assert.equal(reads.filter(value => value === 'list').length, 5, '不发聊天的八份任务不查询聊天列表');
+            const compatibility = await page.evaluate(async () => {
+                const { env, prepare } = window.teaIndependentTest, modules = await prepare.ready();
+                const { createIndependentPlayScope } = await import('/scripts/extensions/third-party/tea-independent/play-independent.js');
+                modules.core.setCharacterId(0); modules.core.setCharacterName(modules.core.characters[0].name);
+                const c = SillyTavern.getContext();
+                const before = JSON.stringify({ chat: c.chat, meta: c.chatMetadata, power: c.powerUserSettings,
+                    extensions: c.extensionSettings, registry: c.macros?.registry.getAllMacros().map(item => item.name) });
+                const modernAvailable = typeof c.macros?.engine?.evaluate === 'function', checks = [];
+                const target = (index, enabled) => {
+                    const value = env(index);
+                    value.characterCard.mes_example = '<START>\n{{user}}: 示例提问\n{{char}}: 示例回答\n';
+                    value.tavern.model = 'fixture-model';
+                    value.tavern.power.experimental_macro_engine = enabled;
+                    value.tavern.extensionSettings.variables = { global: { count: 50 } };
+                    return value;
+                };
+                for (const enabled of [false, true]) {
+                    const value = target(1, enabled), scope = await createIndependentPlayScope(c, modules,
+                        { environment: value, prompt: '本次输入', signal: new AbortController().signal });
+                    const sub = scope.macros.substitute;
+                    const conditional = '{{if false}}错误分支{{else}}正确分支{{/if}}';
+                    const examples = scope.modules.openai.setOpenAIMessageExamples(scope.modules.core.parseMesExamples(scope.macros.fields.mesExamples));
+                    checks.push({ enabled, examples, conditional: sub(conditional), legacy: sub('{{user}}/{{char}}/{{maxPrompt}}'),
+                        newlines: sub('前{{newline::2}}后'), input: sub('{{input}}'),
+                        fields: sub('{{description}}/{{model}}'),
+                        original: sub('{{original}}', { original: '原内容' }),
+                        dynamic: sub('{{char}}/{{fixture}}', { dynamicMacros: { char: '临时角色', fixture: '临时宏' } }),
+                        afterDynamic: sub('{{char}}/{{fixture}}'),
+                        postProcess: sub('{{char}}', { postProcessFn: value => '[' + value + ']' }),
+                        local: sub('{{setvar::count::3}}{{incvar::count}}/{{getvar::count}}'),
+                        global: sub('{{incglobalvar::count}}/{{getglobalvar::count}}') });
+                    const hadSwitch = Object.hasOwn(c.powerUserSettings, 'experimental_macro_engine'), previousSwitch = c.powerUserSettings.experimental_macro_engine;
+                    try {
+                        c.powerUserSettings.experimental_macro_engine = !enabled;
+                        checks.at(-1).capturedSwitch = sub(conditional);
+                    } finally {
+                        if (hadSwitch) c.powerUserSettings.experimental_macro_engine = previousSwitch;
+                        else delete c.powerUserSettings.experimental_macro_engine;
+                    }
+                    if (enabled && modernAvailable) {
+                        checks.at(-1).originalOnce = sub('{{original}}/{{original}}', { original: '原内容' });
+                        checks.at(-1).shorthand = sub('{{.count = 7}}{{.count++}}/{{.count}}');
+                        checks.at(-1).branch = sub('{{if false}}{{setglobalvar::untouched::99}}{{else}}保持{{/if}}/{{hasglobalvar::untouched}}');
+                        checks.at(-1).nested = sub('{{if true}}{{if false}}内错{{else}}{{char}}{{/if}}{{else}}外错{{/if}}');
+                    }
+                    scope.dispose();
+                    const sameUser = target(1, enabled);
+                    sameUser.tavern.power.personas['fixture-user.png'] = c.name1;
+                    const sameUserScope = await createIndependentPlayScope(c, modules,
+                        { environment: sameUser, prompt: '', signal: new AbortController().signal });
+                    checks.at(-1).sameUserExamples = sameUserScope.modules.openai.setOpenAIMessageExamples(
+                        sameUserScope.modules.core.parseMesExamples(sameUserScope.macros.fields.mesExamples));
+                    sameUserScope.dispose();
+                }
+                const scopes = await Promise.all([0, 1].map(index => createIndependentPlayScope(c, modules,
+                    { environment: target(index, true), prompt: '并发输入' + index, signal: new AbortController().signal })));
+                const concurrent = scopes.map((scope, index) => scope.macros.substitute(`{{setvar::count::${index + 10}}}{{char}}/{{incvar::count}}/{{getglobalvar::count}}`));
+                scopes.forEach(scope => scope.dispose());
+                const value = target(1, true), request = await prepare({ environment: value,
+                    prompt: modernAvailable ? '{{if false}}错误分支{{else}}正确分支{{/if}}' : '普通请求', signal: new AbortController().signal });
+                await request.send({ signal: new AbortController().signal });
+                return { modernAvailable, checks, concurrent, unchanged: before === JSON.stringify({ chat: c.chat, meta: c.chatMetadata,
+                    power: c.powerUserSettings, extensions: c.extensionSettings, registry: c.macros?.registry.getAllMacros().map(item => item.name) }) };
+            });
+            for (const check of compatibility.checks) {
+                assert.deepEqual(check.examples, [[{ role: 'system', content: '示例提问', name: 'example_user' },
+                    { role: 'system', content: '示例回答', name: 'example_assistant' }]]);
+                assert.deepEqual(check.sameUserExamples, check.examples, '使用主聊天的同一个用户设定时，也按本次角色拆分示例回答');
+                assert.equal(check.legacy, '测试用户/乙/8064'); assert.equal(check.input, '本次输入');
+                assert.equal(check.fields, '描述乙/fixture-model'); assert.equal(check.original, '原内容');
+                assert.equal(check.dynamic, '临时角色/临时宏'); assert.equal(check.afterDynamic, '乙/{{fixture}}');
+                assert.equal(check.postProcess, '[乙]'); assert.equal(check.capturedSwitch, check.conditional);
+                assert.equal(check.local, '4/4'); assert.equal(check.global, '51/51');
+                if (check.enabled && compatibility.modernAvailable) {
+                    assert.equal(check.originalOnce, '原内容/');
+                    assert.equal(check.conditional, '正确分支'); assert.equal(check.newlines, '前\n\n后');
+                    assert.equal(check.shorthand, '8/8'); assert.equal(check.branch, '保持/false'); assert.equal(check.nested, '乙');
+                } else {
+                    assert.equal(check.conditional, '{{if false}}错误分支{{else}}正确分支{{/if}}');
+                    assert.equal(check.newlines, '前{{newline::2}}后');
+                }
+            }
+            assert.deepEqual(compatibility.concurrent, ['甲.[+]*/11/50', '乙/12/50']);
+            assert.equal(compatibility.unchanged, true, '新旧宏均不改变主聊天、设置或主宏列表');
+            assert.ok(outbound[12].some(message => message.name === 'example_assistant' && message.content === '示例回答'));
+            if (compatibility.modernAvailable) assert.ok(outbound[12].some(message => message.role === 'user' && message.content === '正确分支'));
+            console.log(JSON.stringify({ port: url.port, macroCompatibility: compatibility }));
             worldContent = '世界{{char}} <%= nativeCurrent() %> {{get_message_variable::missing}}';
             const optional = await page.evaluate(async () => {
                 const { env, prepare } = window.teaIndependentTest;
@@ -149,9 +236,9 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
             assert.deepEqual(optional.states, ['native', 'native', 'native', 'independent']);
             if(!optional.unchanged)console.log(JSON.stringify({port:url.port,...optional}));
             assert.equal(optional.display, '乙'); assert.equal(optional.unchanged, true);
-            assert.equal(outbound.length, 16);
-            assert.ok(outbound[12].some(message => typeof message.content === 'string' && message.content.includes('原入口正常处理')));
-            for (const messages of outbound.slice(13)) assert.ok(messages.some(message => typeof message.content === 'string'
+            assert.equal(outbound.length, 17);
+            assert.ok(outbound[13].some(message => typeof message.content === 'string' && message.content.includes('原入口正常处理')));
+            for (const messages of outbound.slice(14)) assert.ok(messages.some(message => typeof message.content === 'string'
                 && message.content.includes('<%= nativeCurrent() %>') && message.content.includes('{{get_message_variable::missing}}')));
             console.log(JSON.stringify({ port: url.port, nativeRequests: outbound.length, optionalModes: optional.states, ...result }));
             await context.close();

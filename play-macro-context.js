@@ -45,6 +45,7 @@ export async function createPlayMacroContext(context, modules, environment, reso
         eventSource: events, event_types: context.eventTypes, main_api: 'openai', extension_prompts: localCore.extension_prompts,
         getCurrentChatId: () => resolved.chatId || null,
         getMaxPromptTokens: () => environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens,
+        getMaxContextSize: () => environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens,
         getMaxContextTokens: () => environment.tavern.settings.openai_max_context,
         getMaxResponseTokens: () => environment.tavern.settings.openai_max_tokens,
         saveSettingsDebounced() {}, saveMetadataDebounced() {},
@@ -90,9 +91,14 @@ export async function createPlayMacroContext(context, modules, environment, reso
     const scopes = { message: resolved.variables, chat: resolved.metadata.variables ?? {},
         character: readPlayHelperVariables(card.data?.extensions?.tavern_helper),
         preset: environment.tavern.presetHelper?.variables ?? {}, global: environment.tavern.extensionSettings?.variables?.global ?? {} };
+    // 1.14 has no new engine; 1.19 can still explicitly use its legacy engine.
+    const modern = environment.tavern.power.experimental_macro_engine && typeof context.macros?.engine?.evaluate === 'function'
+        ? await (await import('./play-modern-macro-context.js')).createPlayModernMacroContext(bindings, variables, raw, localCore) : null;
     function substitute(text, ...args) {
         const options = args[0] && typeof args[0] === 'object' ? args[0] : { original: args[2], dynamicMacros: args[5] };
-        return evaluator(replacePlayVariableMacros(text, scopes, libraries), { ...raw, original: options.original ?? '', ...(options.dynamicMacros ?? {}) }, options.postProcessFn);
+        const content = replacePlayVariableMacros(text, scopes, libraries);
+        return modern ? modern(content, options)
+            : evaluator(content, { ...raw, original: options.original ?? '', ...(options.dynamicMacros ?? {}) }, options.postProcessFn);
     }
     return { substitute, fields, scopes };
 }
