@@ -26,6 +26,10 @@ export function playFavoriteFile(id, revision) {
 }
 
 function readFavoriteSource(value) {
+    if (value?.type === 'manual') {
+        assert(isText(value.characterAvatar));
+        return { type: 'manual', characterAvatar: value.characterAvatar };
+    }
     assert(value && isId(value.roundId) && isId(value.resultId) && isDate(value.startedAt));
     return { roundId: value.roundId, resultId: value.resultId, startedAt: value.startedAt };
 }
@@ -320,6 +324,15 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     title: round.origin?.title ?? '', firstLine, text: favoriteText,
                     cleaned: text !== undefined, savedAt: now, updatedAt: now });
             });
+        },
+        addManualFavorite({ character, title, text, firstLine }) {
+            assert(isText(character?.avatar) && isText(character?.name), '请选择一张仍然存在的角色卡。');
+            assert(typeof title === 'string' && title.trim().length <= 100, '收藏标题不能超过 100 个字。');
+            assert(isText(text), '收藏内容不能为空。');
+            const input = readFavorite({ format: 1, id: uuid(), title: title.trim(), text, firstLine,
+                characterName: character.name, source: { type: 'manual', characterAvatar: character.avatar },
+                cleaned: true, savedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+            return serialize(async () => commitFavorite(await index(), input));
         },
         editFavorite(id, update, expectedRevision) {
             assert(isId(id) && isId(expectedRevision) && typeof update?.title === 'string' && typeof update?.firstLine === 'string');

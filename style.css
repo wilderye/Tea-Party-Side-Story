@@ -738,3 +738,39 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-log-entry { margin:0; padding:6px 0; white-space:pre-wrap; overflow-wrap:anywhere; border:0; border-radius:0; color:inherit; background:none; box-shadow:none; font:12px/1.7 ui-monospace,Consolas,var(--tea-ui); }
 #teahouse-panel .tea-log-entry[data-level=warn] { color:var(--tea-warning,#8a600c); }
 #teahouse-panel .tea-log-entry[data-level=error] { color:var(--tea-error,#a6382c); }
+
+/* Manual favorites reuse the performance character catalog in a local dialog. */
+#teahouse-panel .play-favorite-composer { position:relative; }
+#teahouse-panel .play-favorite-workspace:has(.play-favorite-reading:not([hidden]) .play-edit-form) .tea-add { display:none; }
+#teahouse-panel .play-favorite-new-form { flex:1; min-height:0; display:flex; flex-direction:column; gap:20px; padding:20px 40px; }
+#teahouse-panel .play-favorite-character-field { display:flex; align-items:center; gap:16px; min-height:44px; font-size:13px; }
+#teahouse-panel .play-favorite-selected-character { display:flex; align-items:center; gap:10px; flex:1; min-width:0; font-size:16px; }
+#teahouse-panel .play-favorite-selected-character>span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#teahouse-panel .play-favorite-choose { flex:none; min-height:44px; text-decoration:underline; text-underline-offset:4px; }
+#teahouse-panel .play-favorite-new-form>.tea-field:last-child { flex:1; min-height:160px; }
+#teahouse-panel .play-favorite-new-body { display:flex; flex:1; min-height:0; flex-direction:column; }
+#teahouse-panel .play-favorite-new-body textarea { width:100%; flex:1; min-height:120px; max-height:none; height:100%; margin:0!important; resize:none; }
+#teahouse-panel .play-favorite-picker-overlay { position:absolute; inset:0; z-index:4; display:flex; align-items:center; justify-content:center; padding:24px; background:var(--tea-popup-shadow,#183e3644); }
+#teahouse-panel .play-favorite-picker-overlay[hidden] { display:none!important; }
+#teahouse-panel .play-favorite-picker-overlay .play-character-browser { display:flex; flex:none; width:min(420px,100%); height:min(560px,100%); padding:8px 18px; background:var(--tea-paper); color:var(--tea-ink); border:1px solid var(--tea-line); border-radius:8px; box-shadow:0 12px 40px var(--tea-popup-shadow,#183e3622); }
+#teahouse-panel .play-favorite-picker-overlay .play-character-heading { display:flex; align-items:center; flex:none; gap:8px; min-height:52px; }
+#teahouse-panel .play-favorite-picker-overlay .play-character-heading h2 { font:700 20px/28px var(--tea-display); }
+#teahouse-panel .play-favorite-picker-overlay .play-character-search { display:flex; flex:none; }
+#teahouse-panel .play-favorite-picker-overlay .play-character-search input { color:var(--tea-ink)!important; }
+#teahouse-panel .play-favorite-picker-overlay .play-person { min-height:64px; padding:10px 8px; }
+#teahouse-panel .play-favorite-picker-overlay .play-person:hover { background:var(--tea-hover,#183e3606)!important; }
+#teahouse-panel .play-favorite-picker-overlay .play-people-pagination { position:static; transform:none; align-self:center; flex:none; }
+#teahouse-panel .play-favorite-picker-overlay .tea-page-display { color:var(--tea-heading,var(--tea-forest)); }
+#teahouse-panel .play-favorite-picker-overlay :is(.tea-page-total,.tea-page-divider,.tea-pagination>.tea-icon) { color:var(--tea-muted); }
+#teahouse-panel .play-favorite-picker-overlay .tea-search-box input::placeholder { color:var(--tea-muted)!important; }
+@media(max-width:760px) {
+    #teahouse-panel .play-favorite-new-form { padding:16px 18px; gap:16px; }
+    #teahouse-panel .play-favorite-mobile-head>.tea-actions { flex:none; gap:0; }
+    #teahouse-panel .play-favorite-mobile-head .tea-icon { width:40px; min-width:40px; height:44px; }
+    #teahouse-panel .play-favorite-mobile-head h2 { font-size:20px; line-height:28px; }
+    #teahouse-panel .play-favorite-character-field { gap:10px; }
+    #teahouse-panel .play-favorite-picker-overlay { padding:0; }
+    #teahouse-panel .play-favorite-picker-overlay .play-character-browser { width:100%; height:100%; padding:0; border:0; border-radius:0; box-shadow:none; }
+    #teahouse-panel .play-favorite-picker-overlay .play-person { padding:8px 0; min-height:0; }
+    #teahouse-panel .play-favorite-picker-overlay .play-people-pagination { display:none; }
+}

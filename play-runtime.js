@@ -99,6 +99,11 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         return createPlayDisplayRegex(context, modules, character, prepareRequest.capture(character));
     });
     return { ...playground, display: createPlayDisplay(ctx, settings, loadDisplayRegex, diagnostics),
+        addManualFavorite({ characterAvatar, title, text, firstLine }) {
+            const card = ctx().characters?.find(character => character.avatar === characterAvatar);
+            if (!card?.avatar || !card.name) throw new PlaygroundError('target_character_missing', '所选角色卡已不存在，请重新选择角色。');
+            return playground.addManualFavorite({ character: { avatar: card.avatar, name: card.name }, title, text, firstLine });
+        },
         async getUserIdentity() {
             try {
                 const persona = await loadPersona();

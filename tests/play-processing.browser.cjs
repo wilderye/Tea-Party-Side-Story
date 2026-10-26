@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);

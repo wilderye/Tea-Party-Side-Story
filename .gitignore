@@ -63,4 +63,5 @@ tests/*
 !tests/play-prompt-favorites.test.js
 !tests/play-prompt-favorites.browser.cjs
 !tests/play-favorites.test.js
+!tests/play-manual-favorites.browser.cjs
 README.md

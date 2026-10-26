@@ -94,6 +94,22 @@ test('等待后台连接时取消，迟到的初始化完成不会补发已停�
     assert.equal(sent, 0);
 });
 
+test('手动收藏通过后台保存通道传递角色和正文', async t => {
+    const messages = [];
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: data => {
+                messages.push(data);
+                queueMicrotask(() => this.port.onmessage({ data: { id: data.id, value: { id: 'saved-manual' } } }));
+            } };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    const input = { character: { avatar: 'A.png', name: '角色A' }, title: '', text: '手动正文', firstLine: '手动正文' };
+    assert.deepEqual(await createBrowserPlayHistory(context).addManualFavorite(input), { id: 'saved-manual' });
+    assert.equal(messages[0].method, 'addManualFavorite'); assert.deepEqual(messages[0].args, [input]);
+});
+
 test('取消通过编号通知后台，尚未收到后台确认前不丢弃可能已保存的记录', async t => {
     let worker;
     const messages = [];

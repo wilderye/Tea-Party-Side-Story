@@ -5,6 +5,7 @@ import { element, textButton, glyph, iconButton, copyText, createPageJump } from
 import { renderDiagnostics } from './diagnostics-view.js';
 import { createPlayView } from './play-view.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
+import { createPlayFavoriteComposer } from './play-favorite-composer.js';
 import { createPlayApiSettings, renderPlayChatSetting, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
 export { element, textButton } from './ui.js';
 function art() {
@@ -25,6 +26,7 @@ export function createTheatrePanel(ctx, state, actions) {
     let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings, playActive = false;
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
+    let favoriteComposer;
     const favoriteReaders = new Map();
     const catalogs = new Map();
     let catalog = catalogFor(scope);
@@ -113,6 +115,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function showScope(value) {
         captureCatalogPosition();
+        disposeFavoriteComposer();
         scope = value;
         if (scope !== 'play') catalog = catalogFor(scope);
         mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
@@ -130,7 +133,12 @@ export function createTheatrePanel(ctx, state, actions) {
             { okButton: actionLabel, cancelButton: '取消' }) === ctx().POPUP_RESULT.AFFIRMATIVE;
     }
     async function canLeave() {
-        if (busy || confirming || playView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
+        if (busy || confirming || favoriteComposer?.canLeave() === false || playView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
+        if (favoriteComposer?.dirty()) {
+            confirming = true;
+            try { return await confirm('收藏有未保存的内容，确定放弃吗？', '放弃添加'); }
+            finally { confirming = false; }
+        }
         if (!dirty()) return true;
         confirming = true;
         try { return await confirm('手稿有未保存的修改，确定放弃吗？', '放弃修改'); }
@@ -139,6 +147,7 @@ export function createTheatrePanel(ctx, state, actions) {
     async function close() { if (popup) await popup.complete(ctx().POPUP_RESULT.CANCELLED); }
     async function back() {
         if (!await canLeave()) return;
+        disposeFavoriteComposer();
         const leavingSettings = mode === 'settings';
         mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
         if (leavingSettings && isRecordFavorites()) actions.playground?.display?.updateSettings();
@@ -217,6 +226,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     async function navigate(change, catalogOnly = false) {
         if (!await canLeave()) return;
+        disposeFavoriteComposer();
         if (mode === 'settings' && !catalogOnly && isRecordFavorites()) actions.playground?.display?.updateSettings();
         change();
         if (catalogOnly) showCatalog(); else mode = 'list';
@@ -229,14 +239,34 @@ export function createTheatrePanel(ctx, state, actions) {
         return navigate(() => randomOrders.set(orderKey(), reconcileRandomOrder(undefined, scopeEntries(orderKey()))), true);
     }
     async function beginEdit(item) {
+        if (!item && scope !== 'local') return;
         if (!await canLeave() || state.personalError || !state.settings.enabled) return;
         draft = item ? { id: item.id, title: item.title, type: item.type, body: item.body }
             : { title: '', type: currentType() === 'preset' ? 'preset' : 'standalone', body: '' };
         originalDraft = JSON.stringify(draft); mode = 'editor'; message = ''; render();
     }
+    function disposeFavoriteComposer() {
+        favoriteComposer?.dispose(); favoriteComposer?.node.remove(); favoriteComposer = null;
+    }
+    async function beginFavorite() {
+        if (!isRecordFavorites() || !state.settings.enabled || !await canLeave()) return;
+        favoriteComposer = createPlayFavoriteComposer(ctx, actions.playground, {
+            onCancel: () => void back(),
+            onSave(favorite) {
+                favoriteLoadId++; favoriteRows.set(favorite.id, favorite); favoriteLoaded = true;
+                catalog.query = ''; catalog.mobileSearchOpen = false; catalog.selectedId = favorite.id;
+                resetCatalogPosition();
+                syncRandomOrders(); catalog.page = pageForIndex(matches().findIndex(item => item.id === favorite.id));
+                disposeFavoriteComposer(); mode = media.matches ? 'record' : 'list';
+                render(); showMessage('已添加演出记录收藏');
+            },
+        });
+        mode = 'favorite-editor'; message = ''; render(); favoriteComposer.focus();
+    }
     async function toggleSettings() {
         if (mode === 'settings') return back();
         if (!await canLeave()) return;
+        if (favoriteComposer) { disposeFavoriteComposer(); mode = 'list'; }
         settingsReturnMode = mode;
         actions.diagnostics?.info('打开插件设置');
         mode = 'settings'; message = ''; render();
@@ -293,9 +323,14 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function topActions(mobileHeader = false) {
         const box = element('div', undefined, 'tea-actions');
-        const add = iconButton('plus', '新建手稿', () => beginEdit()); add.disabled = !!state.personalError || !state.settings.enabled;
-        if (scope !== 'play') { if (!isRecordFavorites()) box.append(add); }
-        else if (mobileHeader) box.append(getPlayView().chooseButton);
+        if (['list', 'record'].includes(mode) && (scope === 'local' || isRecordFavorites())) {
+            const add = iconButton('plus', isRecordFavorites() ? '添加演出记录收藏' : '新建手稿',
+                () => isRecordFavorites() ? beginFavorite() : beginEdit());
+            add.classList.add('tea-add');
+            add.disabled = !state.settings.enabled || scope === 'local' && !!state.personalError;
+            box.append(add);
+        }
+        if (scope === 'play' && mobileHeader) box.append(getPlayView().chooseButton);
         box.append(settingsButton(), iconButton('close', '关闭面板', close));
         return box;
     }
@@ -333,11 +368,12 @@ export function createTheatrePanel(ctx, state, actions) {
             favoriteWorkspace.setAttribute('aria-label', '演出记录收藏');
             const mobileHead = element('header', undefined, 'tea-view-title tea-back-title play-favorite-mobile-head');
             const name = element('div'); name.append(element('h2', '演出记录'));
-            mobileHead.append(iconButton('left', '返回收藏目录', back), name,
-                settingsButton(), iconButton('close', '关闭面板', close));
+            mobileHead.append(iconButton('left', '返回收藏目录', back), name, topActions());
             favoriteEmpty = element('p', '', 'tea-empty'); favoriteWorkspace.append(topbar(), mobileHead, favoriteEmpty);
         }
         favoriteWorkspace.hidden = false;
+        favoriteWorkspace.querySelector('.tea-topbar').replaceWith(topbar());
+        favoriteWorkspace.querySelector('.play-favorite-mobile-head .tea-actions').replaceWith(topActions());
         for (const reader of favoriteReaders.values()) reader.node.hidden = true;
         const item = visible.find(item => item.id === catalog.selectedId);
         const show = item && (!media.matches || mode === 'record');
@@ -367,6 +403,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panel || searchComposing) return;
+        if (mode !== 'favorite-editor') disposeFavoriteComposer();
         if (resetPosition) resetCatalogPosition(); else captureCatalogPosition();
         restoringCatalog = scope !== 'play';
         if (mode !== 'settings') apiSettings?.cancel();
@@ -391,7 +428,7 @@ export function createTheatrePanel(ctx, state, actions) {
         // Keep the conversation connected while another tab is open. Detaching
         // it would reset rendered webpages and replace the user's input element.
         for (const child of [...panel.children]) {
-            if (child !== playCatalog && child !== playWorkspace && child !== favoriteWorkspace && child !== keptSettings) child.remove();
+            if (child !== playCatalog && child !== playWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings) child.remove();
         }
         if (playCatalog) { playCatalog.hidden = true; playWorkspace.hidden = true; }
         if (favoriteWorkspace) favoriteWorkspace.hidden = true;
@@ -420,7 +457,8 @@ export function createTheatrePanel(ctx, state, actions) {
             panel.insertBefore(renderCatalog(visible, result.length), favoriteWorkspace ?? keptSettings ?? null);
         }
         let workspace = keptSettings;
-        if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible);
+        if (mode === 'favorite-editor' && favoriteComposer) workspace = favoriteComposer.node;
+        else if (isRecordFavorites() && ['list', 'record'].includes(mode)) workspace = renderFavoriteWorkspace(visible);
         else if (!workspace) {
             workspace = element('section', undefined, 'tea-workspace'); workspace.setAttribute('aria-label', '阅读与编辑');
             if (mode === 'list' || mode === 'settings' && !media.matches) {
@@ -886,6 +924,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 await popup.show();
                 actions.diagnostics?.info('关闭剧场面板');
             } finally {
+                disposeFavoriteComposer();
                 apiSettings?.cancel();
                 diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;
                 clearTimeout(messageTimer);

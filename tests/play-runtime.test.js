@@ -31,6 +31,25 @@ function context() {
     };
 }
 
+test('手动收藏按头像标识读取角色名称，不读取卡片内容或生成设置，不改主聊天', async () => {
+    const f = memoryFiles(), ctx = context();
+    ctx.characters.push({ avatar: 'B.png', name: ctx.characters[0].name });
+    Object.defineProperty(ctx.characters[1], 'data', { get() { throw new Error('不能读取角色卡正文'); } });
+    ctx.mainApi = 'textgenerationwebui';
+    const runtime = createPlayRuntime(() => ctx, { enabled: true }, f.store);
+    const original = structuredClone(ctx.chat);
+    const added = await runtime.addManualFavorite({ characterAvatar: 'B.png', title: '手动标题', text: '手动正文', firstLine: '手动正文' });
+    assert.equal(added.source.characterAvatar, 'B.png'); assert.equal(added.characterName, '角色A');
+    ctx.characters[1].name = '后来改名';
+    assert.equal((await runtime.getFavorite(added.id)).characterName, '角色A');
+    assert.equal((await runtime.addManualFavorite({ characterAvatar: 'B.png', title: '', text: '下一份', firstLine: '下一份' })).characterName, '后来改名');
+    ctx.characters.pop();
+    assert.throws(() => runtime.addManualFavorite({ characterAvatar: 'B.png', title: '', text: '不能保存', firstLine: '' }), /已不存在/);
+    assert.deepEqual(ctx.chat, original); assert.deepEqual(f.directory().rounds, []);
+    const disabled = createPlayRuntime(() => ctx, { enabled: false }, f.store);
+    assert.throws(() => disabled.addManualFavorite({ characterAvatar: 'A.png', title: '', text: '正文', firstLine: '正文' }), /停用/);
+});
+
 test('捕获目标角色和 API 选择，默认复制当前聊天供后续处理、不计算宏、不修改主聊天', () => {
     const ctx = context(), original = structuredClone({ chat: ctx.chat, metadata: ctx.chatMetadata, settings: ctx.extensionSettings });
     const env = capturePlayEnvironment(ctx, { playApi: { mode: 'custom', key: 'custom-secret' } });

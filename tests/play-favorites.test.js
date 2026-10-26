@@ -4,6 +4,43 @@ import { randomUUID } from 'node:crypto';
 import { PLAY_HISTORY_INDEX, playFavoriteFile } from '../play-history.js';
 import { memoryFiles, time } from './play-fixture.js';
 
+test('手动收藏无需演出记录，保留角色身份和正文，并沿用编辑、取消收藏及并发保存', async () => {
+    const f = memoryFiles(), input = { character: { avatar: 'manual.png', name: '手动角色' },
+        title: '  自行添加  ', text: '**完整正文**\n第二段', firstLine: '完整正文' };
+    const a = await f.store.addManualFavorite(input);
+    assert.equal(a.title, '自行添加'); assert.equal(a.text, input.text); assert.equal(a.cleaned, true);
+    assert.equal(a.characterName, '手动角色');
+    assert.deepEqual(a.source, { type: 'manual', characterAvatar: 'manual.png' });
+    assert.deepEqual(f.directory().characters, []); assert.deepEqual(f.directory().rounds, []);
+    const copy = await f.createStore().getFavorite(a.id);
+    assert.deepEqual(copy, a);
+    const [b, c] = await Promise.all([f.store.addManualFavorite({ ...input, title: '' }), f.createStore().addManualFavorite(input)]);
+    assert.equal((await f.store.listFavorites()).length, 3);
+    assert.notEqual(b.id, c.id, '同一角色可以有多份手动收藏');
+    const edited = await f.store.editFavorite(a.id, { title: '', text: '新的正文', firstLine: '新的正文' }, a.revision);
+    assert.deepEqual(edited.source, a.source); assert.equal(edited.characterName, a.characterName);
+    await assert.rejects(f.createStore().editFavorite(a.id, { title: '过期', text: '过期正文', firstLine: '过期正文' }, a.revision), /其他窗口修改/);
+    await f.store.removeFavorite(a.id);
+    assert.equal((await f.store.listFavorites()).length, 2);
+    assert.equal(f.files.has(playFavoriteFile(edited.id, edited.revision)), false);
+});
+
+test('手动收藏拒绝空内容、缺失角色与过长标题，失败保存不改变已有收藏', async () => {
+    const f = memoryFiles(), input = { character: { avatar: 'manual.png', name: '角色' }, title: '', text: '正文', firstLine: '正文' };
+    assert.throws(() => f.store.addManualFavorite({ ...input, text: '  ' }), /不能为空/);
+    assert.throws(() => f.store.addManualFavorite({ ...input, character: { name: '角色' } }), /请选择/);
+    assert.throws(() => f.store.addManualFavorite({ ...input, title: '字'.repeat(101) }), /100/);
+    assert.equal(f.files.size, 0);
+    const previous = await f.store.addManualFavorite(input), directory = f.files.get(PLAY_HISTORY_INDEX);
+    f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw new Error('模拟保存失败'); };
+    await assert.rejects(f.store.addManualFavorite({ ...input, text: '未保存正文' }), /模拟保存失败/);
+    assert.equal(f.files.get(PLAY_HISTORY_INDEX), directory);
+    assert.equal((await f.store.getFavorite(previous.id)).text, '正文');
+    f.io.beforeWrite = null;
+    await f.store.addManualFavorite({ ...input, text: '重试正文' });
+    assert.equal((await f.store.listFavorites()).length, 2);
+});
+
 async function seed(f, overrides = {}) {
     const round = await f.begin(overrides), result = round.results[0];
     const text = '<thinking>原始思考</thinking>\n第一行正文\n第二行正文';

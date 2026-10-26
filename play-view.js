@@ -1,16 +1,16 @@
-import { element, textButton, glyph, iconButton, createPageJump } from './ui.js';
+import { element, textButton, glyph, iconButton } from './ui.js';
 import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayReadingStorage } from './play-reading-storage.js';
+import { createPlayCharacterPicker } from './play-character-picker.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
 const activePhases = new Set(['preparing', 'generating']);
 const statusText = { preparing: '正在准备', generating: '正在生成', saving: '正在保存',
     stopped: '已停止', failed: '生成失败', unfinished: '未完成', 'save-failed': '尚未保存' };
-const characterBatchSize = 24;
 const historyPageSize = 10;
 
 function dateParts(value, now = new Date()) {
@@ -30,23 +30,22 @@ function recentTime(value) {
 /** A persistent conversation view. History and generation stay in playground. */
 export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites) {
     const mobile = matchMedia('(max-width: 760px)');
-    const browser = element('div', undefined, 'play-character-browser'); browser.id = 'play-character-browser';
-    const browserHead = element('header', undefined, 'play-character-heading');
-    const browserBack = iconButton('left', '返回演出记录', () => setBrowsing(false));
-    browserHead.append(browserBack, element('h2', '选择角色'));
-    const searchLine = element('div', undefined, 'tea-search-line play-character-search');
-    const searchLabel = element('label', undefined, 'tea-search-box');
-    const search = element('input'); search.type = 'search'; search.placeholder = '搜索角色…'; search.setAttribute('aria-label', '搜索角色');
-    searchLabel.append(glyph('search'), search); searchLine.append(searchLabel);
-    const people = element('nav', undefined, 'play-people'); people.setAttribute('aria-label', '按角色查看演出记录');
-    const pagination = element('nav', undefined, 'tea-pagination play-people-pagination'); pagination.setAttribute('aria-label', '角色列表翻页');
-    const previousPage = iconButton('left', '上一页角色', () => turnCharacters(-1));
-    const nextPage = iconButton('right', '下一页角色', () => turnCharacters(1));
-    const pageJump = createPageJump({ label: '跳转角色页码', getPage: () => characterPage,
-        getPages: () => Math.max(1, Math.ceil(matchingCharacters().length / charactersPerPage)),
-        onSelect: target => { characterPage = target; renderPeople(true); } });
-    pagination.append(previousPage, pageJump.node, nextPage);
-    browser.append(browserHead, searchLine, people, pagination);
+    const characterPicker = createPlayCharacterPicker(ctx, {
+        getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
+        onBack: () => setBrowsing(false), backLabel: '返回演出记录', isVisible: () => !mobile.matches || !!browsing,
+        emptyText: () => loaded ? '酒馆里还没有角色' : '正在读取角色…',
+        renderMeta(character) {
+            const time = element('time', undefined, 'play-person-time');
+            if (character.lastPlayedAt) {
+                const recent = recentTime(character.lastPlayedAt); time.dateTime = character.lastPlayedAt;
+                time.append(element('span', recent.day, 'play-person-date'), element('small', recent.time, 'play-person-clock'));
+            }
+            return time;
+        },
+        signatureExtra: character => [character.lastPlayedAt, character.lastPlayedAt ? recentTime(character.lastPlayedAt) : null],
+    });
+    const { node: browser, people, back: browserBack } = characterPicker; browser.id = 'play-character-browser';
+    people.setAttribute('aria-label', '按角色查看演出记录');
     const chooseButton = iconButton('people', '选择角色', () => setBrowsing(true));
     chooseButton.setAttribute('aria-controls', browser.id);
     const page = element('div', undefined, 'play-page');
@@ -78,9 +77,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
     let refreshId = 0, saveTimer, positionSaveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
-    let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
-    let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
-    let cachedRowHeight = 0, lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
+    let browsing = null, lastMobile = mobile.matches;
+    let lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
@@ -209,7 +207,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try {
             const rows = await playground.listFavorites();
             if (id !== favoritesRefreshId) return;
-            favoriteRows = new Map(rows.map(row => [favoriteSourceKey(row.source), row])); favoritesReady = true;
+            favoriteRows = new Map(rows.filter(row => row.source.type !== 'manual').map(row => [favoriteSourceKey(row.source), row])); favoritesReady = true;
         } catch { if (id === favoritesRefreshId) favoritesReady = false; }
         for (const [roundId, view] of views) {
             const round = records.get(roundId)?.round;
@@ -275,79 +273,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         } catch (error) { notify(error.message); }
         finally { view.favoriting = false; if (records.get(id)?.round) updateFavoriteStar(records.get(id).round, view); updateControls(); }
     }
-    function matchingCharacters() {
-        const query = characterQuery.trim().toLocaleLowerCase();
-        return query ? characters.filter(character => character.name.toLocaleLowerCase().includes(query)) : characters;
-    }
-    function characterButton(character) {
-        const button = textButton('', () => void chooseCharacter(character)); button.className = 'play-person';
-        button.dataset.character = characterKey(character); button.setAttribute('aria-label', character.name); button.title = character.name;
-        button.dataset.signature = characterSignature(character);
-        button.setAttribute('aria-pressed', String(characterKey(selected) === characterKey(character)));
-        const copy = element('span', undefined, 'play-person-copy'); copy.append(element('span', character.name, 'play-person-name'));
-        const time = element('time', undefined, 'play-person-time');
-        if (character.lastPlayedAt) {
-            const recent = recentTime(character.lastPlayedAt); time.dateTime = character.lastPlayedAt;
-            time.append(element('span', recent.day, 'play-person-date'), element('small', recent.time, 'play-person-clock'));
-        }
-        button.append(avatar(character, 'play-avatar'), copy, time); return button;
-    }
-    function characterSignature(character) {
-        return JSON.stringify([character.name, character.avatar, character.lastPlayedAt, character.lastPlayedAt ? recentTime(character.lastPlayedAt) : null]);
-    }
-    function measureCharactersPerPage() {
-        if (mobile.matches || !people.clientHeight || !people.clientWidth) return charactersPerPage;
-        if (!cachedRowHeight) {
-            const row = people.querySelector('.play-person');
-            const probe = !row && characters.length ? characterButton(characters[0]) : null;
-            // The first catalog read can finish after the empty view was measured.
-            // Measure a real row now, before exposing a page with the default count.
-            if (probe) people.append(probe);
-            cachedRowHeight = (row ?? probe)?.getBoundingClientRect().height || 0;
-            probe?.remove();
-        }
-        return cachedRowHeight ? Math.max(1, Math.floor(people.clientHeight / cachedRowHeight)) : charactersPerPage;
-    }
-    function renderPeople(resetScroll = false) {
-        if (mobile.matches && !browsing) return;
-        const position = resetScroll ? 0 : peopleScroll;
-        const count = measureCharactersPerPage();
-        if (count !== charactersPerPage) {
-            characterPage = Math.floor(characterPage * charactersPerPage / count); charactersPerPage = count;
-        }
-        const matches = matchingCharacters(), pages = Math.max(1, Math.ceil(matches.length / charactersPerPage));
-        characterPage = Math.min(characterPage, pages - 1);
-        const start = mobile.matches ? 0 : characterPage * charactersPerPage;
-        const shown = matches.slice(start, mobile.matches ? mobileLimit : start + charactersPerPage);
-        const selectedKey = characterKey(selected);
-        const currentButtons = [...people.querySelectorAll('.play-person')];
-        if (shown.length && currentButtons.length === shown.length && shown.every((c, i) => characterKey(c) === currentButtons[i].dataset.character)) {
-            for (const [index, button] of currentButtons.entries()) {
-                if (button.dataset.signature !== characterSignature(shown[index])) button.replaceWith(characterButton(shown[index]));
-                else button.setAttribute('aria-pressed', String(button.dataset.character === selectedKey));
-            }
-            pageJump.update();
-            previousPage.disabled = characterPage === 0; nextPage.disabled = characterPage >= pages - 1;
-            if (position > 0 && people.scrollTop !== position) people.scrollTop = position;
-            return;
-        }
-        people.replaceChildren();
-        people.append(...shown.map(characterButton));
-        if (!shown.length) people.append(element('p', characterQuery.trim() ? '没有找到这个角色' : loaded ? '酒馆里还没有角色' : '正在读取角色…', 'play-people-empty'));
-        pageJump.update();
-        previousPage.disabled = characterPage === 0; nextPage.disabled = characterPage >= pages - 1;
-        if (position > 0 && people.scrollTop !== position) people.scrollTop = position;
-    }
-    function turnCharacters(direction) {
-        characterPage += direction; renderPeople(true);
-    }
-    function loadMoreCharacters() {
-        if (!mobile.matches || !browsing || !people.clientHeight || people.scrollHeight - people.scrollTop - people.clientHeight > 200) return;
-        const matches = matchingCharacters();
-        if (mobileLimit >= matches.length) return;
-        const next = mobileLimit + characterBatchSize;
-        people.append(...matches.slice(mobileLimit, next).map(characterButton)); mobileLimit = next;
-    }
+    const renderPeople = resetScroll => characterPicker.render(resetScroll);
     function updateBrowser() {
         if (!root) return;
         root.classList.toggle('play-choosing-character', !!browsing);
@@ -357,25 +283,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function setBrowsing(value) {
         if (!value && !selected) return;
         closeResults(false); rememberPosition();
-        if (browsing) peopleScroll = people.scrollTop;
         browsing = value; updateBrowser();
-        if (browsing) { renderPeople(); people.scrollTop = peopleScroll; browserBack.focus({ preventScroll: true }); }
+        if (browsing) { renderPeople(); characterPicker.focus(); }
         else { chooseButton.focus({ preventScroll: true }); restorePosition(positions.get(characterKey(selected))); }
         layout();
     }
-    function applyCharacterSearch() {
-        clearTimeout(searchTimer); characterQuery = search.value; characterPage = 0; mobileLimit = characterBatchSize; peopleScroll = 0;
-        renderPeople(true); layout();
-    }
-    search.addEventListener('compositionstart', () => { searchComposing = true; clearTimeout(searchTimer); });
-    search.addEventListener('compositionend', () => { searchComposing = false; applyCharacterSearch(); });
-    search.addEventListener('input', event => {
-        if (!searchComposing && !event.isComposing) { clearTimeout(searchTimer); searchTimer = setTimeout(applyCharacterSearch, 120); }
-    });
-    search.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); event.stopPropagation(); applyCharacterSearch(); search.blur(); }
-    });
-    people.addEventListener('scroll', () => { peopleScroll = people.scrollTop; loadMoreCharacters(); }, { passive: true });
     function capturePosition(followBottom = true) {
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return null;
         const key = characterKey(selected), saved = positions.get(key);
@@ -510,9 +422,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function layout() {
         cancelAnimationFrame(layoutFrame);
         if (!visible) return;
-        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; cachedRowHeight = 0; renderPeople(); updateBrowser(); updateControls(); }
+        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; renderPeople(); updateBrowser(); updateControls(); }
         // ResizeObserver runs before paint; do not defer catalog pagination by a frame.
-        if (measureCharactersPerPage() !== charactersPerPage) renderPeople(true);
+        characterPicker.layout();
         layoutFrame = requestAnimationFrame(() => {
             if (!visible) return;
             // A user scroll can arrive before its scroll event. Never restore
@@ -520,7 +432,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (!restoringPosition && cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2) {
                 rememberPosition(true, true);
             }
-            loadMoreCharacters();
             resizeInput();
             const feedHeight = feed.clientHeight;
             const updates = [];
@@ -572,7 +483,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         keepReading(() => { resizeInput(true); updateControls(); }); scheduleSave();
     });
     input.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+        const shortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
+        const plainEnter = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+            && ctx().shouldSendOnEnter?.();
+        if (event.key === 'Enter' && !event.isComposing && (shortcut || plainEnter)) {
             event.preventDefault(); event.stopPropagation(); if (playground.availability().available) void sendDraft();
         }
     });
@@ -1307,7 +1221,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 commitPosition(capturePosition(true));
             }
             saveReadingPositions();
-            visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); pageJump.node.open = false; scheduleSave();
+            visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); characterPicker.suspend(); scheduleSave();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
         },
         refresh, layout,

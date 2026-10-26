@@ -98,7 +98,7 @@ async function verifyLayout(page,mobile) {
     const pathname=new URL(route.request().url()).pathname;
     if(pathname==='/')return route.fulfill({contentType:'text/html',body:harness});
     const relative=pathname.slice(1);
-    if(!['panel.js','appearance.js','theme-styles.js','ui.js','diagnostics.js','diagnostics-view.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-view.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-render.js','play-runtime.js','play-history.js','play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-preset.js','play-parameters.js','play-request.js','playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js','markdown.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2'].includes(relative))return route.abort();
+    if(!['panel.js','appearance.js','theme-styles.js','ui.js','diagnostics.js','diagnostics-view.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-render.js','play-runtime.js','play-history.js','play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-preset.js','play-parameters.js','play-request.js','playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js','markdown.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2'].includes(relative))return route.abort();
     await route.fulfill({contentType:relative.endsWith('.css')?'text/css':relative.endsWith('.svg')?'image/svg+xml':relative.endsWith('.woff2')?'font/woff2':'text/javascript',body:await fs.readFile(path.join(root,relative))});
    });
    await page.goto('http://tea.test/');
@@ -258,13 +258,17 @@ async function verifyLayout(page,mobile) {
    assert.equal(await panel.getByRole('searchbox').inputValue(),'查找');
    assert.equal(await visibleButton('我的收藏').getAttribute('aria-pressed'),'true');
    assert.equal(await panel.locator('.tea-article-title').filter({hasText:'改名后不匹配'}).count(),0);
+   assert.equal(await visibleButton('新建手稿').count(),0,'我的收藏不提供新建手稿入口');
+   await visibleButton('亲笔手稿').click();
+   if(mobile)await visibleButton('搜索剧场').click();
+   await panel.getByRole('searchbox').fill('查找');
    const beforeNewPage=await panel.locator('.tea-page-display').innerText();
    await visibleButton('新建手稿').click();
    await panel.locator('input[name=title]').fill('新建的手稿');
    await panel.locator('textarea').fill('新建正文');
    await visibleButton('保存手稿').click();
    assert.equal(await panel.getByRole('searchbox').inputValue(),'查找');
-   assert.equal(await visibleButton('我的收藏').getAttribute('aria-pressed'),'true');
+   assert.equal(await visibleButton('亲笔手稿').getAttribute('aria-pressed'),'true');
    assert.equal(await panel.locator('.tea-page-display').innerText(),beforeNewPage);
    assert.equal(await panel.locator('.tea-status').innerText(),'手稿已保存到亲笔手稿');
    assert.deepEqual(errors,[]);

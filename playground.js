@@ -318,6 +318,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             return historyAction('保存演出收藏修改', () => history.editFavorite(id, update, revision), true);
         },
+        addManualFavorite(input) {
+            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+            return historyAction('手动添加演出收藏', () => history.addManualFavorite(input), true);
+        },
         removeFavorite(id) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             return historyAction('取消演出收藏', () => history.removeFavorite(id), true);
