@@ -666,7 +666,8 @@ if (require.main === module) (async()=>{
    await page.waitForFunction(()=>runtime.getState().phase==='generating');
    const stoppedId=await page.evaluate(()=>runtime.getState().roundId), stopped=panel.locator(`[data-record="${stoppedId}"]`);
    await page.evaluate(()=>window.emitGeneration('<thinking>停止后也保留'));
-   await stopped.getByRole('button',{name:'停止这份回复',exact:true}).click();
+   await stopped.locator('.play-stop').waitFor({state:'hidden'});
+   await panel.getByRole('button',{name:'停止所有生成',exact:true}).click();
    await stopped.getByRole('button',{name:'编辑回复原文'}).waitFor();
    assert.match(await stopped.locator('.play-result').innerText(),/停止后也保留/);
 

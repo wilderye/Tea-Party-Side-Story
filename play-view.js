@@ -576,11 +576,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         send.title = !stopping && !available.available ? available.message : label;
         send.setAttribute('aria-label', label);
         send.disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
+        const multipleActive = playground.getStates().filter(job => activePhases.has(job.phase)).length > 1;
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = playground.getState(result?.id);
             const retry = round && pendingSaveFor(result, job);
-            view.stop.hidden = !result || !activePhases.has(job.phase);
+            view.stop.hidden = !multipleActive || !result || !activePhases.has(job.phase);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id);
             view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting;
