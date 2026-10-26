@@ -27,7 +27,7 @@ const listeners=new Map();
 const persona=window.persona={user_avatar:'user.png'};
 const ctx=window.ctx={mainApi:'openai',characterId:0,name1:'茶客',name2:'测试甲',chatId:'A-main',
 characters:[{avatar:'A.png',name:'测试甲'},{avatar:'B.png',name:'测试乙'}],chat:[{mes:'原聊天',is_user:false}],
-chatCompletionSettings:{preset_settings:'预设甲'},extensionSettings:{},accountStorage:localStorage,
+chatCompletionSettings:{preset_settings:'预设甲'},extensionSettings:{},accountStorage:localStorage,getCurrentUserHandle:()=> 'test-user',
 uuidv4:()=>crypto.randomUUID(),getCurrentChatId:()=>ctx.chatId,getChatCompletionModel:()=>'test-model',
 getThumbnailUrl:()=> 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#739785"/></svg>'),
 eventTypes:{CHAT_CHANGED:'chatChanged',PERSONA_CHANGED:'personaChanged'},eventSource:{on(event,fn){if(!listeners.has(event))listeners.set(event,[]);listeners.get(event).push(fn)},emit(event){for(const fn of listeners.get(event)||[])fn()}},
@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);

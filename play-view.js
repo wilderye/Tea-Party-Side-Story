@@ -3,6 +3,7 @@ import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
+import { createPlayReadingStorage } from './play-reading-storage.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
@@ -76,7 +77,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
-    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
+    let refreshId = 0, saveTimer, positionSaveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
     let characterPage = 0, charactersPerPage = 8, mobileLimit = characterBatchSize, peopleScroll = 0;
     let characterQuery = '', searchComposing = false, searchTimer, browsing = null, lastMobile = mobile.matches;
     let cachedRowHeight = 0, lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
@@ -98,17 +99,41 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     } catch (error) { diagnostics?.error('读取剧场草稿和阅读位置', error); storageFailed = true; }
 
+    const legacyPositions = [...positions];
+    const sharedViewState = () => JSON.stringify({ format: 1, selections: [...selections],
+        drafts: [...drafts].filter(([, draft]) => draft.text || draft.origin || draft.previous || draft.mode) });
+    let savedSharedState = sharedViewState();
+    const readingStorage = createPlayReadingStorage({ getUserHandle: ctx().getCurrentUserHandle });
+    let readingLoaded = false;
+    const readingReady = readingStorage.read(positions).then(saved => {
+        positions.clear();
+        for (const [key, value] of saved) positions.set(key, value);
+        readingLoaded = true;
+    }).catch(error => { diagnostics?.error('读取剧场阅读位置', error); storageFailed = true; });
+
     function saveViewState() {
         clearTimeout(saveTimer);
         try {
-            ctx().accountStorage?.setItem(storageKey, JSON.stringify({ format: 1,
-                positions: [...positions], selections: [...selections], drafts: [...drafts] }));
+            const text = sharedViewState();
+            if (text === savedSharedState) return;
+            const saved = JSON.parse(text);
+            // Preserve the migration source if independent storage was unavailable.
+            if (!readingLoaded) saved.positions = legacyPositions;
+            ctx().accountStorage?.setItem(storageKey, JSON.stringify(saved));
+            savedSharedState = text;
         } catch (error) {
-            diagnostics?.error('保存剧场草稿和阅读位置', error);
+            diagnostics?.error('保存剧场草稿和生成版本选择', error);
             storageFailed = true;
         }
     }
     function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveViewState, 300); }
+    function saveReadingPositions() {
+        clearTimeout(positionSaveTimer);
+        if (!readingLoaded) return;
+        try { readingStorage.save(positions); }
+        catch (error) { diagnostics?.error('保存剧场阅读位置', error); storageFailed = true; }
+    }
+    function schedulePositionSave() { clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveReadingPositions, 300); }
     function draftFor(key = characterKey(selected)) {
         if (!drafts.has(key)) drafts.set(key, { text: '', origin: null });
         return drafts.get(key);
@@ -397,7 +422,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             position.offset = previous.offset;
         }
         cachedPosition = { scrollTop: feed.scrollTop, key };
-        positions.set(key, position); scheduleSave();
+        positions.set(key, position); schedulePositionSave();
     }
     function rememberPosition(followBottom = true, forceSync = false) {
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return;
@@ -1120,6 +1145,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         historyLoad = null;
         syncCurrent();
         try {
+            await readingReady; if (id !== refreshId) return;
             const savedCharacters = await playground.listCharacters(); if (id !== refreshId) return;
             const previous = selected, previousKey = characterKey(previous);
             // SillyTavern already holds the character catalog. Merge its light
@@ -1244,7 +1270,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (visible) void refreshUser();
     });
     if (events.PERSONA_CHANGED) ctx().eventSource.on(events.PERSONA_CHANGED, () => { if (visible) void refreshUser(); });
-    window.addEventListener('pagehide', () => { rememberPosition(true, true); saveViewState(); });
+    window.addEventListener('pagehide', () => { rememberPosition(true, true); saveReadingPositions(); void saveViewState(); });
     window.addEventListener('focus', () => {
         if (visible) { rememberPosition(); void refresh(); void refreshUser(); void refreshFavorites(); }
     });
@@ -1280,6 +1306,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (visible && (!cachedPosition || cachedPosition.key !== key || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
                 commitPosition(capturePosition(true));
             }
+            saveReadingPositions();
             visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); pageJump.node.open = false; scheduleSave();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
         },
