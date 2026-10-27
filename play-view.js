@@ -28,7 +28,7 @@ function recentTime(value) {
 }
 
 /** A persistent conversation view. History and generation stay in playground. */
-export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites) {
+export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites, { getReadingInset = () => 0 } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
@@ -298,7 +298,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const rows = rowsByCharacter.get(selected.id) ?? [];
         if (followBottom && historyRange(rows).end === rows.length && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) res = { bottom: true };
         else {
-            const top = feed.getBoundingClientRect().top;
+            const top = feed.getBoundingClientRect().top + readingInset();
             const items = [...content.querySelectorAll(':scope > .play-record:not([hidden])')];
             let low = 0, high = items.length;
             while (low < high) {
@@ -335,7 +335,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (position.anchor && position.anchor === previous?.anchor && Math.abs(position.offset - previous.offset) < 1) {
             position.offset = previous.offset;
         }
-        cachedPosition = { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, key };
+        cachedPosition = { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, inset: readingInset(), key };
         positions.set(key, position); schedulePositionSave();
     }
     function rememberPosition(followBottom = true, forceSync = false) {
@@ -347,7 +347,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             commitPosition({ bottom: true });
             return;
         }
-        if (!forceSync && cachedPosition && cachedPosition.key === key && Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) < 2) {
+        if (!forceSync && cachedPosition && cachedPosition.key === key && cachedPosition.inset === readingInset()
+            && Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) < 2) {
             return;
         }
         commitPosition(capturePosition(followBottom));
@@ -367,14 +368,14 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const item = views.get(position.anchor?.split('/')[0])?.item;
             const anchor = item && !item.hidden && [...item.querySelectorAll('[data-read-anchor]')].find(node => node.dataset.readAnchor === position.anchor && !node.closest('[hidden]'));
             if (anchor) {
-                const target = feed.scrollTop + (anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top) + (Number(position.offset) || 0);
+                const target = feed.scrollTop + (anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top - readingInset()) + (Number(position.offset) || 0);
                 if (Math.abs(feed.scrollTop - target) > 0.5) feed.scrollTop = target;
             } else {
                 const target = Number(position.scrollTop) || 0;
                 if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
             }
         }
-        cachedPosition = position ? { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, key: characterKey(selected) } : null;
+        cachedPosition = position ? { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, inset: readingInset(), key: characterKey(selected) } : null;
         updateJump();
     }
     function keepReading(change, followBottom = true) {
@@ -395,7 +396,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function jumpToMessage(id, role) {
         const view = views.get(id), message = view?.[role];
         if (!visible || !message?.getClientRects().length) return;
-        feed.scrollTop += message.getBoundingClientRect().top - feed.getBoundingClientRect().top - 10;
+        feed.scrollTop += message.getBoundingClientRect().top - feed.getBoundingClientRect().top - readingInset() - 10;
         rememberPosition(true, true); updateJump();
     }
     function resizeInput(force = false) {
@@ -444,11 +445,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (!visible) return;
             // A user scroll can arrive before its scroll event. Never restore
             // an older anchor over a new position from the browser compositor.
-            if (!restoringPosition && cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2) {
+            if (!restoringPosition && cachedPosition?.key === characterKey(selected)
+                && (cachedPosition.inset !== readingInset() || Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2)) {
                 rememberPosition(true, true);
             }
             resizeInput();
-            const feedHeight = feed.clientHeight;
+            const feedHeight = feed.clientHeight - readingInset();
             const updates = [];
             for (const [id, view] of views) {
                 if (view.item.hidden) continue;
@@ -724,6 +726,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function hasActiveEditor() {
         return [...views].some(([id, view]) => !view.item.hidden && isEditing(id));
     }
+    const readingInset = () => page.classList.contains('is-message-editing') ? 0 : getReadingInset();
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
@@ -1258,7 +1261,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         },
         deactivate() {
             const key = characterKey(selected);
-            if (visible && (!cachedPosition || cachedPosition.key !== key || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
+            if (visible && (!cachedPosition || cachedPosition.key !== key || cachedPosition.inset !== readingInset()
+                || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
                 commitPosition(capturePosition(true));
             }
             saveReadingPositions();
@@ -1268,18 +1272,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         },
         refresh, layout,
         prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },
-        resizeReading(change) {
-            // Keep the paragraph at the same screen position, or follow bottom.
-            const position = { ...(capturePosition(true) ?? positions.get(characterKey(selected)) ?? { bottom: false, scrollTop: feed.scrollTop }) };
-            const top = feed.getBoundingClientRect().top;
-            change();
-            const delta = feed.getBoundingClientRect().top - top;
-            if (!position.bottom) {
-                position.offset = (Number(position.offset) || 0) + delta;
-                position.scrollTop = (Number(position.scrollTop) || 0) + delta;
-            }
-            restorePosition(position); rememberPosition(true, true);
-        },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
         async fillFromEntry(entry) {

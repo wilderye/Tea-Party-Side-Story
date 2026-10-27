@@ -18,138 +18,102 @@ const typeLabel = type => ({ preset: '随文剧场', standalone: '独立剧场',
 const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿', play: '剧场演出' })[scope];
 const bodyFontSizes = Array.from({ length: 11 }, (_, index) => 12 + index * 2);
 
-// Passive listeners exist only while the panel is open. Restored positions
-// and streamed replies cannot hide navigation without a reading gesture.
-function createMobileNavigation(panel, media, resizePlayReading) {
+// Follow the reading gesture, using transforms only. The scroll viewport
+// stays fixed so header movement cannot trigger pagination or history layout.
+function createMobileNavigation(panel, media) {
     const listeners = new AbortController();
     const options = { passive: true, signal: listeners.signal };
-    const scrollPositions = new WeakMap();
-    let slot, scope, collapsed = false, gesture;
-    let tabHeight = 0;
+    let slot, nav, tools, scope, gesture, paintFrame = 0;
+    let height = 44, offset = 0, paintedOffset = 0;
     const isReading = () => media.matches && panel.dataset.mode === 'list' && slot?.isConnected;
-    const pinned = () => panel.classList.contains('tea-searching')
-        || panel.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')
-        || !!panel.querySelector('.play-workspace:not([hidden]) .play-page.is-message-editing');
-    function cancelGesture() { gesture = null; }
-    function changeCollapsed(value, area, keepPosition = true) {
-        if (collapsed === value || !slot) return;
-        if (value && pinned()) { cancelGesture(); return; }
-        const change = () => {
-            const top = keepPosition && area ? area.getBoundingClientRect().top : 0;
-            const position = area?.scrollTop ?? 0;
-            collapsed = value;
-            panel.classList.toggle('tea-mobile-navigation-collapsed', value);
-            slot.inert = value;
-            slot.setAttribute('aria-hidden', String(value));
-            if (keepPosition && area && !area.classList.contains('play-feed')) {
-                area.scrollTop = position + area.getBoundingClientRect().top - top;
-            }
-        };
-        if (keepPosition && area?.classList.contains('play-feed')) resizePlayReading(change);
-        else change();
-        if (gesture) {
-            gesture.position = gesture.area.scrollTop;
-            gesture.maximum = gesture.area.scrollHeight - gesture.area.clientHeight;
-            gesture.distance = 0;
-        }
+    function paint() {
+        paintFrame = 0;
+        if (!slot) return;
+        paintedOffset = offset;
+        const transform = 'translateY(' + -offset + 'px)';
+        nav.style.transform = transform;
+        if (tools) tools.style.transform = transform;
+        const hidden = offset >= height;
+        if (slot.inert !== hidden) slot.inert = hidden;
+        const ariaHidden = String(hidden);
+        if (slot.getAttribute('aria-hidden') !== ariaHidden) slot.setAttribute('aria-hidden', ariaHidden);
+        panel.classList.toggle('tea-mobile-navigation-collapsed', hidden);
+    }
+    function setOffset(value) {
+        const next = Math.max(0, Math.min(height, value));
+        if (next === offset) return;
+        offset = next;
+        if (!paintFrame) paintFrame = requestAnimationFrame(paint);
     }
     function readingArea(target) {
-        if (!isReading() || pinned() || !(target instanceof Element)) return null;
+        if (!isReading() || !(target instanceof Element)) return null;
+        if (scope === 'play' && panel.querySelector('.play-page.is-message-editing')) return null;
         if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form')) return null;
         const area = target.closest('.tea-list, .play-feed, .play-people');
         return area && panel.contains(area) && area.getClientRects().length
-            && area.scrollHeight - area.clientHeight > (collapsed ? 24 : tabHeight + 24) ? area : null;
+            && (offset > 0 || area.scrollHeight > area.clientHeight + 1) ? area : null;
     }
-    function startGesture(area, direction = 0) {
-        scrollPositions.set(area, area.scrollTop);
-        return { area, position: area.scrollTop, maximum: area.scrollHeight - area.clientHeight, distance: 0, direction };
-    }
+    function cancelGesture() { gesture = null; }
     panel.addEventListener('touchstart', event => {
         cancelGesture();
         const area = event.touches.length === 1 && readingArea(event.target);
         if (!area) return;
         const touch = event.touches[0];
-        gesture = { ...startGesture(area), x: touch.clientX, y: touch.clientY, expires: Infinity };
+        gesture = { area, id: touch.identifier, x: touch.clientX, y: touch.clientY };
     }, options);
     panel.addEventListener('touchmove', event => {
         if (!gesture) return;
-        if (event.touches.length !== 1) { cancelGesture(); return; }
-        const touch = event.touches[0], dx = touch.clientX - gesture.x, dy = gesture.y - touch.clientY;
-        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+        const touch = event.touches[0];
+        if (event.touches.length !== 1 || touch.identifier !== gesture.id || !isReading()) { cancelGesture(); return; }
+        const dx = touch.clientX - gesture.x, dy = gesture.y - touch.clientY;
         gesture.x = touch.clientX; gesture.y = touch.clientY;
-        const direction = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
-        if (gesture.direction !== direction) gesture.distance = 0;
-        gesture.direction = direction;
+        if (Math.abs(dy) <= Math.abs(dx)) return;
+        // Pulling past the top only restores navigation. There is no delay,
+        // direction gate, height equality check, or post-gesture timer.
+        if (dy < 0 && gesture.area.scrollTop <= 0) setOffset(0);
+        else setOffset(offset + dy);
     }, options);
-    panel.addEventListener('touchend', () => {
-        if (gesture) gesture.expires = performance.now() + 650;
-    }, options);
+    panel.addEventListener('touchend', cancelGesture, options);
     panel.addEventListener('touchcancel', cancelGesture, options);
     panel.addEventListener('wheel', event => {
-        const area = !event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) && readingArea(event.target);
-        if (!area) { cancelGesture(); return; }
-        const direction = Math.sign(event.deltaY);
-        if (gesture?.area !== area || gesture.direction !== direction) {
-            // A passive wheel event may arrive after compositor scrolling.
-            const previous = scrollPositions.get(area) ?? area.scrollTop;
-            gesture = startGesture(area, direction); gesture.position = previous;
-        }
-        gesture.expires = performance.now() + 180;
+        if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+        const area = readingArea(event.target);
+        if (!area) return;
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? area.clientHeight : 1;
+        setOffset(offset + event.deltaY * unit);
     }, options);
     panel.addEventListener('scroll', event => {
-        if (!media.matches) return;
-        const target = event.target;
-        if (target instanceof Element && (target.classList.contains('tea-list') || target.classList.contains('play-feed') || target.classList.contains('play-people'))) {
-            scrollPositions.set(target, target.scrollTop);
-            // Folding content can also return a catalog to the top. Always
-            // leave navigation reachable, but ignore negative Safari overscroll.
-            if (collapsed && isReading() && target.scrollTop >= 0 && target.scrollTop <= 4 && target.getClientRects().length) {
-                changeCollapsed(false, target, false); cancelGesture(); return;
-            }
-        }
-        if (!gesture || event.target !== gesture.area || !isReading()) return;
-        if (performance.now() > gesture.expires) { cancelGesture(); return; }
-        const area = gesture.area, position = area.scrollTop, delta = position - gesture.position;
-        gesture.position = position;
-        if (position < 0 || position > gesture.maximum + 1) { gesture.distance = 0; return; }
-        if (delta === 0) return;
-        if (Math.sign(delta) !== gesture.direction) { gesture.distance = 0; return; }
-        gesture.distance += Math.abs(delta);
-        if (!collapsed && gesture.direction > 0 && position >= tabHeight + 24 && gesture.distance >= 24) {
-            // Streaming, history insertion or keyboard resizing invalidates
-            // this gesture's range. Check only when a toggle would occur.
-            if (area.scrollHeight - area.clientHeight === gesture.maximum) changeCollapsed(true, area);
-            else cancelGesture();
-        } else if (collapsed && gesture.direction < 0 && gesture.distance >= 12) {
-            changeCollapsed(false, area);
-        }
+        if (!offset || gesture || !isReading()) return;
+        const area = event.target;
+        if (area instanceof Element && area.matches('.tea-list, .play-feed, .play-people')
+            && area.scrollTop === 0 && area.getClientRects().length) setOffset(0);
     }, { ...options, capture: true });
     panel.addEventListener('focusin', event => {
         if (event.target.matches('input, textarea, select') || slot?.contains(event.target)) {
-            const catalogArea = slot?.closest('.tea-catalog').querySelector('.tea-list, .play-people');
-            const area = gesture?.area ?? (catalogArea?.getClientRects().length ? catalogArea
-                : panel.querySelector('.play-workspace:not([hidden]) .play-feed'));
-            changeCollapsed(false, area); cancelGesture();
+            cancelGesture(); setOffset(0);
         }
     }, { signal: listeners.signal });
     window.visualViewport?.addEventListener('resize', cancelGesture, options);
     return {
         sync(value, resetPosition = false) {
-            cancelGesture();
+            cancelGesture(); cancelAnimationFrame(paintFrame); paintFrame = 0;
             slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
-            const area = slot?.closest('.tea-catalog').querySelector('.tea-list');
-            const shortCatalog = media.matches && area && area.scrollHeight - area.clientHeight <= 24;
-            if (scope !== value || resetPosition || !isReading() || shortCatalog) {
-                collapsed = false; panel.classList.remove('tea-mobile-navigation-collapsed');
-            }
+            nav = slot?.firstElementChild;
+            tools = slot?.parentElement.querySelector('.tea-mobile-tools');
+            if (nav && media.matches) height = nav.offsetHeight || 44;
+            const area = slot?.parentElement.querySelector('.tea-list');
+            const shortCatalog = media.matches && area && area.scrollHeight <= area.clientHeight + 1;
+            if (scope !== value || resetPosition || !isReading() || shortCatalog) offset = 0;
             scope = value;
-            for (const area of panel.querySelectorAll('.tea-list, .play-feed, .play-people')) scrollPositions.set(area, area.scrollTop);
-            if (slot) {
-                slot.inert = collapsed; slot.setAttribute('aria-hidden', String(collapsed));
-                if (media.matches) tabHeight = slot.firstElementChild.offsetHeight;
-            }
+            panel.classList.toggle('tea-mobile-navigation-collapsed', offset >= height);
+            paint();
         },
-        dispose() { listeners.abort(); cancelGesture(); },
+        // The history view asks how much of its fixed viewport is covered.
+        // It still owns paragraph capture/restoration and history persistence.
+        getReadingInset() {
+            return isReading() && scope === 'play' ? height - paintedOffset : 0;
+        },
+        dispose() { listeners.abort(); cancelAnimationFrame(paintFrame); cancelGesture(); },
     };
 }
 
@@ -183,7 +147,8 @@ export function createTheatrePanel(ctx, state, actions) {
     }]));
     const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
-    const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites);
+    const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
+        { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0 });
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
     const scopeEntries = value => value === 'record-favorites'
@@ -1063,7 +1028,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer = new ResizeObserver(measureBodies);
                 mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
                 message = ''; panel = element('div'); panel.id = 'teahouse-panel';
-                mobileNavigation = createMobileNavigation(panel, media, change => playView.resizeReading(change));
+                mobileNavigation = createMobileNavigation(panel, media);
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open]')) {
@@ -1076,6 +1041,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false,
                     onClosing: async () => {
                         if (!await canLeave()) return false;
+                        if (scope === 'play') playView?.prepareLayout();
                         captureCatalogPosition(); return true;
                     },
                     onOpen: () => {

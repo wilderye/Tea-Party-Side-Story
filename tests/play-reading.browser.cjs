@@ -18,7 +18,8 @@ const server = http.createServer(async (request, response) => {
 });
 
 function readingPosition(feed) {
-  const top = feed.getBoundingClientRect().top;
+  const tabs = document.querySelector('.play-catalog:not([hidden]) .tea-mobile-tabs');
+  const top = Math.max(feed.getBoundingClientRect().top, tabs?.getClientRects().length ? tabs.getBoundingClientRect().bottom : 0);
   const anchor = [...feed.querySelectorAll('[data-read-anchor]')].find(node => node.getClientRects().length && node.getBoundingClientRect().height && node.getBoundingClientRect().bottom > top + 1);
   return { anchor: anchor?.dataset.readAnchor, offset: anchor ? top - anchor.getBoundingClientRect().top : null,
     bottom: feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 12 };
@@ -68,7 +69,12 @@ async function checkHistory(page, mode, viewport) {
   assert.equal(await panel.locator('.play-record:not([hidden])').count(), firstCount, '首屏只读取附近10条，一条慢记录不阻挡其余记录显示');
   assert.equal(await panel.locator('.play-record:not([hidden])').last().locator('.play-message:not([hidden])').last()
     .evaluate(node => getComputedStyle(node).marginBottom), '0px', '加载按钮和隐藏记录不增加末尾消息的留白');
-  const headOffset = record => record.locator('.play-assistant-meta').evaluate(node => node.getBoundingClientRect().top - document.querySelector('.play-feed').getBoundingClientRect().top);
+  const headOffset = record => record.locator('.play-assistant-meta').evaluate(node => {
+    const feedTop = document.querySelector('.play-feed').getBoundingClientRect().top;
+    const tabs = document.querySelector('.play-catalog:not([hidden]) .tea-mobile-tabs');
+    const visibleTop = Math.max(feedTop, tabs?.getClientRects().length ? tabs.getBoundingClientRect().bottom : 0);
+    return node.getBoundingClientRect().top - visibleTop;
+  });
   const before = await headOffset(target);
   if (mode === 'anchor') assert.ok(Math.abs(before) < 2, '优先恢复上次读到的消息位置');
   if (mode === 'automatic') {

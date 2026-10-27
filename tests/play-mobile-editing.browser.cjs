@@ -48,6 +48,12 @@ async function setKeyboard(page, height = null) {
 async function verifyGeometry(panel, editor, actions, mobile) {
     const feed = await panel.locator('.play-feed').boundingBox(), box = await editor.boundingBox();
     if (mobile) {
+        const tabs = panel.locator('.play-catalog:not([hidden]) .tea-mobile-tabs');
+        const tabBox = await tabs.isVisible() ? await tabs.boundingBox() : null;
+        const inset = tabBox ? Math.max(0, tabBox.y + tabBox.height - feed.y) : 0;
+        feed.y += inset; feed.height -= inset;
+    }
+    if (mobile) {
         assert.ok(box.height >= Math.max(80, feed.height - 90), '手机编辑框使用正文区的大部分高度');
         assert.ok(box.y >= feed.y && box.y + box.height <= feed.y + feed.height + 1, '整个编辑框都在可见正文区域内，长文末尾不会藏到键盘后面');
     } else {
