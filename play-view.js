@@ -1268,6 +1268,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         },
         refresh, layout,
         prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },
+        resizeReading(change) {
+            // Keep the paragraph at the same screen position, or follow bottom.
+            const position = { ...(capturePosition(true) ?? positions.get(characterKey(selected)) ?? { bottom: false, scrollTop: feed.scrollTop }) };
+            const top = feed.getBoundingClientRect().top;
+            change();
+            const delta = feed.getBoundingClientRect().top - top;
+            if (!position.bottom) {
+                position.offset = (Number(position.offset) || 0) + delta;
+                position.scrollTop = (Number(position.scrollTop) || 0) + delta;
+            }
+            restorePosition(position); rememberPosition(true, true);
+        },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
         async fillFromEntry(entry) {

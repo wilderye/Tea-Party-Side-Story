@@ -86,7 +86,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-brand>.tea-glyph svg { width:40px; height:48px; color:var(--tea-accent,var(--tea-coral)); }
 #teahouse-panel .tea-brand h1 { font:700 28px/40px var(--tea-display); letter-spacing:4px; }
 #teahouse-panel .tea-brand p { color:var(--tea-sidebar-accent,var(--tea-yellow)); font-size:12px; line-height:16px; letter-spacing:4px; }
-#teahouse-panel .tea-mobile-actions,#teahouse-panel .tea-tabs.tea-mobile-tabs { display:none; }
+#teahouse-panel .tea-mobile-actions,#teahouse-panel .tea-mobile-tab-slot { display:none; }
 #teahouse-panel .tea-search-line { display:flex; gap:8px; align-items:center; flex:none; }
 #teahouse-panel .tea-search-box { display:flex; align-items:center; gap:8px; min-width:0; flex:1; height:40px; padding:0 8px; border-bottom:1px solid var(--tea-sidebar-line,#8ca394); }
 #teahouse-panel .tea-search-box .tea-glyph svg { width:16px; height:16px; }
@@ -392,7 +392,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .tea-brand>.tea-glyph svg { width:28px; height:36px; }
     #teahouse-panel .tea-mobile-actions { display:flex; margin-left:auto; gap:0; }
     #teahouse-panel .tea-icon { width:48px; min-width:48px; height:48px; }
-    #teahouse-panel .tea-tabs.tea-mobile-tabs { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); height:44px; flex:none; padding:0 18px; gap:0; background:var(--tea-sidebar-paper,var(--tea-forest)); }
+    #teahouse-panel .tea-brand { position:relative; z-index:2; }
+    #teahouse-panel .tea-mobile-tab-slot { display:block; position:relative; z-index:1; height:44px; flex:none; }
+    #teahouse-panel.tea-mobile-navigation-collapsed .tea-mobile-tab-slot { height:0; }
+    #teahouse-panel .tea-tabs.tea-mobile-tabs { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); height:44px; flex:none; padding:0 18px; gap:0; background:var(--tea-sidebar-paper,var(--tea-forest)); transition:transform 160ms ease-out; }
+    #teahouse-panel.tea-mobile-navigation-collapsed .tea-mobile-tabs { transform:translateY(-100%); pointer-events:none; }
     #teahouse-panel .tea-mobile-tabs button { width:100%; min-width:0; text-align:center; font-size:14px; color:var(--tea-sidebar-muted,#c5d2c5)!important; }
     #teahouse-panel .tea-mobile-tabs button[aria-pressed=true] { color:var(--tea-sidebar-accent,var(--tea-yellow))!important; }
     #teahouse-panel .tea-mobile-tabs button[aria-pressed=true]::after { background:var(--tea-accent,var(--tea-coral)); }

@@ -18,8 +18,144 @@ const typeLabel = type => ({ preset: '随文剧场', standalone: '独立剧场',
 const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿', play: '剧场演出' })[scope];
 const bodyFontSizes = Array.from({ length: 11 }, (_, index) => 12 + index * 2);
 
+// Passive listeners exist only while the panel is open. Restored positions
+// and streamed replies cannot hide navigation without a reading gesture.
+function createMobileNavigation(panel, media, resizePlayReading) {
+    const listeners = new AbortController();
+    const options = { passive: true, signal: listeners.signal };
+    const scrollPositions = new WeakMap();
+    let slot, scope, collapsed = false, gesture;
+    let tabHeight = 0;
+    const isReading = () => media.matches && panel.dataset.mode === 'list' && slot?.isConnected;
+    const pinned = () => panel.classList.contains('tea-searching')
+        || panel.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')
+        || !!panel.querySelector('.play-workspace:not([hidden]) .play-page.is-message-editing');
+    function cancelGesture() { gesture = null; }
+    function changeCollapsed(value, area, keepPosition = true) {
+        if (collapsed === value || !slot) return;
+        if (value && pinned()) { cancelGesture(); return; }
+        const change = () => {
+            const top = keepPosition && area ? area.getBoundingClientRect().top : 0;
+            const position = area?.scrollTop ?? 0;
+            collapsed = value;
+            panel.classList.toggle('tea-mobile-navigation-collapsed', value);
+            slot.inert = value;
+            slot.setAttribute('aria-hidden', String(value));
+            if (keepPosition && area && !area.classList.contains('play-feed')) {
+                area.scrollTop = position + area.getBoundingClientRect().top - top;
+            }
+        };
+        if (keepPosition && area?.classList.contains('play-feed')) resizePlayReading(change);
+        else change();
+        if (gesture) {
+            gesture.position = gesture.area.scrollTop;
+            gesture.maximum = gesture.area.scrollHeight - gesture.area.clientHeight;
+            gesture.distance = 0;
+        }
+    }
+    function readingArea(target) {
+        if (!isReading() || pinned() || !(target instanceof Element)) return null;
+        if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form')) return null;
+        const area = target.closest('.tea-list, .play-feed, .play-people');
+        return area && panel.contains(area) && area.getClientRects().length
+            && area.scrollHeight - area.clientHeight > (collapsed ? 24 : tabHeight + 24) ? area : null;
+    }
+    function startGesture(area, direction = 0) {
+        scrollPositions.set(area, area.scrollTop);
+        return { area, position: area.scrollTop, maximum: area.scrollHeight - area.clientHeight, distance: 0, direction };
+    }
+    panel.addEventListener('touchstart', event => {
+        cancelGesture();
+        const area = event.touches.length === 1 && readingArea(event.target);
+        if (!area) return;
+        const touch = event.touches[0];
+        gesture = { ...startGesture(area), x: touch.clientX, y: touch.clientY, expires: Infinity };
+    }, options);
+    panel.addEventListener('touchmove', event => {
+        if (!gesture) return;
+        if (event.touches.length !== 1) { cancelGesture(); return; }
+        const touch = event.touches[0], dx = touch.clientX - gesture.x, dy = gesture.y - touch.clientY;
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+        gesture.x = touch.clientX; gesture.y = touch.clientY;
+        const direction = Math.abs(dy) > Math.abs(dx) ? Math.sign(dy) : 0;
+        if (gesture.direction !== direction) gesture.distance = 0;
+        gesture.direction = direction;
+    }, options);
+    panel.addEventListener('touchend', () => {
+        if (gesture) gesture.expires = performance.now() + 650;
+    }, options);
+    panel.addEventListener('touchcancel', cancelGesture, options);
+    panel.addEventListener('wheel', event => {
+        const area = !event.ctrlKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) && readingArea(event.target);
+        if (!area) { cancelGesture(); return; }
+        const direction = Math.sign(event.deltaY);
+        if (gesture?.area !== area || gesture.direction !== direction) {
+            // A passive wheel event may arrive after compositor scrolling.
+            const previous = scrollPositions.get(area) ?? area.scrollTop;
+            gesture = startGesture(area, direction); gesture.position = previous;
+        }
+        gesture.expires = performance.now() + 180;
+    }, options);
+    panel.addEventListener('scroll', event => {
+        if (!media.matches) return;
+        const target = event.target;
+        if (target instanceof Element && (target.classList.contains('tea-list') || target.classList.contains('play-feed') || target.classList.contains('play-people'))) {
+            scrollPositions.set(target, target.scrollTop);
+            // Folding content can also return a catalog to the top. Always
+            // leave navigation reachable, but ignore negative Safari overscroll.
+            if (collapsed && isReading() && target.scrollTop >= 0 && target.scrollTop <= 4 && target.getClientRects().length) {
+                changeCollapsed(false, target, false); cancelGesture(); return;
+            }
+        }
+        if (!gesture || event.target !== gesture.area || !isReading()) return;
+        if (performance.now() > gesture.expires) { cancelGesture(); return; }
+        const area = gesture.area, position = area.scrollTop, delta = position - gesture.position;
+        gesture.position = position;
+        if (position < 0 || position > gesture.maximum + 1) { gesture.distance = 0; return; }
+        if (delta === 0) return;
+        if (Math.sign(delta) !== gesture.direction) { gesture.distance = 0; return; }
+        gesture.distance += Math.abs(delta);
+        if (!collapsed && gesture.direction > 0 && position >= tabHeight + 24 && gesture.distance >= 24) {
+            // Streaming, history insertion or keyboard resizing invalidates
+            // this gesture's range. Check only when a toggle would occur.
+            if (area.scrollHeight - area.clientHeight === gesture.maximum) changeCollapsed(true, area);
+            else cancelGesture();
+        } else if (collapsed && gesture.direction < 0 && gesture.distance >= 12) {
+            changeCollapsed(false, area);
+        }
+    }, { ...options, capture: true });
+    panel.addEventListener('focusin', event => {
+        if (event.target.matches('input, textarea, select') || slot?.contains(event.target)) {
+            const catalogArea = slot?.closest('.tea-catalog').querySelector('.tea-list, .play-people');
+            const area = gesture?.area ?? (catalogArea?.getClientRects().length ? catalogArea
+                : panel.querySelector('.play-workspace:not([hidden]) .play-feed'));
+            changeCollapsed(false, area); cancelGesture();
+        }
+    }, { signal: listeners.signal });
+    window.visualViewport?.addEventListener('resize', cancelGesture, options);
+    return {
+        sync(value, resetPosition = false) {
+            cancelGesture();
+            slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
+            const area = slot?.closest('.tea-catalog').querySelector('.tea-list');
+            const shortCatalog = media.matches && area && area.scrollHeight - area.clientHeight <= 24;
+            if (scope !== value || resetPosition || !isReading() || shortCatalog) {
+                collapsed = false; panel.classList.remove('tea-mobile-navigation-collapsed');
+            }
+            scope = value;
+            for (const area of panel.querySelectorAll('.tea-list, .play-feed, .play-people')) scrollPositions.set(area, area.scrollTop);
+            if (slot) {
+                slot.inert = collapsed; slot.setAttribute('aria-hidden', String(collapsed));
+                if (media.matches) tabHeight = slot.firstElementChild.offsetHeight;
+            }
+        },
+        dispose() { listeners.abort(); cancelGesture(); },
+    };
+}
+
 export function createTheatrePanel(ctx, state, actions) {
     let panel, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
+    let mobileNavigation;
     let scope = 'community', mode = 'list';
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
     let searchComposing = false, catalogCollapsed = false, restoringCatalog = false;
@@ -352,12 +488,16 @@ export function createTheatrePanel(ctx, state, actions) {
         const mobileActions = topActions(true); mobileActions.classList.add('tea-mobile-actions'); brand.append(mobileActions);
         return brand;
     }
+    function mobileTabs() {
+        const slot = element('div', undefined, 'tea-mobile-tab-slot');
+        const nav = tabs(); nav.classList.add('tea-mobile-tabs'); slot.append(nav);
+        return slot;
+    }
     function ensurePlayShell() {
         if (playCatalog) return;
         const view = getPlayView();
         playCatalog = element('aside', undefined, 'tea-catalog play-catalog'); playCatalog.id = 'play-catalog'; playCatalog.setAttribute('aria-label', '角色列表');
-        const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs');
-        playCatalog.append(brandHeader(), mobileTabs, view.browser);
+        playCatalog.append(brandHeader(), mobileTabs(), view.browser);
         playWorkspace = element('section', undefined, 'tea-workspace play-workspace'); playWorkspace.setAttribute('aria-label', '剧场演出');
         const header = topbar(); header.classList.add('play-topbar');
         playWorkspace.append(header, view.page); panel.append(playCatalog, playWorkspace);
@@ -467,7 +607,9 @@ export function createTheatrePanel(ctx, state, actions) {
         if (scope === 'play') {
             ensurePlayShell(); playCatalog.hidden = false;
             if (mode === 'list') {
-                playWorkspace.hidden = false; appendStatus(); getPlayView().activate(panel); playActive = true; return;
+                playWorkspace.hidden = false; appendStatus();
+                mobileNavigation?.sync(scope, resetPosition);
+                getPlayView().activate(panel); playActive = true; return;
             }
         }
         const result = scope === 'play' ? [] : matches();
@@ -512,6 +654,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!keptSettings) diagnosticsView?.restore();
         if (settingsPosition && !keptSettings) workspace.querySelector('.tea-settings').scrollTop = settingsPosition.scrollTop;
         appendStatus();
+        mobileNavigation?.sync(scope, resetPosition);
         restoreCatalogPosition();
         const list = panel.querySelector('.tea-list');
         const search = catalogSearch();
@@ -596,7 +739,7 @@ export function createTheatrePanel(ctx, state, actions) {
     function renderCatalog(visible, total) {
         const catalogNode = element('aside', undefined, 'tea-catalog'); catalogNode.id = 'tea-catalog'; catalogNode.setAttribute('aria-label', '小剧场目录');
         catalogNode.append(brandHeader());
-        const mobileTabs = tabs(); mobileTabs.classList.add('tea-mobile-tabs'); catalogNode.append(mobileTabs);
+        catalogNode.append(mobileTabs());
         const searchLine = element('div', undefined, 'tea-search-line'), label = element('label', undefined, 'tea-search-box');
         const input = element('input'); input.type = 'search'; input.placeholder = isRecordFavorites() ? '搜索标题或角色…'
             : media.matches && currentType() ? `搜索${typeLabel(currentType())}…` : '找一场故事…'; input.value = catalog.query;
@@ -905,6 +1048,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function onBreakpoint() {
         if (!panel) return;
+        mobileNavigation?.sync(scope);
         if (scope === 'play' && mode === 'list') { panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`); playView?.layout(); return; }
         if (isRecordFavorites()) { if (!media.matches && mode === 'record') mode = 'list'; render(); return; }
         catalog.page = 0; catalog.selectedId = null; render({ resetPosition: true });
@@ -919,6 +1063,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer = new ResizeObserver(measureBodies);
                 mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
                 message = ''; panel = element('div'); panel.id = 'teahouse-panel';
+                mobileNavigation = createMobileNavigation(panel, media, change => playView.resizeReading(change));
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open]')) {
@@ -957,6 +1102,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     playActive = false;
                 }
                 playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
+                mobileNavigation?.dispose(); mobileNavigation = null;
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
                 appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
