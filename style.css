@@ -257,7 +257,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-retry-numbers { display:grid; gap:16px; margin-top:24px; }
 #teahouse-panel .play-retry-number { flex-direction:row; align-items:center; justify-content:space-between; gap:24px; font-weight:400; }
 #teahouse-panel .play-retry-value { display:flex; align-items:center; flex:none; gap:8px; }
-#teahouse-panel .play-retry-value input { flex:none; width:72px!important; height:36px; min-height:36px; padding:5px 8px!important; appearance:textfield!important; font:16px/24px var(--tea-ui); font-variant-numeric:tabular-nums; text-align:center!important; }
+#teahouse-panel .tea-settings .play-retry-value input { flex:none; width:72px!important; height:36px; min-height:36px; padding:5px 8px!important; appearance:textfield!important; font:400 14px/24px var(--tea-ui); font-size:14px!important; font-variant-numeric:tabular-nums; text-align:center!important; }
 #teahouse-panel .play-retry-value input::-webkit-inner-spin-button,#teahouse-panel .play-retry-value input::-webkit-outer-spin-button { appearance:none!important; margin:0; }
 #teahouse-panel .play-retry-unit { flex:none; color:var(--tea-muted); font-size:13px; }
 #teahouse-panel .play-retry-settings input:focus-visible { outline:2px solid var(--tea-heading,var(--tea-forest)); outline-offset:3px; }
@@ -464,6 +464,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-retry-conditions { gap:8px 24px; }
     #teahouse-panel .play-retry-numbers { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
     #teahouse-panel .play-retry-number { flex-direction:column; align-items:stretch; gap:8px; }
+    #teahouse-panel .play-retry-value input:focus { font-size:16px!important; }
 }
 @media(prefers-reduced-motion:reduce) { #teahouse-panel * { scroll-behavior:auto!important; transition:none!important; } }
 
