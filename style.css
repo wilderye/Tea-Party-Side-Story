@@ -558,6 +558,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel:has(>.play-result-menu) .play-jump-latest { visibility:hidden; }
 #teahouse-panel .play-input-row { display:flex; align-items:flex-end; gap:10px; padding:3px; border:0; border-radius:6px; background:var(--play-input-paper); }
 #teahouse-panel .play-compose-input { display:block; flex:1; width:100%; min-width:0; height:44px; min-height:44px; margin:0!important; padding:10px 11px!important; border-radius:0!important; resize:none; color:var(--tea-ink)!important; font:16px/24px var(--tea-ui); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; overscroll-behavior:contain; }
+#teahouse-panel .play-compose-input.is-native-sized { field-sizing:content; height:auto; max-height:500px; }
 /* Host themes can force textarea borders/backgrounds with !important, including
    on :focus. Keep these two conversation inputs consistent in every state. */
 #teahouse-panel :is(.play-compose-input,.play-edit-form textarea,.play-edit-title) { border:0!important; outline:none!important; box-shadow:none!important; background:var(--play-input-paper)!important; }

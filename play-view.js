@@ -66,6 +66,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const contextLine = element('div', undefined, 'play-compose-context'); contextLine.hidden = true;
     const inputRow = element('div', undefined, 'play-input-row');
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.spellcheck = false;
+    const nativeInputSizing = CSS.supports('field-sizing', 'content');
+    input.classList.toggle('is-native-sized', nativeInputSizing);
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
     const send = iconButton('send', '发送小剧场', () => {
         if (composerStopsGeneration()) playground.stopAll();
@@ -78,7 +80,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
     let refreshId = 0, saveTimer, positionSaveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
     let browsing = null, lastMobile = mobile.matches;
-    let lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0;
+    let lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0, inputSizingFrame, inputComposing = false;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
@@ -333,7 +335,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (position.anchor && position.anchor === previous?.anchor && Math.abs(position.offset - previous.offset) < 1) {
             position.offset = previous.offset;
         }
-        cachedPosition = { scrollTop: feed.scrollTop, key };
+        cachedPosition = { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, key };
         positions.set(key, position); schedulePositionSave();
     }
     function rememberPosition(followBottom = true, forceSync = false) {
@@ -372,7 +374,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
             }
         }
-        cachedPosition = position ? { scrollTop: feed.scrollTop, key: characterKey(selected) } : null;
+        cachedPosition = position ? { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, key: characterKey(selected) } : null;
         updateJump();
     }
     function keepReading(change, followBottom = true) {
@@ -398,10 +400,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function resizeInput(force = false) {
         if (!visible || inputRow.hidden || !page.clientHeight) return;
-        const currentVal = input.value;
+        const currentVal = nativeInputSizing ? null : input.value;
         const currentWidth = input.clientWidth;
         const currentPageHeight = page.clientHeight;
-        if (!force && currentVal === lastInputVal && currentWidth === lastInputClientWidth && currentPageHeight === lastPageHeight) {
+        if (!nativeInputSizing && !force && currentVal === lastInputVal && currentWidth === lastInputClientWidth && currentPageHeight === lastPageHeight) {
             return;
         }
         lastInputVal = currentVal;
@@ -414,10 +416,23 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const footerStyle = getComputedStyle(compose);
         const available = page.clientHeight - contextLine.offsetHeight - (parseFloat(footerStyle.paddingTop) || 0) - (parseFloat(footerStyle.paddingBottom) || 0) - 32;
         const maximum = Math.max(line + padding, Math.min(maxLines * line + padding, available));
+        const maximumHeight = `${maximum}px`;
+        if (input.style.maxHeight !== maximumHeight) input.style.maxHeight = maximumHeight;
+        if (input.dataset.maxLines !== String(maxLines)) input.dataset.maxLines = String(maxLines);
+        // Native sizing grows/shrinks with text during the browser's normal
+        // layout. Only the older-browser fallback measures after a height write.
+        if (nativeInputSizing || inputComposing) return;
         input.style.height = 'auto';
         const nextHeight = `${Math.max(line + padding, Math.min(input.scrollHeight, maximum))}px`;
         if (input.style.height !== nextHeight) input.style.height = nextHeight;
-        input.dataset.maxLines = String(maxLines); input.scrollTop = previousScroll;
+        input.scrollTop = previousScroll;
+    }
+    function scheduleInputSizing() {
+        if (nativeInputSizing || inputComposing || inputSizingFrame) return;
+        inputSizingFrame = requestAnimationFrame(() => {
+            inputSizingFrame = 0;
+            if (visible && !inputComposing) keepReading(() => resizeInput(true));
+        });
     }
     function layout() {
         cancelAnimationFrame(layoutFrame);
@@ -463,10 +478,20 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             rememberPosition(true, false);
         });
     }
-    const resizeObserver = new ResizeObserver(layout);
-    resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
+    const resizeObserver = new ResizeObserver(entries => {
+        // Preserve the saved paragraph/bottom before painting a native composer
+        // height change. Typing within a line or at the cap does not run this.
+        if (visible && nativeInputSizing && entries.some(entry => entry.target === compose)) {
+            restorePosition(positions.get(characterKey(selected))); rememberPosition(true, false);
+        }
+        layout();
+    });
+    resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
     feed.addEventListener('scroll', () => {
         if (!visible) return;
+        // Native resizing can clamp/focus-scroll the feed before ResizeObserver
+        // runs. Do not overwrite the saved paragraph/bottom with that movement.
+        if (nativeInputSizing && cachedPosition?.key === characterKey(selected) && cachedPosition.feedHeight !== feed.clientHeight) return;
         const moved = cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2;
         if (moved && !restoringPosition) { pendingReveal = null; latestRequest = null; }
         // A scroll event queued before opening the menu may arrive afterwards.
@@ -478,10 +503,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             else if (feed.scrollHeight - feed.clientHeight - feed.scrollTop < 120) void loadHistory('later');
         }
     }, { passive: true });
-    input.addEventListener('input', () => {
+    input.addEventListener('input', event => {
         draftFor().text = input.value;
-        keepReading(() => { resizeInput(true); updateControls(); }); scheduleSave();
+        updateSendControl();
+        if (!event.isComposing) scheduleInputSizing();
+        scheduleSave();
     });
+    input.addEventListener('compositionstart', () => {
+        inputComposing = true; cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0;
+    });
+    input.addEventListener('compositionend', () => { inputComposing = false; scheduleInputSizing(); });
     input.addEventListener('keydown', event => {
         const shortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey;
         const plainEnter = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
@@ -504,17 +535,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         contextLine.hidden = !contextLine.childElementCount;
         updateControls();
     }
+    function updateSendControl() {
+        const available = playground.availability(), stopping = composerStopsGeneration();
+        const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送小剧场';
+        if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
+        const title = !stopping && !available.available ? available.message : label;
+        const disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
+        if (send.title !== title) send.title = title;
+        if (send.getAttribute('aria-label') !== label) send.setAttribute('aria-label', label);
+        if (send.disabled !== disabled) send.disabled = disabled;
+    }
     function updateControls() {
         const editing = mobile.matches && hasActiveEditor();
         inputRow.hidden = editing || !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
         page.classList.toggle('is-message-editing', editing);
         compose.hidden = editing || (inputRow.hidden && contextLine.hidden);
-        const available = playground.availability(), stopping = composerStopsGeneration();
-        const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送小剧场';
-        if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
-        send.title = !stopping && !available.available ? available.message : label;
-        send.setAttribute('aria-label', label);
-        send.disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
+        updateSendControl();
         const multipleActive = playground.getStates().filter(job => activePhases.has(job.phase)).length > 1;
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
@@ -1203,7 +1239,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             syncCurrent(); browsing ??= !current; updateBrowser();
             resetHistoryWindow(rowsByCharacter.get(selected?.id) ?? []);
             renderHistory(); updateComposer();
-            resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people);
+            resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
             // Paint the panel controls before measuring history or loading the
             // native helpers. A tab click must not wait for conversation layout.
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer);
@@ -1228,6 +1264,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             saveReadingPositions();
             visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); characterPicker.suspend(); scheduleSave();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
+            cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0; inputComposing = false;
         },
         refresh, layout,
         prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },
