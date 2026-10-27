@@ -107,11 +107,14 @@ async function checkHistory(page, mode, viewport) {
   if (mode === 'switch') {
     if (viewport.width <= 760) await button('选择角色').click();
     await panel.locator('.play-people').getByRole('button', { name: '测试乙', exact: true }).click();
-    await panel.getByText('乙的旧记录 甲的规则', { exact: true }).waitFor();
+    const bId = await page.evaluate(() => seed.b), b = panel.locator(`[data-record="${bId}"]`);
+    await b.getByText('乙的旧记录 乙的规则', { exact: true }).waitFor();
     await page.evaluate(() => resumeHistoryReads());
     await page.waitForTimeout(180);
     assert.equal(await panel.locator('.play-record:visible').count(), 1);
-    assert.equal(await panel.locator('.play-compose').isVisible(), false);
+    assert.equal(await b.getByText('乙的旧记录 乙的规则', { exact: true }).isVisible(), true, '旧角色读取完成后仍显示新角色及其规则');
+    assert.equal(await page.evaluate(() => ctx.characterId), 0, '插件选择角色不切换酒馆主聊天角色');
+    assert.equal(await panel.locator('.play-compose').isVisible(), true, '选择其他角色仍可输入小剧场');
     assert.ok(await page.evaluate(() => progress.started.length <= 12), '切换角色后不继续读取上一角色的后续批次');
     return;
   }
