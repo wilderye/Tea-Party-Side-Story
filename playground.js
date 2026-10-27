@@ -1,5 +1,5 @@
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning } from './play-history.js';
-import { playContinuationError } from './play-settings.js';
+import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
@@ -35,6 +35,11 @@ function publicError(error, phase) {
     return { code: fallback.code, message: typeof message === 'string' && message.trim() ? message : fallback.message };
 }
 
+function retryReason(error) {
+    if (error?.status === 429 || error?.upstreamStatus === 429) return 'rateLimit';
+    return error?.code === 'empty_response' ? 'empty' : null;
+}
+
 /**
  * prepareRequest uses the native prompt pipeline and returns
  * { send({ signal, onText, onReasoning }), context? }. Callbacks receive the
@@ -60,6 +65,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             requestedRoundId: job.requestedRoundId ?? null, replaceResultId: job.replaceResultId ?? null,
             characterName: job.characterName, characterAvatar: job.characterAvatar,
             text: job.text, error: clone(job.saveError ?? job.error ?? null),
+            retry: clone(job.retry ?? null),
             context: clone(job.context),
             unsaved: !!job.pendingUpdate || !!job.checkpointError };
     }
@@ -109,6 +115,20 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function assertCurrent(environment) {
         if (!isCurrent(environment)) throw new PlaygroundError('chat_changed', '酒馆已切换聊天，本次尚未发送到模型；请在当前角色下重新发送。');
     }
+    async function waitForRetry(job, seconds) {
+        const deadline = Date.now() + seconds * 1000;
+        while (true) {
+            job.controller.signal.throwIfAborted();
+            const remaining = Math.max(0, deadline - Date.now());
+            job.retry.remainingSeconds = Math.ceil(remaining / 1000);
+            notify(job);
+            if (!remaining) return;
+            let timer;
+            try {
+                await abortable(() => new Promise(resolve => { timer = setTimeout(resolve, Math.min(1000, remaining)); }), job.controller.signal);
+            } finally { clearTimeout(timer); }
+        }
+    }
     function scheduleCheckpoint(job) {
         if (job.timer || job.checkpointPending || job.closed || checkpointMs <= 0) return;
         job.timer = setTimeout(() => {
@@ -148,6 +168,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         const continuationError = continueResultId && playContinuationError(environment.continuation);
         if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
         const context = readPlayContext(environment.context);
+        const retrySettings = readPlayRetrySettings({ playRetry: environment.retry });
+        let retryCount = 0;
         const resultId = continueResultId || uuid();
         let baseText = '';
         let continueExtra;
@@ -155,8 +177,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             requestedRoundId: roundId, replaceResultId,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
             text: '', context, closed: false, checkpoint: Promise.resolve() };
-        const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成', { phase: 'preparing', apiMode: environment.api?.mode },
-            [environment.api?.key, environment.tavern?.settings?.proxy_password]);
+        const privateValues = [environment.api?.key, environment.tavern?.settings?.proxy_password];
+        const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成',
+            { phase: 'preparing', apiMode: environment.api?.mode }, privateValues);
         let generationError;
         jobs.set(job.resultId, job);
         notify(job);
@@ -191,33 +214,62 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 ...(environment.independent ? {} : { chatId: context.chatId }), apiMode: context.apiMode, characterName: context.characterName });
             job.context = resultContext;
             assertCurrent(environment);
-            job.phase = 'generating';
-            diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now() });
-            notify(job);
-            const result = await abortable(() => request.send({ signal: job.controller.signal,
-                onReasoning(extra) {
-                    if (jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
-                    job.extra = readPlayReasoning(extra);
-                    scheduleCheckpoint(job);
-                },
-                onText(text) {
-                    if (jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
-                    if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的内容格式不正确');
-                    if (diagnostic && text && text !== job.text) {
-                        const receivedAt = now(), first = !job.text;
-                        diagnostic?.update({ ...(first ? { firstContentAt: receivedAt } : {}),
-                            lastContentAt: receivedAt, receivedCharacters: text.length });
+            while (true) {
+                job.controller.signal.throwIfAborted();
+                job.phase = 'generating';
+                diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now() });
+                notify(job);
+                let receivedBody = false, attemptActive = true, attemptError;
+                try {
+                    const result = await abortable(() => request.send({ signal: job.controller.signal,
+                        onReasoning(extra) {
+                            if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
+                            job.extra = readPlayReasoning(extra);
+                            scheduleCheckpoint(job);
+                        },
+                        onText(text) {
+                            if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
+                            if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的内容格式不正确');
+                            receivedBody ||= !!text.slice(baseText.length).trim();
+                            if (diagnostic && text && text !== job.text) {
+                                const receivedAt = now(), first = !job.text;
+                                diagnostic?.update({ ...(first ? { firstContentAt: receivedAt } : {}),
+                                    lastContentAt: receivedAt, receivedCharacters: text.length });
+                            }
+                            job.text = text;
+                            scheduleCheckpoint(job);
+                            notify(job);
+                        },
+                    }), job.controller.signal);
+                    const text = typeof result === 'string' ? result : result?.text;
+                    if (typeof text !== 'string' || !text.slice(baseText.length).trim()) {
+                        throw new PlaygroundError('empty_response', '模型没有返回正文，已保留收到的内容。');
                     }
                     job.text = text;
-                    scheduleCheckpoint(job);
-                    notify(job);
-                },
-            }), job.controller.signal);
-            const text = typeof result === 'string' ? result : result?.text;
-            if (typeof text !== 'string' || !(continueResultId ? text.slice(baseText.length) : text).trim()) {
-                throw new PlaygroundError('empty_response', '模型没有返回正文，已保留收到的内容。');
+                    break;
+                } catch (error) { attemptError = error; }
+                finally { attemptActive = false; }
+                const reason = retryReason(attemptError);
+                if (job.controller.signal.aborted || attemptError?.name === 'AbortError'
+                    || receivedBody || !reason || !retrySettings[reason] || retryCount >= retrySettings.maxRetries) throw attemptError;
+                diagnostics?.warn('小剧场请求失败', attemptError, { phase: 'generating' }, privateValues);
+                diagnostics?.info(`将在 ${retrySettings.intervalSeconds} 秒后进行第 ${retryCount + 1}/${retrySettings.maxRetries} 次自动重试`);
+                job.phase = 'retry-wait';
+                job.retry = { reason, attempt: retryCount + 1, maxRetries: retrySettings.maxRetries, remainingSeconds: 0 };
+                diagnostic?.update({ phase: job.phase });
+                await waitForRetry(job, retrySettings.intervalSeconds);
+                // Complete any old checkpoint before resetting this attempt's
+                // output. A slow upload must not restore the previous thoughts.
+                clearTimeout(job.timer); job.timer = null;
+                await abortable(() => job.checkpoint, job.controller.signal);
+                job.controller.signal.throwIfAborted();
+                if (job.checkpointError) throw new PlaygroundError('history_save_failed', '生成中的回复保存失败，已停止自动重试。');
+                job.text = baseText;
+                job.extra = continueExtra ? clone(continueExtra) : {};
+                scheduleCheckpoint(job);
+                retryCount++;
+                diagnostics?.info(`开始第 ${retryCount}/${retrySettings.maxRetries} 次自动重试`);
             }
-            job.text = text;
         } catch (error) {
             generationError = error;
             finalStatus = job.controller.signal.aborted || error?.name === 'AbortError' ? 'stopped' : 'failed';
@@ -225,7 +277,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (job.controller.signal.aborted) return null;
                 throw error;
             }
-            if (finalStatus === 'failed') job.error = publicError(error, job.phase);
+            if (finalStatus === 'failed') {
+                job.error = publicError(error, job.phase);
+                if (retryCount) job.error.message += `\n已自动重试 ${retryCount} 次。`;
+            }
         } finally {
             job.closed = true;
             job.finishedAt = now();

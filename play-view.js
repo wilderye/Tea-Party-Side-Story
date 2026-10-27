@@ -8,9 +8,9 @@ import { createPlayCharacterPicker } from './play-character-picker.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
-const activePhases = new Set(['preparing', 'generating']);
+const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 const statusText = { preparing: '正在准备', generating: '正在生成', saving: '正在保存',
-    stopped: '已停止', failed: '生成失败', unfinished: '未完成', 'save-failed': '尚未保存' };
+    'retry-wait': '等待自动重试', stopped: '已停止', failed: '生成失败', unfinished: '未完成', 'save-failed': '尚未保存' };
 const historyPageSize = 10;
 
 function dateParts(value, now = new Date()) {
@@ -520,7 +520,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = playground.getState(result?.id);
             const retry = round && pendingSaveFor(result, job);
-            view.stop.hidden = !multipleActive || !result || !activePhases.has(job.phase);
+            view.stop.hidden = !(multipleActive || job.retry) || !result || !activePhases.has(job.phase);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id);
             view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting;
@@ -679,7 +679,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         await runGeneration(() => playground.generateAnother(id, target));
     }
     function canEditResult(result) {
-        return result && settings.enabled !== false && !['preparing', 'generating', 'saving', 'unfinished'].includes(result.status);
+        return result && settings.enabled !== false && !['preparing', 'generating', 'retry-wait', 'saving', 'unfinished'].includes(result.status);
     }
     function isEditing(id) {
         const view = views.get(id);
@@ -820,6 +820,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id), pendingSave = pendingSaveFor(result, job);
         const retryingSave = pendingSave && job.phase === 'saving';
+        const retryMessage = job.retry && activePhases.has(job.phase)
+            ? job.phase === 'retry-wait'
+                ? `遇到${job.retry.reason === 'rateLimit' ? ' 429' : '空内容'}，${job.retry.remainingSeconds} 秒后进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
+                : `正在进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
+            : '';
         const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
             : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
         const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);
@@ -827,12 +832,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
-        const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}`;
+        const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}:${!!retryMessage}`;
         if (!output.editor && output.signature !== signature) {
             if (result.text) {
                 if (output.displayText.trim()) renderPlayText(output.box, output.displayText, `${round.id}/assistant/${result.id}`, renderHtml, true);
                 else output.box.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
-            } else if (errorMessage) output.box.replaceChildren();
+            } else if (errorMessage || retryMessage) output.box.replaceChildren();
             else {
                 const waiting = activePhases.has(result.status);
                 const message = waiting ? statusText[result.status] : result.status === 'failed' ? '这次没有收到回复。'
@@ -852,10 +857,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.count.replaceChildren(element('span', String(index + 1)), element('small', `/ ${round.results.length}`), glyph('down'));
             view.count.setAttribute('aria-label', countLabel); view.count.title = '选择历史结果';
         }
-        view.error.textContent = errorMessage;
-        view.error.hidden = !errorMessage || !!output.editor;
-        view.error.setAttribute('role', retryingSave ? 'status' : 'alert');
-        view.error.classList.toggle('is-saving', retryingSave);
+        view.error.textContent = retryMessage || errorMessage;
+        view.error.hidden = !(retryMessage || errorMessage) || !!output.editor;
+        view.error.setAttribute('role', retryingSave || retryMessage ? 'status' : 'alert');
+        view.error.classList.toggle('is-saving', !!(retryingSave || retryMessage));
         view.error.dataset.readAnchor = `${round.id}/assistant/${result.id}/error`;
         output.box.append(view.error);
         syncMessageActions(round.id, view);

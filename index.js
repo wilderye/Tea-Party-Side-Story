@@ -219,7 +219,7 @@ const generation = await registerTheatreGeneration(ctx, state, loaded, saveSetti
 export function setEnabled(value) {
     settings.enabled = value;
     diagnostics.info(value ? '插件已启用' : '插件已停用');
-    if (!value) { updateController?.abort(); generation.reset(); playground.stop(); notify('插件已停用'); }
+    if (!value) { updateController?.abort(); generation.reset(); playground.stopAll(); notify('插件已停用'); }
     else notify('');
     saveSettings(); syncEntrances(); refreshSettings(); ui?.refresh();
 }

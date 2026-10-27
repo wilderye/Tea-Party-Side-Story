@@ -1,12 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPreparedPlayRequest, fetchCustomApiModels } from '../play-request.js';
-import { testStreaming, streamResponse, mockPlayContext } from './play-fixture.js';
+import { testStreaming, streamResponse, mockPlayContext, deferred } from './play-fixture.js';
 import { createDiagnostics } from '../diagnostics.js';
 
 const data = () => ({ messages: [{ role: 'system', content: '已处理的当前预设' }, { role: 'user', content: '本次小剧场' }],
     model: 'test-model', chat_completion_source: 'custom', custom_url: 'https://example.invalid/v1',
     temperature: 0.8, stream: false });
+
+test('同一份请求拒绝重叠发送，失败后的顺序重试会释放发送占用', async t => {
+    const started = deferred(), finish = deferred(); let calls = 0;
+    const ctx = mockPlayContext(t, async () => {
+        calls++; if (calls > 1) return Response.json('成功');
+        started.resolve(); await finish.promise;
+        return Response.json({ error: 'rate limited' }, { status: 429 });
+    }, value => value);
+    const request = createPreparedPlayRequest(ctx, data()), first = request.send({});
+    await started.promise;
+    await assert.rejects(request.send({}), error => error.code === 'request_already_sending');
+    assert.equal(calls, 1); finish.resolve();
+    await assert.rejects(first, error => error.status === 429);
+    assert.equal(await request.send({}), '成功'); assert.equal(calls, 2);
+});
 
 test('通过酒馆拉取独立 API 模型，不要求先选模型，也不改酒馆连接', async t => {
     const context = { getRequestHeaders: () => ({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'test-token' }),
@@ -79,7 +94,7 @@ test('模型列表读取中取消后，不返回迟到的结果', async t => {
         { url: 'https://example.invalid/v1' }, controller.signal), error => error.name === 'AbortError');
 });
 
-test('仅发送一次处理好的全部消息与参数，使用酒馆认证头，响应原文不执行', async t => {
+test('顺序重发保持第一次处理好的全部消息与参数，使用酒馆认证头，响应原文不执行', async t => {
     const calls = [];
     const raw = '<% globalThis.__playOutputExecuted = true %>\n<UpdateVariable>_.set("好感度",80)</UpdateVariable>';
     const ctx = mockPlayContext(t, async (payload, signal, options) => {
@@ -94,8 +109,10 @@ test('仅发送一次处理好的全部消息与参数，使用酒馆认证头�
     assert.equal(await request.send({ signal: controller.signal }), raw);
     assert.deepEqual(calls[0].payload, expected);
     assert.equal(globalThis.__playOutputExecuted, undefined);
-    await assert.rejects(request.send({ signal: controller.signal }), /已经发送/);
-    assert.equal(calls.length, 1);
+    request.context.model = '不能改动实际模型';
+    assert.equal(await request.send({ signal: controller.signal }), raw);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1].payload, expected);
 });
 
 test('酒馆连接和独立 API 都保持预处理请求，不在发送层重新组装预设', async t => {

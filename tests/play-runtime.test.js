@@ -31,6 +31,13 @@ function context() {
     };
 }
 
+test('自动重试规则在开始生成时复制，等待期间修改设置只影响下一次任务', () => {
+    const settings = { playRetry: { rateLimit: true, empty: true, maxRetries: 3, intervalSeconds: 2 } };
+    const env = capturePlayEnvironment(context(), settings);
+    settings.playRetry.rateLimit = false; settings.playRetry.maxRetries = 0;
+    assert.deepEqual(env.retry, { rateLimit: true, empty: true, maxRetries: 3, intervalSeconds: 2 });
+    assert.deepEqual(capturePlayEnvironment(context(), settings).retry, settings.playRetry);
+});
 test('手动收藏按头像标识读取角色名称，不读取卡片内容或生成设置，不改主聊天', async () => {
     const f = memoryFiles(), ctx = context();
     ctx.characters.push({ avatar: 'B.png', name: ctx.characters[0].name });

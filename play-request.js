@@ -1,5 +1,11 @@
 import { PlaygroundError } from './playground.js';
 
+function hasUpstream429(detail) {
+    if (!detail || typeof detail !== 'object') return false;
+    return ['status', 'status_code', 'statusCode', 'code'].some(key => detail[key] === 429 || detail[key] === '429')
+        || ['error', 'detail', 'quota_error'].some(key => hasUpstream429(detail[key]));
+}
+
 function responseError(response, detail) {
     const original = detail?.error ?? detail?.detail ?? detail;
     const message = typeof original === 'string' ? original
@@ -8,6 +14,7 @@ function responseError(response, detail) {
     const error = new Error(String(message || fallback));
     error.name = 'PlayApiError';
     error.status = response.status; error.statusText = response.statusText;
+    if (hasUpstream429(detail)) error.upstreamStatus = 429;
     if (detail != null && typeof detail !== 'string') error.error = detail;
     return error;
 }
@@ -18,6 +25,7 @@ function hasResponseError(data) {
 
 async function readJsonResponse(response) {
     const text = await response.text();
+    if (response.ok && !text.trim()) throw new PlaygroundError('empty_response', '模型没有返回正文，已保留收到的内容。');
     let data;
     try { data = JSON.parse(text); }
     catch (error) {
@@ -38,10 +46,10 @@ function isStreamComplete(data) {
 }
 
 /** Read errors before native text extraction, whose error parser swallows them. */
-async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}) {
+async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}, body = JSON.stringify(payload)) {
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache',
-        body: JSON.stringify(payload), signal,
+        body, signal,
     });
     if (!response.ok || !payload.stream || /\bjson\b/i.test(response.headers.get('content-type') ?? '')) {
         const data = await readJsonResponse(response);
@@ -119,7 +127,8 @@ export async function fetchCustomApiModels(context, api, signal) {
 }
 
 /**
- * Sends an already assembled, processed Chat Completion payload exactly once.
+ * Sends an already assembled, processed Chat Completion payload. Sequential
+ * retries reuse the same serialized payload; overlapping sends are rejected.
  * The caller must finish native prompt processing before constructing this
  * request. This transport deliberately does not call processRequest/generate:
  * those would assemble prompts again or notify third-party reply handlers.
@@ -143,14 +152,15 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
         || (payload.stream && (typeof streaming?.EventSourceStream !== 'function' || typeof streaming?.getStreamingReply !== 'function'))) {
         throw new PlaygroundError('unsupported_tavern', '当前酒馆缺少独立发送请求所需的接口。');
     }
-    let sent = false;
+    const body = JSON.stringify(payload);
+    let sending = false;
     return {
         context: { model: payload.model, source: payload.chat_completion_source, stream: !!payload.stream,
             ...(payload.custom_url ? { endpoint: payload.custom_url } : {}) },
         async send({ signal, onText = () => {}, onReasoning = () => {} }) {
             signal?.throwIfAborted();
-            if (sent) throw new PlaygroundError('request_already_sent', '这份请求已经发送；再次生成必须重新处理当前预设和聊天。');
-            sent = true;
+            if (sending) throw new PlaygroundError('request_already_sending', '这份请求正在发送，请等待本次请求结束。');
+            sending = true;
             const controller = new AbortController();
             const abort = () => controller.abort(signal.reason);
             signal?.addEventListener('abort', abort, { once: true });
@@ -158,10 +168,10 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
             try {
                 // Store the original model text without evaluating JSON schema
                 // output or invoking Tavern's main-chat reply handlers.
-                const result = await sendCompletionRequest(context, payload, controller.signal, streaming);
+                const result = await sendCompletionRequest(context, payload, controller.signal, streaming, body);
                 controller.signal.throwIfAborted();
                 if (!payload.stream) {
-                    const text = extract(result, 'openai');
+                    const text = extract(result, 'openai') ?? '';
                     if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的正文格式不正确');
                     const fullText = prefix + text;
                     const options = { mainApi: 'openai', chatCompletionSource: payload.chat_completion_source, ignoreShowThoughts: true };
@@ -198,7 +208,8 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
             } finally {
                 controller.abort();
                 signal?.removeEventListener('abort', abort);
-                await iterator?.return?.();
+                try { await iterator?.return?.(); }
+                finally { sending = false; }
             }
         },
     };

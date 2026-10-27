@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_PLAY_PROMPT, RECOMMENDED_PLAY_PROMPT, readPlayPromptSettings, readPlaySettings } from '../play-settings.js';
+import { DEFAULT_PLAY_PROMPT, RECOMMENDED_PLAY_PROMPT, readPlayPromptSettings, readPlaySettings, readPlayRetrySettings } from '../play-settings.js';
+
+test('自动重试默认关闭，默认额外重试3次、间隔2秒；两种原因独立开启且不修改设置', () => {
+    assert.deepEqual(readPlayRetrySettings({}), { rateLimit: false, empty: false, maxRetries: 3, intervalSeconds: 2 });
+    const settings = { playRetry: { rateLimit: true, empty: false, maxRetries: 5, intervalSeconds: 0.5 } };
+    assert.deepEqual(readPlayRetrySettings(settings), settings.playRetry);
+    const parsed = readPlayRetrySettings(settings); parsed.maxRetries = 7;
+    assert.equal(settings.playRetry.maxRetries, 5);
+    assert.deepEqual(readPlayRetrySettings({ playRetry: { empty: true, maxRetries: 0, intervalSeconds: 0 } }),
+        { rateLimit: false, empty: true, maxRetries: 0, intervalSeconds: 0 });
+    for (const value of [-1, NaN, Infinity, '3', null]) {
+        assert.equal(readPlayRetrySettings({ playRetry: { maxRetries: value } }).maxRetries, 3);
+        assert.equal(readPlayRetrySettings({ playRetry: { intervalSeconds: value } }).intervalSeconds, 2);
+    }
+    assert.equal(readPlayRetrySettings({ playRetry: { maxRetries: 1.5 } }).maxRetries, 3);
+});
 
 test('默认小剧场提示词要求只输出小剧场内容', () => {
     assert.equal(DEFAULT_PLAY_PROMPT, '按要求输出思维链后仅输出小剧场内容，不生成任何附加模块如顶部/尾部状态栏/待办/变量命令/总结等。');

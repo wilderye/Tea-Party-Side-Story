@@ -250,6 +250,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings .tea-content-preference .tea-setting-row { padding:0; }
 #teahouse-panel .tea-library-settings>.tea-text-button { margin-top:8px; }
 #teahouse-panel .play-prompt-settings { margin-top:16px; }
+#teahouse-panel .play-retry-settings { margin-top:20px; }
+#teahouse-panel .play-retry-numbers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:8px; }
+#teahouse-panel .play-retry-numbers input { width:100%; min-width:0; margin:0; padding:8px 12px; border:1px solid var(--tea-line); border-radius:4px; background:var(--tea-paper); color:var(--tea-ink); font:inherit; }
 #teahouse-panel .play-prompt-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 #teahouse-panel .play-prompt-heading strong { font-size:15px; }
 #teahouse-panel .play-prompt-controls { display:flex; align-items:center; gap:8px; margin-bottom:12px; }

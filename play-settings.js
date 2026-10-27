@@ -18,6 +18,16 @@ export function readPlayContinuationSettings(settings) {
         sendReasoning: settings.playContinueSendReasoning !== false };
 }
 
+export function readPlayRetrySettings(settings) {
+    const saved = settings.playRetry;
+    return {
+        rateLimit: saved?.rateLimit === true,
+        empty: saved?.empty === true,
+        maxRetries: Number.isSafeInteger(saved?.maxRetries) && saved.maxRetries >= 0 ? saved.maxRetries : 3,
+        intervalSeconds: Number.isFinite(saved?.intervalSeconds) && saved.intervalSeconds >= 0 ? saved.intervalSeconds : 2,
+    };
+}
+
 export function playContinuationError(continuation = readPlayContinuationSettings({})) {
     return continuation.mode === 'prompt' && !/\{\{lastChatMessage\}\}/i.test(continuation.prompt)
         ? '第二种方式需要在续写提示词中加入 {{lastChatMessage}}。' : '';

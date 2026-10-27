@@ -3,7 +3,7 @@ const fields = new Set(['phase', 'apiMode', 'source', 'model', 'stream', 'endpoi
     'startedAt', 'requestStartedAt', 'firstContentAt', 'lastContentAt', 'receivedCharacters', 'savedAt',
     'count', 'file', 'line', 'column']);
 const statusNames = { complete: '已完成', failed: '失败', stopped: '已停止', 'save-failed': '保存失败' };
-const phaseNames = { preparing: '准备提示词', generating: '已发出生成请求', saving: '保存回复' };
+const phaseNames = { preparing: '准备提示词', generating: '已发出生成请求', 'retry-wait': '等待自动重试', saving: '保存回复' };
 // Error objects sometimes carry an entire request or host configuration. Keep
 // diagnostic properties, but never copy those containers into a log.
 const privateFields = /^(?:(?:request|response)(?:data|body|headers|config|options)?|config|configuration|settings|options|payload|parameters|headers|custom_include_headers|authorization|cookie|set-cookie|messages|prompt|prompts|input|output|content|text|body|chat|reasoning|reasoning_signature|api[-_]?key|key|proxy_password|access_token|refresh_token|password|secret)$/i;
