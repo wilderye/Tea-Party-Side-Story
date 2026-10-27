@@ -119,7 +119,7 @@ async function verifyDesktop(page, viewport) {
     assert.ok(controls.every(control => control.left >= bar.x && control.right <= bar.x + bar.width), '顶部按钮在窄电脑窗口里也不超出面板');
     assert.ok(controls.every((control, index) => !index || control.left >= controls[index - 1].right), '顶部栏目和按钮不重叠');
     await settingsButton.click();
-    await panel.getByText('乙的旧记录 甲的规则', { exact: true }).waitFor();
+    await panel.getByText('乙的旧记录 乙的规则', { exact: true }).waitFor();
     assert.equal(await panel.locator('.play-record:visible').count(), 1);
     await screenshot(page, `selected-character-${viewport.width}.png`);
 
