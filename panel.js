@@ -797,7 +797,6 @@ export function createTheatrePanel(ctx, state, actions) {
             generation.append(apiSettings.node);
             renderPlayChatSetting(generation, state.settings, actions.saveSettings);
             renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
-            renderPlayRetrySettings(generation, state.settings, actions.saveSettings);
             const display = group('回复显示');
             display.classList.add('play-display-settings');
             display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
@@ -823,6 +822,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 render({ resetPosition: scope !== 'play' });
             }); row.append(element('strong', '每页篇数'), size); reading.append(row);
         }
+        if (actions.playground) renderPlayRetrySettings(group('自动重试'), state.settings, actions.saveSettings);
         if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
         if (actions.playground) renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
         workspace.append(area);

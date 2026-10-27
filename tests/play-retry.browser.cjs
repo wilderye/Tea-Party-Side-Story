@@ -19,7 +19,8 @@ diagnostics,prepareRequest:async request=>{
     return createPreparedPlayRequest(ctx,{messages:[{role:'user',content:request.prompt}],
         model:'synthetic-model',chat_completion_source:request.environment.api.mode==='custom'?'custom':'openai',stream:false},
         {prefix:request.continueMessage,continueExtra:request.continueExtra,reasoning:{extractReasoningFromData:data=>data.thought||''}});
-}});`);
+}});`)
+    .replace('{...libraryActions,playground:runtime,promptFavorites}', '{...libraryActions,playground:runtime,promptFavorites,diagnostics}');
 assert.notEqual(harness, originalHarness);
 assert.ok(harness.includes('return createPreparedPlayRequest'));
 const server = http.createServer(async (request, response) => {
@@ -45,8 +46,8 @@ async function verify(page, url, viewport) {
     const panel = page.locator('#teahouse-panel');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const retry = panel.locator('.play-retry-settings');
-    const rateLimit = retry.getByRole('switch', { name: '429 时重试', exact: true });
-    const empty = retry.getByRole('switch', { name: '空内容时重试', exact: true });
+    const rateLimit = retry.getByRole('checkbox', { name: '429 时重试', exact: true });
+    const empty = retry.getByRole('checkbox', { name: '空内容时重试', exact: true });
     const maxRetries = retry.getByRole('spinbutton', { name: '自动重试次数', exact: true });
     const interval = retry.getByRole('spinbutton', { name: '重试间隔（秒）', exact: true });
     const input = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
@@ -70,6 +71,35 @@ async function verify(page, url, viewport) {
     await button('剧场演出').click(); await openSettings();
     assert.equal(await rateLimit.isChecked(), false); assert.equal(await empty.isChecked(), false);
     assert.equal(await maxRetries.inputValue(), '3'); assert.equal(await interval.inputValue(), '2');
+    const layout = await retry.evaluate(section => {
+        const rect = node => {
+            const box = node.getBoundingClientRect();
+            return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+        };
+        const group = section.parentElement;
+        return { heading: group.querySelector('h3').textContent, next: group.nextElementSibling.querySelector('h3').textContent,
+            descriptions: section.querySelectorAll('p').length,
+            conditions: [...section.querySelectorAll('.play-retry-condition')].map(rect),
+            numbers: [...section.querySelectorAll('.play-retry-number')].map(field => ({
+                name: rect(field.firstChild), input: rect(field.querySelector('input')), unit: field.querySelector('.play-retry-unit').textContent,
+            })) };
+    });
+    assert.equal(layout.heading, '自动重试'); assert.equal(layout.next, '插件日志'); assert.equal(layout.descriptions, 0);
+    assert.equal(layout.conditions[0].y, layout.conditions[1].y, '两个重试条件组成同一行');
+    const [count, spacing] = layout.numbers;
+    assert.deepEqual(layout.numbers.map(field => field.unit), ['次', '秒']);
+    assert.ok(layout.numbers.every(field => field.input.height === 36 && field.input.width === 72), '两端数字框均为72×36，不随页面宽度撑开');
+    if (viewport.width > 760) {
+        assert.ok(Math.abs(count.name.y + count.name.height / 2 - count.input.y - count.input.height / 2) <= 1);
+        assert.ok(count.name.right < count.input.x && spacing.name.right < spacing.input.x, '电脑端名称在左，输入框在右');
+        assert.equal(count.input.x, spacing.input.x, '两行数字框对齐');
+        assert.ok(spacing.input.y >= count.input.bottom + 12, '电脑端两项上下排列');
+        assert.ok(count.input.width <= 100, '短数字不占满页面宽度');
+    } else {
+        assert.ok(count.name.bottom + 7 <= count.input.y && spacing.name.bottom + 7 <= spacing.input.y, '手机端名称在上，输入框在下');
+        assert.equal(count.input.y, spacing.input.y, '手机端两组并排且输入框对齐');
+        assert.ok(count.input.right < spacing.input.x);
+    }
     await screenshot('defaults');
     await rateLimit.check(); await empty.check(); await maxRetries.fill('2');
     assert.deepEqual(await saved(), { rateLimit: true, empty: true, maxRetries: 2, intervalSeconds: 2 });

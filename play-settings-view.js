@@ -110,31 +110,32 @@ export function renderPlayChatSetting(area, settings, saveSettings) {
 export function renderPlayRetrySettings(area, settings, saveSettings) {
     const config = readPlayRetrySettings(settings);
     const section = element('section', undefined, 'play-retry-settings');
-    section.append(element('strong', '自动重试'));
     const save = (key, value) => {
         settings.playRetry = { ...readPlayRetrySettings(settings), [key]: value };
         saveSettings();
     };
+    const conditions = element('div', undefined, 'play-retry-conditions');
     for (const [key, name] of [['rateLimit', '429 时重试'], ['empty', '空内容时重试']]) {
-        const row = element('label', undefined, 'tea-setting-row'), input = element('input');
-        input.type = 'checkbox'; input.checked = config[key]; input.setAttribute('role', 'switch'); input.setAttribute('aria-label', name);
+        const row = element('label', undefined, 'play-retry-condition'), input = element('input');
+        input.type = 'checkbox'; input.checked = config[key]; input.setAttribute('aria-label', name);
         input.addEventListener('change', () => save(key, input.checked));
-        row.append(element('strong', name), input); section.append(row);
+        row.append(input, element('span', name)); conditions.append(row);
     }
     const numbers = element('div', undefined, 'play-retry-numbers');
-    for (const [key, name, step] of [['maxRetries', '自动重试次数', '1'], ['intervalSeconds', '重试间隔（秒）', '0.1']]) {
-        const field = element('label', name, 'tea-field'), input = element('input');
+    for (const [key, name, step, unit] of [['maxRetries', '自动重试次数', '1', '次'], ['intervalSeconds', '重试间隔', '0.1', '秒']]) {
+        const field = element('label', undefined, 'tea-field play-retry-number'), input = element('input');
+        const value = element('span', undefined, 'play-retry-value');
         input.type = 'number'; input.min = '0'; input.step = step; input.required = true;
-        input.value = config[key]; input.setAttribute('aria-label', name);
+        input.value = config[key]; input.setAttribute('aria-label', key === 'intervalSeconds' ? '重试间隔（秒）' : name);
         input.addEventListener('input', () => {
             if (input.validity.valid && Number.isFinite(input.valueAsNumber)
                 && (key !== 'maxRetries' || Number.isSafeInteger(input.valueAsNumber))) save(key, input.valueAsNumber);
         });
         input.addEventListener('blur', () => { input.value = readPlayRetrySettings(settings)[key]; });
-        field.append(input); numbers.append(field);
+        value.append(input, element('span', unit, 'play-retry-unit'));
+        field.append(element('span', name), value); numbers.append(field);
     }
-    section.append(numbers, element('p', '两项都关闭时不自动重试。次数不含第一次发送；同时开启时共用次数上限。每次失败后等待上述秒数，再沿用第一次请求重试。', 'tea-setting-description'),
-        element('p', '无正文或只有空白才算空内容；只有原生思维链也算，被显示规则隐藏的文字不算。收到部分正文后报错不重试，续写只检查新增正文。等待期间可停止；设置修改从下一次生成起生效。', 'tea-setting-description'));
+    section.append(conditions, numbers);
     area.append(section);
 }
 

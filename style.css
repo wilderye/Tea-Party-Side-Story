@@ -250,9 +250,17 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-settings .tea-content-preference .tea-setting-row { padding:0; }
 #teahouse-panel .tea-library-settings>.tea-text-button { margin-top:8px; }
 #teahouse-panel .play-prompt-settings { margin-top:16px; }
-#teahouse-panel .play-retry-settings { margin-top:20px; }
-#teahouse-panel .play-retry-numbers { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:8px; }
-#teahouse-panel .play-retry-numbers input { width:100%; min-width:0; margin:0; padding:8px 12px; border:1px solid var(--tea-line); border-radius:4px; background:var(--tea-paper); color:var(--tea-ink); font:inherit; }
+#teahouse-panel .play-retry-conditions { display:flex; flex-wrap:wrap; gap:8px 32px; }
+#teahouse-panel .play-retry-condition { display:flex; align-items:center; gap:10px; min-height:44px; font-weight:400; cursor:pointer; }
+#teahouse-panel .play-retry-condition input { flex:none; appearance:auto!important; width:18px!important; height:18px!important; margin:0!important; padding:0!important; border:revert!important; border-radius:revert!important; background:revert!important; transform:none!important; filter:none!important; accent-color:var(--tea-heading,var(--tea-forest)); cursor:pointer; }
+#teahouse-panel .play-retry-condition input::before,#teahouse-panel .play-retry-condition input::after { content:none!important; display:none!important; }
+#teahouse-panel .play-retry-numbers { display:grid; gap:16px; margin-top:24px; }
+#teahouse-panel .play-retry-number { flex-direction:row; align-items:center; justify-content:space-between; gap:24px; font-weight:400; }
+#teahouse-panel .play-retry-value { display:flex; align-items:center; flex:none; gap:8px; }
+#teahouse-panel .play-retry-value input { flex:none; width:72px!important; height:36px; min-height:36px; padding:5px 8px!important; appearance:textfield!important; font:16px/24px var(--tea-ui); font-variant-numeric:tabular-nums; text-align:center!important; }
+#teahouse-panel .play-retry-value input::-webkit-inner-spin-button,#teahouse-panel .play-retry-value input::-webkit-outer-spin-button { appearance:none!important; margin:0; }
+#teahouse-panel .play-retry-unit { flex:none; color:var(--tea-muted); font-size:13px; }
+#teahouse-panel .play-retry-settings input:focus-visible { outline:2px solid var(--tea-heading,var(--tea-forest)); outline-offset:3px; }
 #teahouse-panel .play-prompt-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
 #teahouse-panel .play-prompt-heading strong { font-size:15px; }
 #teahouse-panel .play-prompt-controls { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
@@ -453,6 +461,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .tea-back-title { padding-top:10px; padding-bottom:10px; }
     #teahouse-panel .tea-back-title>.tea-icon { margin-right:0; }
     #teahouse-panel .tea-settings { padding-top:0; padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+    #teahouse-panel .play-retry-conditions { gap:8px 24px; }
+    #teahouse-panel .play-retry-numbers { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    #teahouse-panel .play-retry-number { flex-direction:column; align-items:stretch; gap:8px; }
 }
 @media(prefers-reduced-motion:reduce) { #teahouse-panel * { scroll-behavior:auto!important; transition:none!important; } }
 
