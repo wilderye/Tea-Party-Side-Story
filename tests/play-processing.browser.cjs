@@ -493,7 +493,7 @@ if (require.main === module) (async()=>{
    };
    const closeSettings=async settingsPage=>{await settingsPage.getByRole('button',{name:viewport.width<=760?'返回剧场演出':'设置',exact:true}).click();};
    let dialog=await openSettings();
-   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','小剧场续写']);
+   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','自动重试','小剧场续写']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
    const noChat=dialog.getByRole('switch',{name:'不发送角色聊天，仅读取预设/人设/世界书',exact:true});
    assert.equal(await noChat.isChecked(),false,'首次默认关闭不发送角色聊天');
