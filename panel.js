@@ -4,6 +4,7 @@ import { createAppearance } from './appearance.js';
 import { element, textButton, glyph, iconButton, copyText, createPageJump } from './ui.js';
 import { renderDiagnostics } from './diagnostics-view.js';
 import { createPlayView } from './play-view.js';
+import { createPlayChatView } from './play-chat-view.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
 import { createPlayFavoriteComposer } from './play-favorite-composer.js';
 import { createPlayApiSettings, renderPlayChatSetting, renderPlayRetrySettings, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
@@ -147,6 +148,7 @@ export function createTheatrePanel(ctx, state, actions) {
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
     let searchComposing = false, catalogCollapsed = false, restoringCatalog = false;
     let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings, playActive = false;
+    let chatView, chatCatalog, chatWorkspace, playRoute = 'play', branchReturn, chatActive = false;
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
     let favoriteComposer;
@@ -172,7 +174,43 @@ export function createTheatrePanel(ctx, state, actions) {
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
         { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
-            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area) });
+            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id) });
+    const getChatView = () => chatView ??= createPlayChatView(ctx, state.settings, actions.playground, actions.promptFavorites, {
+        notify: showMessage, onOpen: (id, messageId) => void enterBranch(id, messageId),
+        onBranch: branch => void enterBranch(branch.id),
+        onCharacter: () => { playRoute = 'history'; render(); },
+        onDelete: () => void returnFromBranch(),
+    });
+    async function enterBranch(id, messageId) {
+        if (!await canLeave()) return;
+        if (playRoute !== 'chat' || scope !== 'play') {
+            captureCatalogPosition();
+            branchReturn = { scope, mode, route: scope === 'play' ? playRoute : 'favorites', catalog };
+        }
+        playView?.prepareLayout();
+        scope = 'play'; mode = 'list'; playRoute = 'chat'; render();
+        await getChatView().open(id, messageId);
+    }
+    async function returnFromBranch() {
+        if (!await canLeave()) return;
+        chatView?.deactivate(); chatActive = false;
+        const destination = branchReturn ?? { scope: 'play', mode: 'list', route: 'history' };
+        branchReturn = null; scope = destination.scope; mode = destination.mode; playRoute = destination.route === 'favorites' ? 'play' : destination.route;
+        if (destination.catalog) catalog = destination.catalog;
+        if (playRoute === 'history' && scope === 'play') await getChatView().showDirectory(undefined, false);
+        render();
+        if (scope !== 'play') restoreCatalogPosition();
+    }
+    async function toggleHistory() {
+        if (mode === 'settings') return back();
+        if (playRoute === 'chat') return returnFromBranch();
+        if (!await canLeave()) return;
+        if (playRoute === 'history') { chatView?.deactivate(); chatActive = false; playRoute = 'play'; render(); }
+        else {
+            playView?.prepareLayout(); playRoute = 'history'; render();
+            await getChatView().showDirectory(getPlayView().getSelectedCharacter());
+        }
+    }
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
     const scopeEntries = value => value === 'record-favorites'
@@ -258,7 +296,7 @@ export function createTheatrePanel(ctx, state, actions) {
             { okButton: actionLabel, cancelButton: '取消' }) === ctx().POPUP_RESULT.AFFIRMATIVE;
     }
     async function canLeave() {
-        if (busy || confirming || favoriteComposer?.canLeave() === false || playView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
+        if (busy || confirming || favoriteComposer?.canLeave() === false || playView?.canLeave() === false || chatView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
         if (favoriteComposer?.dirty()) {
             confirming = true;
             try { return await confirm('收藏有未保存的内容，确定放弃吗？', '放弃添加'); }
@@ -277,6 +315,10 @@ export function createTheatrePanel(ctx, state, actions) {
         mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
         if (leavingSettings && isRecordFavorites()) actions.playground?.display?.updateSettings();
         message = ''; render();
+        if (leavingSettings && scope === 'play' && playRoute !== 'play') {
+            actions.playground?.display?.updateSettings();
+            void chatView?.refresh();
+        }
     }
     function showMessage(text) {
         clearTimeout(messageTimer);
@@ -455,7 +497,11 @@ export function createTheatrePanel(ctx, state, actions) {
             add.disabled = !state.settings.enabled || scope === 'local' && !!state.personalError;
             box.append(add);
         }
-        if (scope === 'play' && mobileHeader) box.append(getPlayView().chooseButton);
+        if (scope === 'play' && mobileHeader) box.append(playRoute === 'play' ? getPlayView().chooseButton : getChatView().chooseButton);
+        if (scope === 'play') {
+            const history = iconButton('history', '历史记录', () => void toggleHistory()); history.classList.add('tea-history-toggle');
+            history.setAttribute('aria-pressed', String(playRoute !== 'play')); box.append(history);
+        }
         box.append(settingsButton(), iconButton('close', '关闭面板', close));
         return box;
     }
@@ -483,13 +529,32 @@ export function createTheatrePanel(ctx, state, actions) {
         return slot;
     }
     function ensurePlayShell() {
-        if (playCatalog) return;
+        if (playCatalog) {
+            const header = topbar(); header.classList.add('play-topbar');
+            playWorkspace.querySelector('.tea-topbar')?.replaceWith(header);
+            playCatalog.querySelector('.tea-mobile-actions')?.replaceWith(Object.assign(topActions(true), { className: 'tea-actions tea-mobile-actions' }));
+            return;
+        }
         const view = getPlayView();
         playCatalog = element('aside', undefined, 'tea-catalog play-catalog'); playCatalog.id = 'play-catalog'; playCatalog.setAttribute('aria-label', '角色列表');
         playCatalog.append(brandHeader(), mobileTabs(), view.browser);
         playWorkspace = element('section', undefined, 'tea-workspace play-workspace'); playWorkspace.setAttribute('aria-label', '剧场演出');
         const header = topbar(); header.classList.add('play-topbar');
         playWorkspace.append(header, view.page); panel.append(playCatalog, playWorkspace);
+    }
+    function ensureChatShell() {
+        const view = getChatView();
+        if (!chatCatalog) {
+            chatCatalog = element('aside', undefined, 'tea-catalog play-catalog play-chat-catalog');
+            chatCatalog.append(brandHeader(), mobileTabs(), view.browser);
+            chatWorkspace = element('section', undefined, 'tea-workspace play-workspace');
+            const header = topbar(); header.classList.add('play-topbar');
+            chatWorkspace.append(header, view.page); panel.append(chatCatalog, chatWorkspace);
+        } else {
+            const header = topbar(); header.classList.add('play-topbar');
+            chatWorkspace.querySelector('.tea-topbar')?.replaceWith(header);
+            chatCatalog.querySelector('.tea-mobile-actions')?.replaceWith(Object.assign(topActions(true), { className: 'tea-actions tea-mobile-actions' }));
+        }
     }
     async function openRecordFavorite(id, direction) {
         const current = favoriteReaders.get(catalog.selectedId);
@@ -529,6 +594,7 @@ export function createTheatrePanel(ctx, state, actions) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
                 reader = createPlayFavoriteReader(actions.playground, { notify: showMessage,
+                    onGoToBranch: (id, messageId) => void enterBranch(id, messageId),
                     onNavigate: direction => void openRecordFavorite(item.id, direction),
                     onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
                     onRemove(id) {
@@ -564,11 +630,12 @@ export function createTheatrePanel(ctx, state, actions) {
             diagnosticsView?.dispose(); diagnosticsView = null;
             settingsView = null;
         }
-        const enteringPlay = scope === 'play' && mode === 'list';
+        const enteringPlay = scope === 'play' && mode === 'list' && playRoute === 'play';
         if (playActive && !enteringPlay) {
             playView?.deactivate();
             playActive = false;
         }
+        if (chatActive && !(scope === 'play' && mode === 'list' && playRoute !== 'play')) { chatView?.deactivate(); chatActive = false; }
         syncRandomOrders();
         const oldSearch = catalogSearch();
         const focused = oldSearch && document.activeElement === oldSearch;
@@ -579,10 +646,11 @@ export function createTheatrePanel(ctx, state, actions) {
         // Keep the conversation connected while another tab is open. Detaching
         // it would reset rendered webpages and replace the user's input element.
         for (const child of [...panel.children]) {
-            if (child !== playCatalog && child !== playWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings) child.remove();
+            if (child !== playCatalog && child !== playWorkspace && child !== chatCatalog && child !== chatWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings) child.remove();
         }
         if (playCatalog) { playCatalog.hidden = true; playWorkspace.hidden = true; }
         if (favoriteWorkspace) favoriteWorkspace.hidden = true;
+        if (chatCatalog) { chatCatalog.hidden = true; chatWorkspace.hidden = true; }
         if (panel.dataset.mode !== mode) panel.dataset.mode = mode;
         applyFontSource();
         const bodySize = `${bodyFontSize()}px`;
@@ -594,8 +662,13 @@ export function createTheatrePanel(ctx, state, actions) {
         panel.classList.toggle('tea-has-play', !!actions.playground);
         updateCatalogVisibility();
         if (scope === 'play') {
-            ensurePlayShell(); playCatalog.hidden = false;
+            if (playRoute === 'play') { ensurePlayShell(); playCatalog.hidden = false; }
+            else { ensureChatShell(); chatCatalog.hidden = false; }
             if (mode === 'list') {
+                if (playRoute !== 'play') {
+                    chatWorkspace.hidden = false; appendStatus(); getChatView().activate(panel); chatActive = true;
+                    mobileNavigation?.sync(scope, resetPosition); return;
+                }
                 playWorkspace.hidden = false; appendStatus();
                 mobileNavigation?.sync(scope, resetPosition);
                 getPlayView().activate(panel); playActive = true; return;
@@ -669,6 +742,7 @@ export function createTheatrePanel(ctx, state, actions) {
         const text = element('span');
         text.append(element('span', scope === 'favorites' ? favoriteTitle(item.favorite ?? item) : item.title, 'tea-story-title'),
             element('small', item.favorite ? item.favorite.characterName : `${typeLabel(item.type)} · ${item.author || '我'}`));
+        if (item.favorite?.source.type === 'chat') text.firstChild.prepend(glyph('conversation'));
         if (item.gore) text.firstChild.prepend(element('span', 'G向', 'tea-content-tag'));
         row.append(element('span', String(number).padStart(2, '0'), 'tea-number'), text);
         return row;
@@ -1070,6 +1144,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     onClosing: async () => {
                         if (!await canLeave()) return false;
                         if (scope === 'play') playView?.prepareLayout();
+                        chatView?.prepareLayout();
                         captureCatalogPosition(); return true;
                     },
                     onOpen: () => {
@@ -1095,7 +1170,9 @@ export function createTheatrePanel(ctx, state, actions) {
                     playView?.deactivate();
                     playActive = false;
                 }
+                if (chatActive) { chatView?.deactivate(); chatActive = false; }
                 playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
+                chatCatalog = null; chatWorkspace = null;
                 mobileNavigation?.dispose(); mobileNavigation = null;
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
@@ -1109,7 +1186,8 @@ export function createTheatrePanel(ctx, state, actions) {
             if (!panel) return;
             if (scope === 'play' && mode === 'list') {
                 updateStatus();
-                void playView?.refresh();
+                if (playRoute === 'play') void playView?.refresh();
+                else void chatView?.refresh();
             } else if (isRecordFavorites() && ['list', 'record'].includes(mode)) void refreshFavoriteCatalog();
             else if (mode === 'editor') {
                 updateStatus();

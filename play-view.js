@@ -3,7 +3,6 @@ import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
-import { createPlayReadingStorage } from './play-reading-storage.js';
 import { createPlayCharacterPicker } from './play-character-picker.js';
 
 const pad = value => String(value).padStart(2, '0');
@@ -29,7 +28,7 @@ function recentTime(value) {
 
 /** A persistent conversation view. History and generation stay in playground. */
 export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites,
-    { getReadingInset = () => 0, onProgrammaticScroll = () => {} } = {}) {
+    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
@@ -79,7 +78,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
-    let refreshId = 0, saveTimer, positionSaveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
+    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
     let browsing = null, lastMobile = mobile.matches;
     let lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0, inputSizingFrame, inputComposing = false;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
@@ -91,7 +90,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     try {
         const saved = JSON.parse(ctx().accountStorage?.getItem(storageKey) ?? 'null');
         if (saved?.format === 1) {
-            for (const [key, value] of saved.positions ?? []) if (typeof key === 'string' && value && typeof value === 'object') positions.set(key, value);
             for (const [key, value] of saved.selections ?? []) if (typeof key === 'string' && typeof value === 'string') selections.set(key, value);
             for (const [key, value] of saved.drafts ?? []) {
                 if (typeof key !== 'string' || !value || typeof value.text !== 'string') continue;
@@ -100,17 +98,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     } catch (error) { diagnostics?.error('读取剧场草稿和阅读位置', error); storageFailed = true; }
 
-    const legacyPositions = [...positions];
     const sharedViewState = () => JSON.stringify({ format: 1, selections: [...selections],
         drafts: [...drafts].filter(([, draft]) => draft.text || draft.origin || draft.previous || draft.mode) });
     let savedSharedState = sharedViewState();
-    const readingStorage = createPlayReadingStorage({ getUserHandle: ctx().getCurrentUserHandle });
-    let readingLoaded = false;
-    const readingReady = readingStorage.read(positions).then(saved => {
-        positions.clear();
-        for (const [key, value] of saved) positions.set(key, value);
-        readingLoaded = true;
-    }).catch(error => { diagnostics?.error('读取剧场阅读位置', error); storageFailed = true; });
 
     function saveViewState() {
         clearTimeout(saveTimer);
@@ -118,8 +108,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const text = sharedViewState();
             if (text === savedSharedState) return;
             const saved = JSON.parse(text);
-            // Preserve the migration source if independent storage was unavailable.
-            if (!readingLoaded) saved.positions = legacyPositions;
             ctx().accountStorage?.setItem(storageKey, JSON.stringify(saved));
             savedSharedState = text;
         } catch (error) {
@@ -128,13 +116,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     }
     function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveViewState, 300); }
-    function saveReadingPositions() {
-        clearTimeout(positionSaveTimer);
-        if (!readingLoaded) return;
-        try { readingStorage.save(positions); }
-        catch (error) { diagnostics?.error('保存剧场阅读位置', error); storageFailed = true; }
-    }
-    function schedulePositionSave() { clearTimeout(positionSaveTimer); positionSaveTimer = setTimeout(saveReadingPositions, 300); }
     function draftFor(key = characterKey(selected)) {
         if (!drafts.has(key)) drafts.set(key, { text: '', origin: null });
         return drafts.get(key);
@@ -337,9 +318,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             position.offset = previous.offset;
         }
         cachedPosition = { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, inset: readingInset(), key };
-        positions.set(key, position); schedulePositionSave();
+        positions.set(key, position);
     }
     function rememberPosition(followBottom = true, forceSync = false) {
+        if (hasActiveEditor()) followBottom = false;
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return;
         const key = characterKey(selected), saved = positions.get(key);
         const distanceToBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
@@ -573,6 +555,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.generate.hidden = !own || !round?.prompt || !!round.results.length;
             view.generate.disabled = !canGenerate(round);
             view.again.hidden = !(own && round.prompt !== null) && !retry;
+            if (round?.initialIsLast === false && !retry) view.again.hidden = true;
             view.again.disabled = retry ? job.phase === 'saving' : !canRewrite(round, result);
             view.again.title = retry ? '重试保存' : '重新生成';
             view.again.setAttribute('aria-label', view.again.title);
@@ -580,13 +563,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const currentSelected = round && selectedResult(round);
             const canCont = canContinue(round, currentSelected);
             view.continueBtn.hidden = !(own && round?.prompt !== null && currentSelected?.text?.trim());
+            if (round?.initialIsLast === false) view.continueBtn.hidden = true;
+            view.branch.hidden = !onBranch;
+            view.branch.disabled = !result || !canEditResult(result) || isEditing(id) || settings.enabled === false;
             view.continueBtn.disabled = !canCont;
             if (round) { updateResultNavigation(round, view); updateFavoriteStar(round, view); updatePromptFavoriteStar(round, view); }
             syncMessageActions(id, view);
         }
     }
     function canGenerate(round) {
-        return !!round && round.prompt !== null && canWrite() && round.characterId === selected?.id
+        return !!round && round.initialIsLast !== false && round.prompt !== null && canWrite() && round.characterId === selected?.id
             && playground.availability().available && !isEditing(round.id) && !views.get(round.id)?.removing;
     }
     function canRewrite(round, result) {
@@ -596,6 +582,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return canRewrite(round, result) && !!result?.text?.trim() && !pendingSaveFor(result);
     }
     function updateResultNavigation(round, view) {
+        view.swipes.hidden = round.initialIsLast === false;
         const index = round.results.indexOf(selectedResult(round)), atEnd = index === round.results.length - 1;
         view.prev.disabled = isEditing(round.id) || !!view.removing || index <= 0;
         view.next.disabled = isEditing(round.id) || !!view.removing || (atEnd && !canGenerate(round));
@@ -748,6 +735,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const editing = createPlayEditor({ text: original, onCancel: finish,
             async onSave({ text }) {
                 const updated = await playground.editResult(id, result.id, text, original);
+                if (updated.initialIsLast && updated.initialAssistantId && updated.selectedResultId !== result.id) {
+                    await playground.setMessageVersion(id, updated.initialAssistantId, result.id, updated.selectedResultId);
+                    updated.selectedResultId = result.id;
+                }
                 records.set(id, { round: updated });
                 finish();
                 await refresh();
@@ -795,7 +786,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const editReply = iconButton('edit', '编辑回复原文', () => editResult(round.id));
         const favorite = iconButton('star', '收藏演出记录', () => void toggleFavorite(round.id)); favorite.classList.add('tea-star');
         const removeReply = iconButton('trash', '删除 AI 消息', () => void removeMessage(round.id, 'assistant')); removeReply.classList.add('play-delete');
-        const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(favorite, editReply, removeReply); aiHead.head.append(replyTools);
+        const branch = iconButton('branch', '创建分支', () => void branchFromRound(round.id));
+        const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(branch, favorite, editReply, removeReply); aiHead.head.append(replyTools);
         const results = element('div', undefined, 'play-results'), actions = element('footer', undefined, 'play-message-actions');
         const error = element('p', undefined, 'play-result-error'); error.hidden = true;
         const swipes = element('div', undefined, 'play-swipes'); swipes.setAttribute('role', 'group'); swipes.setAttribute('aria-label', '切换这条回复的生成结果');
@@ -821,9 +813,23 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         actions.append(actionGroup, swipes, rightActions);
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, userFavorite, favorite, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
+            userTools, replyTools, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
-    function selectedResult(round) { return round.results.find(result => result.id === selections.get(round.id)) ?? round.results.at(-1); }
+    function selectedResult(round) {
+        const editingId = [...(views.get(round.id)?.outputs ?? [])].find(([, output]) => output.editor)?.[0];
+        return round.results.find(result => result.id === (editingId ?? round.selectedResultId ?? selections.get(round.id))) ?? round.results.at(-1);
+    }
+    async function branchFromRound(id) {
+        const round = records.get(id)?.round;
+        if (!round || !onBranch || isEditing(id) || !canEditResult(selectedResult(round))) return;
+        try {
+            rememberPosition();
+            const chat = await playground.getChat(id, { selectedResultId: selectedResult(round)?.id });
+            const ai = chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.role === 'assistant');
+            const branch = await playground.createBranch(id, ai.id, chat.revision);
+            onBranch(branch); await refresh();
+        } catch (error) { notify(error.message); }
+    }
     function createOutput(round, result) {
         // SillyTavern Popup reserves data-result for numeric dialog buttons.
         const box = element('div', undefined, 'play-result'); box.dataset.playResult = result.id;
@@ -861,7 +867,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const output = view.outputs.get(result.id), renderHtml = ['saving', 'complete', 'stopped', 'failed', 'save-failed'].includes(result.status);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
-        const tools = output.editor ? [output.editor.actions] : [view.favorite, view.editReply, view.removeReply];
+        const tools = output.editor ? [output.editor.actions] : [view.branch, view.favorite, view.editReply, view.removeReply];
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id), pendingSave = pendingSaveFor(result, job);
         const retryingSave = pendingSave && job.phase === 'saving';
@@ -1019,11 +1025,17 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         displayedCharacter = ready && !awaitingAnchor && (shown || !rows.length) ? key : '';
         updateControls();
     }
-    function changeResult(id, direction, resultId) {
+    async function changeResult(id, direction, resultId) {
         const round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
+        if (round.initialIsLast === false) return;
         const index = round.results.indexOf(selectedResult(round));
         const result = resultId ? round.results.find(item => item.id === resultId) : round.results[index + direction];
         if (!result) return;
+        if (round.initialAssistantId) {
+            try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId); }
+            catch (error) { notify(error.message); return; }
+            round.selectedResultId = result.id;
+        }
         latestRequest = null; pendingReveal = null;
         closeResults(); selections.set(id, result.id); renderRecord(round, views.get(id)); updateControls();
         jumpToMessage(id, 'assistant'); scheduleSave();
@@ -1109,7 +1121,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         historyLoad = null;
         syncCurrent();
         try {
-            await readingReady; if (id !== refreshId) return;
+            if (id !== refreshId) return;
             const savedCharacters = await playground.listCharacters(); if (id !== refreshId) return;
             const previous = selected, previousKey = characterKey(previous);
             // SillyTavern already holds the character catalog. Merge its light
@@ -1234,7 +1246,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (visible) void refreshUser();
     });
     if (events.PERSONA_CHANGED) ctx().eventSource.on(events.PERSONA_CHANGED, () => { if (visible) void refreshUser(); });
-    window.addEventListener('pagehide', () => { rememberPosition(true, true); saveReadingPositions(); void saveViewState(); });
+    window.addEventListener('pagehide', () => { rememberPosition(true, true); void saveViewState(); });
     window.addEventListener('focus', () => {
         if (visible) { rememberPosition(); void refresh(); void refreshUser(); void refreshFavorites(); }
     });
@@ -1242,6 +1254,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     return {
         browser, chooseButton, page,
         activate(container) {
+            if (visible) { root = container; return; }
             // Reattaching the panel can reset scrollTop before its first layout.
             // Keep the saved position authoritative until that layout restores it.
             root = container; visible = true; restoringPosition = true;
@@ -1271,13 +1284,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
                 commitPosition(capturePosition(true));
             }
-            saveReadingPositions();
             visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); characterPicker.suspend(); scheduleSave();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
             cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0; inputComposing = false;
         },
         refresh, layout,
-        prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); } },
+        getSelectedCharacter: () => selected,
+        prepareLayout() { if (visible) { closeResults(false); rememberPosition(true, false); saveViewState(); } },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
         async fillFromEntry(entry) {

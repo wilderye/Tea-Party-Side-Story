@@ -75,6 +75,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .tea-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:40px; min-width:40px; height:40px; border-radius:50%!important; }
 #teahouse-panel .tea-icon:hover:not(:disabled) { background:var(--tea-hover,#183e360c)!important; }
 #teahouse-panel .tea-icon.tea-settings-toggle[aria-pressed=true] { background:var(--tea-control-paper,var(--tea-forest))!important; color:var(--tea-control-ink,var(--tea-paper))!important; }
+#teahouse-panel .tea-icon.tea-history-toggle[aria-pressed=true] { background:var(--tea-control-paper,var(--tea-forest))!important; color:var(--tea-control-ink,var(--tea-paper))!important; }
 #teahouse-panel .tea-icon.tea-primary { width:48px; height:48px; min-width:48px; background:var(--tea-accent-paper,var(--tea-coral))!important; color:var(--tea-selected-ink,var(--tea-forest))!important; border-radius:8px!important; }
 #teahouse-panel .tea-primary svg { width:24px; height:24px; }
 #teahouse-panel .tea-star[aria-pressed=true] { color:var(--tea-accent,#b25442)!important; }
@@ -490,6 +491,46 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-workspace[hidden],
 #teahouse-panel .play-catalog[hidden] { display:none!important; }
 #teahouse-panel .play-page { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; position:relative; }
+#teahouse-panel .play-history-directory { display:flex; flex:1; flex-direction:column; min-height:0; }
+#teahouse-panel .play-history-search { display:flex; align-items:center; gap:12px; padding:20px 30px; }
+#teahouse-panel .play-history-search h2 { font:700 20px/28px var(--tea-display); }
+#teahouse-panel .play-history-search .tea-search-box { max-width:400px; margin-left:auto; }
+#teahouse-panel .play-history-list { padding:0 30px 24px; }
+#teahouse-panel .play-history-row { display:flex; align-items:center; gap:20px; width:100%; padding:20px 8px; text-align:left; border-bottom:1px solid var(--tea-line)!important; }
+#teahouse-panel .play-history-row:hover { background:var(--tea-hover,#183e360c)!important; }
+#teahouse-panel .play-history-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:8px; }
+#teahouse-panel .play-history-copy strong { font:600 18px/26px var(--tea-display); }
+#teahouse-panel .play-history-preview { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; color:var(--tea-muted); font:14px/24px var(--tea-ui); }
+#teahouse-panel .play-history-row .play-person-time { color:var(--tea-muted); }
+#teahouse-panel .play-chat-name { flex:none; padding:12px 30px; font:600 18px/26px var(--tea-display); border-bottom:1px solid var(--tea-line); }
+#teahouse-panel .play-chat-menu { position:relative; flex:none; }
+#teahouse-panel .play-chat-menu summary { list-style:none; cursor:pointer; }
+#teahouse-panel .play-chat-menu summary::-webkit-details-marker { display:none; }
+#teahouse-panel .play-chat-menu .tea-sort-menu { top:auto; bottom:calc(100% + 8px); left:0; right:auto; z-index:6; }
+#teahouse-panel .play-chat-version-choices { position:absolute; z-index:7; bottom:90px; left:20px; right:20px; max-height:50%; overflow:auto; display:flex; flex-direction:column; padding:12px; gap:4px; background:var(--tea-paper); border:1px solid var(--tea-line); box-shadow:0 8px 24px var(--tea-popup-shadow,#102f2826); }
+#teahouse-panel .play-chat-version-choices button { padding:12px; min-height:40px; text-align:left; font-size:14px; }
+#teahouse-panel .play-chat-feed .play-message { padding:0; margin-bottom:32px; }
+#teahouse-panel .play-chat-feed .play-message-actions { display:flex; justify-content:flex-start; flex-wrap:wrap; }
+#teahouse-panel .play-chat-feed .play-swipes { margin-left:auto; }
+#teahouse-panel .play-chat-feed .play-action-group { margin-left:8px; }
+#teahouse-panel .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); }
+#teahouse-panel .play-delete-select { display:block; width:100%; min-height:40px; text-align:left; color:var(--tea-accent)!important; }
+#teahouse-panel .play-delete-controls { position:sticky; bottom:0; display:flex; flex-wrap:wrap; gap:16px; padding:16px; background:var(--tea-paper); border:1px solid var(--tea-line); }
+#teahouse-panel .play-go-branch { margin:0 0 18px; }
+#teahouse-panel .play-favorite-content>.play-message { padding:0; margin-bottom:30px; }
+@media(max-width:760px) {
+    #teahouse-panel .play-history-search { padding:58px 18px 12px; gap:8px; flex-wrap:wrap; }
+    #teahouse-panel .play-history-search>.tea-icon { margin-left:auto; }
+    #teahouse-panel .play-history-search .tea-search-box { flex-basis:100%; max-width:none; }
+    #teahouse-panel .play-history-list { padding:0 18px 20px; }
+    #teahouse-panel .play-history-row { padding:18px 0; gap:12px; }
+    #teahouse-panel .play-history-row .play-person-time { display:flex; }
+    #teahouse-panel .play-history-copy strong { font-size:17px; }
+    #teahouse-panel .play-chat-name { padding:54px 19px 10px; font-size:16px; }
+    #teahouse-panel .play-chat-feed .play-feed-content { padding-top:20px; }
+    #teahouse-panel .play-chat-catalog .play-character-browser.is-mobile-open { display:flex; }
+    #teahouse-panel .play-chat-feed .play-message-actions .tea-icon { width:34px; min-width:34px; }
+}
 #teahouse-panel .play-reading-area {
     --play-prose-font:var(--tea-ui); --play-prose-weight:400; --play-prose-ink:var(--tea-prose-ink,#334437);
     --play-prose-leading:1.75; --play-paragraph-gap:.73em; --play-coral-ink:var(--tea-accent,#a46c4e);

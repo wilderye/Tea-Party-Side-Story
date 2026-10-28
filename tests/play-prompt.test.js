@@ -31,6 +31,35 @@ beforeEach(t => t.mock.method(globalThis, 'fetch', (url, options) => {
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
+test('酒馆正则保留原深度，分支忽略深度并过滤隐藏标签；显示专用规则不发给模型', async () => {
+    const f = fixture(), options = f.options(), nativeCalls = [], calls = [];
+    const scripts = [
+        { placement: [1, 2], findRegex: '普通', replaceString: '替换', minDepth: 100, maxDepth: 100 },
+        { placement: [1, 2], findRegex: '发送', replaceString: '处理', promptOnly: true, minDepth: 100, maxDepth: 100 },
+        { placement: [1, 2], findRegex: '显示', replaceString: '不发送替换', markdownOnly: true },
+    ];
+    f.modules.regex.getRegexedString = (text, placement, config) => { nativeCalls.push({ text, placement, config }); return text; };
+    f.modules.regex.getRegexScripts = () => scripts;
+    f.modules.regex.runRegexScript = (script, text) => { calls.push({ script, text }); return text.replaceAll(script.findRegex, script.replaceString); };
+    options.environment.branchMode = true; options.environment.playHiddenTags = '隐藏';
+    options.environment.playPrompt = '本轮要求'; options.environment.playPromptPosition = 'user-after';
+    options.environment.branchHistory = [
+        { role: 'user', text: '旧用户普通发送显示<隐藏>不发送</隐藏>' },
+        { role: 'assistant', text: '旧AI普通发送显示<隐藏>不能见到</隐藏>' },
+    ];
+    options.prompt = '下一轮普通发送显示<隐藏>隐藏新输入</隐藏>';
+    const original = structuredClone(f.context.chat);
+    const request = await f.prepare(options); await request.send({ signal: options.signal });
+    const messages = f.requests[0].payload.messages;
+    const historyCalls = nativeCalls.filter(call => call.config?.isPrompt);
+    assert.equal(historyCalls.length, original.length);
+    assert.deepEqual(historyCalls.map(call => call.config.depth), original.map((_, index) => original.length - index - 1));
+    assert.deepEqual(messages.slice(-3).map(message => message.content), ['旧用户替换处理显示', '旧AI替换处理显示', '下一轮替换处理显示\n\n本轮要求']);
+    assert.equal(calls.length, 6);
+    assert.equal(messages.map(message => message.content).join('\n').split('本轮要求').length, 2);
+    assert.deepEqual(f.context.chat, original);
+});
+
 for (const squash of [false, true]) test(`自定义提示词在发送前回调之后仍位于最前面且只出现一次，合并系统消息=${squash}`, async () => {
     const f = fixture(); f.context.chatCompletionSettings.squash_system_messages = squash;
     f.source.on(f.events.GENERATE_AFTER_DATA, data => data.prompt.unshift({ role: 'system', content: '拼装后的扩展内容' }));

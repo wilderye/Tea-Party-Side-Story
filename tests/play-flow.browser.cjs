@@ -26,7 +26,7 @@ window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{prepareRequ
 window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml,true);
 document.getElementById('render').onclick=()=>window.renderText('<!doctype html><html><head><style>body{min-height:100vh}</style></head><body><p>网页回复正文</p><button id="expand">展开更多</button><div id="more"></div><script>document.getElementById("expand").onclick=()=>{document.getElementById("more").innerHTML="<p>更多内容</p>".repeat(40)};<'+ '/script></body></html>');
 </script>`;
-const allowed = new Set(['style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
+const allowed = new Set(['play-chat-favorites.js', 'style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
   'play-storage-worker.js', 'play-storage-lock.js', 'play-prompt.js', 'play-task-module.js', 'play-template-context.js','play-variable-context.js', 'play-preparation.js', 'play-preset.js', 'play-parameters.js', 'play-request.js',
   'play-render.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
 const server = http.createServer(async (request, response) => {
@@ -295,7 +295,10 @@ async function verifyExpiredWriter(page) {
       assert.deepEqual(withoutReply.results,[],'页面、共享后台及兼容入口都删除 AI 消息的全部版本');
       const reader = a.isClosed() ? b : a;
       assert.deepEqual((await reader.evaluate(id=>runtime.getRound(id),round.id)).results,[]);
-      assert.equal(await b.evaluate(({id,prompt})=>runtime.removePrompt(id,prompt),withoutReply),null);
+      const empty = await b.evaluate(({id,prompt})=>runtime.removePrompt(id,prompt),withoutReply);
+      assert.equal(empty.prompt,null); assert.deepEqual(empty.results,[]);
+      assert.equal((await b.evaluate(id=>runtime.listChats(id),round.characterId)).some(row=>row.id===round.id),true,
+        '消息清空后仍保留历史聊天');
       assert.equal((await reader.evaluate(id=>runtime.listRounds(id),round.characterId)).some(row=>row.id===round.id),false,
         '删除用户消息后，两条消息都已移除的记录不会在其他窗口恢复');
       assert.deepEqual(errors,[]);

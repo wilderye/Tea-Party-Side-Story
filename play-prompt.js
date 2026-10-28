@@ -7,6 +7,7 @@ import { loadPlayModuleSource } from './play-task-module.js';
 import { getPlayPreparationCoordinator } from './play-preparation.js';
 import { readPlayTemplateFeatures } from './play-template-context.js';
 import { readPlayHelperVariables } from './play-variable-context.js';
+import { processPlayPromptText } from './play-processing.js';
 
 async function loadTavernModules() {
     const paths = {
@@ -120,11 +121,12 @@ function addPersona(modules, settings) {
 async function formatHistory(modules, chat, environment, isContinue) {
     const { regex, chats } = modules;
     const canUseTools = environment.tavern.canUseTools ?? modules.tools.ToolManager.isToolCallingSupported();
-    const regexText = (text, placement, depth) => {
+    const regexText = (text, placement, depth, branch = false) => {
         const scripts = environment.tavern.regexScripts;
+        if (branch) return processPlayPromptText(text, environment.playHiddenTags, regex, placement, scripts);
         if (!scripts) return regex.getRegexedString(text, placement, { isPrompt: true, depth });
         for (const script of scripts) {
-            if (!script.promptOnly || !script.placement?.includes(placement)) continue;
+            if (script.disabled || !script.promptOnly || !script.placement?.includes(placement)) continue;
             if (script.minDepth !== null && Number.isFinite(Number(script.minDepth)) && script.minDepth >= -1 && depth < script.minDepth) continue;
             if (script.maxDepth !== null && Number.isFinite(Number(script.maxDepth)) && script.maxDepth >= 0 && depth > script.maxDepth) continue;
             text = regex.runRegexScript(script, text);
@@ -132,9 +134,10 @@ async function formatHistory(modules, chat, environment, isContinue) {
         return text;
     };
     const history = chat.filter(message => !message.is_system || (canUseTools && Array.isArray(message.extra?.tool_invocations)));
+    const nativeLength = environment.branchMode ? history.filter(message => !message.playBranch).length : history.length;
     const prepared = await Promise.all(history.map(async (message, index) => {
         const placement = message.is_user ? regex.regex_placement.USER_INPUT : regex.regex_placement.AI_OUTPUT;
-        let text = regexText(message.mes, placement, history.length - index - (isContinue ? 2 : 1));
+        let text = regexText(message.mes, placement, nativeLength - index - (isContinue && !environment.branchMode ? 2 : 1), message.playBranch);
         text = await chats.appendFileContent(message, text);
         const titles = [];
         if (message.extra?.append_title && message.extra.title) titles.push(message.extra.title);
@@ -149,7 +152,7 @@ async function formatHistory(modules, chat, environment, isContinue) {
     let continuationReasoning = '', reasoningPrefix = '';
     if (isContinue && prepared.length) {
         const target = prepared.at(-1);
-        const text = regexText(String(target.extra?.reasoning ?? ''), regex.regex_placement.REASONING, -1);
+        const text = regexText(String(target.extra?.reasoning ?? ''), regex.regex_placement.REASONING, -1, target.playBranch);
         continuationReasoning = text === '\u200B' ? '' : text;
         if (continuationReasoning && environment.continuation?.sendReasoning !== false) {
             const template = environment.tavern.power.reasoning ?? {};
@@ -262,15 +265,23 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
             chat.splice(environment.unfinishedMessageId, 1);
         }
         if (chat[0]) chat[0].mes = core.substituteParams(chat[0].mes);
-        const userPrompt = core.substituteParams(prompt);
+        for (const message of environment.branchHistory ?? []) {
+            chat.push({ name: message.role === 'user' ? context.name1 : context.name2,
+                is_user: message.role === 'user', is_system: false, mes: core.substituteParams(message.text), extra: {}, playBranch: true });
+        }
+        const userPrompt = typeof prompt === 'string' ? core.substituteParams(prompt) : '';
         const userMessage = !customPrompt || promptPosition === 'start' ? userPrompt
             : (promptPosition === 'user-before' ? [customPrompt, userPrompt] : [userPrompt, customPrompt]).join('\n\n');
-        chat.push({ name: context.name1, is_user: true, is_system: false, mes: userMessage, extra: {} });
+        if (!environment.branchMode || userMessage) chat.push({ name: context.name1, is_user: true, is_system: false,
+            mes: userMessage, extra: {}, ...(environment.branchMode ? { playBranch: true } : {}) });
         if (continueMessage) {
-            chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}) });
+            chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}),
+                ...(environment.branchMode ? { playBranch: true } : {}) });
         }
         if (environment.independent) core.chat.splice(0, core.chat.length, ...chat);
         const { history, continuationReasoning, reasoningPrefix } = await formatHistory(modules, chat, environment, !!continueMessage);
+        const cyclePrompt = environment.branchMode && continueMessage
+            ? history.at(-1).mes.slice(reasoningPrefix.length) : continueMessage;
         guard();
         const maxContext = environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens;
         const aborted = await extensions.runGenerationInterceptors(history, maxContext, continueMessage ? 'continue' : 'normal');
@@ -318,7 +329,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
             extensionPrompts: core.extension_prompts, bias: promptBias,
             type: continueMessage ? 'continue' : 'normal',
             quietPrompt: '', quietImage: null,
-            cyclePrompt: continueMessage || '',
+            cyclePrompt: cyclePrompt || '',
             cycleReasoning: reasoningPrefix,
             systemPromptOverride: fields.system,
             jailbreakPromptOverride: fields.jailbreak, history,

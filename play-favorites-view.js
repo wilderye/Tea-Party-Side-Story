@@ -1,7 +1,8 @@
-import { element, iconButton } from './ui.js';
+import { element, iconButton, textButton } from './ui.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { truncateTitle } from './library.js';
+import { createCharacterAvatar } from './play-character-picker.js';
 
 export function favoriteFirstLine(text) {
     return [...playTextPreview(text, true)].slice(0, 160).join('');
@@ -17,7 +18,7 @@ export function favoriteSourceKey({ roundId, resultId, startedAt }) {
 }
 
 /** A reader owns its inline draft; saved content stays in the history service. */
-export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, notify }) {
+export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, onGoToBranch, notify }) {
     const node = element('article', undefined, 'play-favorite-reading tea-scroll');
     const navigation = element('nav', undefined, 'play-favorite-navigation');
     navigation.setAttribute('aria-label', '演出记录收藏切换');
@@ -31,6 +32,19 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     const character = element('p', '', 'play-favorite-character');
     const tools = element('div', undefined, 'play-header-actions');
     const body = element('div', undefined, 'play-favorite-content');
+    const goToBranch = textButton('前往分支', () => {
+        if (!value || value.frozen || !onGoToBranch) return;
+        const source = value.source;
+        if (source.type === 'chat') onGoToBranch(source.chatId);
+        else void (async () => {
+            try {
+                const chat = await playground.getChat(source.roundId);
+                const message = chat.messages.find(message => message.results?.some(result => result.id === source.resultId));
+                onGoToBranch(source.roundId, message?.id ?? source.messageId ?? 'missing');
+            } catch (error) { notify(error.message); }
+        })();
+    }); goToBranch.className = 'tea-text-button play-go-branch';
+    const sourceNotice = element('p', '', 'play-favorite-source-notice');
     const edit = iconButton('edit', '编辑演出记录收藏', beginEdit);
     const remove = iconButton('star', '取消收藏', async () => {
         if (!value || removing || editor) return;
@@ -40,8 +54,9 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         finally { removing = false; remove.disabled = false; edit.disabled = false; updateNavigation(); }
     });
     remove.classList.add('tea-star'); remove.setAttribute('aria-pressed', 'true');
-    heading.append(title, character); head.append(heading, tools); article.append(head, body); node.append(navigation, article);
-    let value, editor, signature, loadingId = 0, requestedRevision, removing = false;
+    heading.append(title, character); head.append(heading, tools); article.append(head, goToBranch, sourceNotice, body); node.append(navigation, article);
+    let value, editor, signature, loadingId = 0, requestedRevision, removing = false, renderedMessages = 0;
+    const moreMessages = textButton('显示更多聊天内容', () => appendMessages());
     let canPrevious = false, canNext = false;
 
     function navigationButton(icon, label, direction) {
@@ -85,19 +100,49 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         if (!value || editor) return;
         title.textContent = value.title; title.hidden = !value.title.trim();
         character.textContent = value.characterName;
-        heading.replaceChildren(title, character); tools.replaceChildren(remove, edit);
+        heading.replaceChildren(title, character); tools.replaceChildren(remove, ...(value.format === 2 ? [] : [edit]));
+        goToBranch.hidden = !onGoToBranch || value.source.type === 'manual'; goToBranch.disabled = !!value.frozen;
+        sourceNotice.textContent = value.frozen ? '来源聊天已删除' : ''; sourceNotice.hidden = !value.frozen;
+        if (value.format === 2) {
+            const key = value.revision;
+            if (signature === key) return;
+            const previousCount = renderedMessages;
+            renderedMessages = 0; body.replaceChildren();
+            appendMessages(Math.max(24, previousCount)); signature = key; return;
+        }
         const text = value.cleaned ? value.text : (playground.display?.process(value.text, { avatar: value.characterAvatar, name: value.characterName }) ?? value.text);
         if (signature === text) return;
         if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true);
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         signature = text;
     }
+    function appendMessages(count = 24) {
+        moreMessages.remove();
+        const fragment = document.createDocumentFragment();
+        for (const message of value.messages.slice(renderedMessages, renderedMessages + count)) {
+            const user = message.role === 'user', identity = { name: message.speakerName ?? (user ? '用户' : value.characterName),
+                avatar: message.speakerAvatar || null };
+            const floor = element('section', undefined, `play-message play-${user ? 'user' : 'assistant'}-message`);
+            const head = element('header', undefined, `play-message-meta play-${user ? 'user' : 'assistant'}-meta`);
+            head.append(createCharacterAvatar(() => ({}), identity, 'play-message-avatar', user ? 'persona' : 'avatar'));
+            const speaker = element('div', undefined, 'play-message-identity');
+            speaker.append(element('strong', identity.name, 'play-speaker'));
+            const date = new Date(message.createdAt);
+            speaker.append(element('time', `${date.getMonth() + 1}/${date.getDate()} · ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`, 'play-message-time'));
+            head.append(speaker);
+            const content = element('div', undefined, user ? 'play-user-text' : 'play-results');
+            renderPlayText(content, message.text, `favorite/${value.id}/${message.messageId}`, !user, true);
+            floor.append(head, content); fragment.append(floor); renderedMessages++;
+        }
+        body.append(fragment);
+        if (renderedMessages < value.messages.length) body.append(moreMessages);
+    }
     function finish() {
         editor?.dispose();
         editor = null; signature = null; updateNavigation(); render(); edit.focus({ preventScroll: true });
     }
     function beginEdit() {
-        if (!value || editor || removing) return;
+        if (!value || value.format === 2 || editor || removing) return;
         const original = value;
         const initialText = original.cleaned ? original.text : (playground.display?.process(original.text, { avatar: original.characterAvatar, name: original.characterName }) ?? original.text);
         editor = createPlayEditor({ text: initialText, title: original.title, autoGrow: false, onCancel: finish,
@@ -114,7 +159,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     }
     async function load(row, force = false) {
         if (editor) return;
-        if (!force && row.revision === requestedRevision) { render(); return; }
+        if (!force && row.revision === requestedRevision && row.source.type !== 'chat') { render(); return; }
         const id = ++loadingId; requestedRevision = row.revision;
         title.textContent = row.title; title.hidden = !row.title.trim(); character.textContent = row.characterName;
         if (!value) body.replaceChildren(element('p', '正在读取收藏…', 'play-result-empty'));
@@ -122,6 +167,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
             const next = await playground.getFavorite(row.id);
             if (!next.cleaned) await playground.display?.ensure?.({ avatar: next.characterAvatar, name: next.characterName });
             if (id !== loadingId) return;
+            if (value?.id !== next.id) renderedMessages = 0;
             value = next; requestedRevision = next.revision; render();
         } catch (error) {
             if (id !== loadingId) return;

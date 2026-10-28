@@ -3,6 +3,7 @@ import { createPlayground, PlaygroundError } from './playground.js';
 import { createNativePlayPreparer } from './play-prompt.js';
 import { readPlaySettings, readPlayContinuationSettings, readPlayRetrySettings } from './play-settings.js';
 import { createPlayDisplay } from './play-processing.js';
+import { createPlayChatFavorites } from './play-chat-favorites.js';
 
 export function readPlayTarget(context) {
     if (context.groupId !== undefined && context.groupId !== null && context.groupId !== '') {
@@ -42,6 +43,7 @@ export function capturePlayEnvironment(context, settings, requested = {}) {
             api,
             playPrompt: playSettings.prompt,
             playPromptPosition: playSettings.promptPosition,
+            playHiddenTags: playSettings.hiddenTags,
             continuation: readPlayContinuationSettings(settings),
             retry: readPlayRetrySettings(settings),
             tavern: {
@@ -99,7 +101,30 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         const { createPlayDisplayRegex } = await import('./play-independent.js');
         return createPlayDisplayRegex(context, modules, character, prepareRequest.capture(character));
     });
-    return { ...playground, display: createPlayDisplay(ctx, settings, loadDisplayRegex, diagnostics),
+    const display = createPlayDisplay(ctx, settings, loadDisplayRegex, diagnostics);
+    const chatFavorites = createPlayChatFavorites(history, display);
+    function legacySelection(id, options) {
+        if (!options?.selectedResultId) {
+            try {
+                const saved = JSON.parse(ctx().accountStorage?.getItem('teahouse-play-view-v1') ?? 'null');
+                const selectedResultId = saved?.selections?.find(([chatId]) => chatId === id)?.[1];
+                if (selectedResultId) return { ...options, selectedResultId };
+            } catch { /* Draft storage failure must not prevent reading persisted history. */ }
+        }
+        return options;
+    }
+    return { ...playground, display,
+        getChat(id, options) {
+            return playground.getChat(id, legacySelection(id, options));
+        },
+        getChatPreview: (id, options) => playground.getChatPreview(id, legacySelection(id, options)),
+        getChatSearch: (id, options) => playground.getChatSearch(id, legacySelection(id, options)),
+        getFavorite: id => chatFavorites.read(id),
+        favoriteChat: id => chatFavorites.add(id),
+        deleteChat: (id, revision) => {
+            if (!playground.availability({ chatId: id }).available) throw new PlaygroundError('busy', '请结束并保存这条聊天后再删除。');
+            return chatFavorites.removeChat(id, revision);
+        },
         addManualFavorite({ characterAvatar, title, text, firstLine }) {
             const card = ctx().characters?.find(character => character.avatar === characterAvatar);
             if (!card?.avatar || !card.name) throw new PlaygroundError('target_character_missing', '所选角色卡已不存在，请重新选择角色。');

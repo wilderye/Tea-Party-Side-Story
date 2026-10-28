@@ -17,7 +17,7 @@ test('删除 AI 消息移除全部版本，保留用户消息、收藏副本及�
         startedAt: round.results[1].startedAt, expectedText: '第二份回复', firstLine: '第二份回复' });
     const people = await f.store.listCharacters();
     const removed = await f.store.removeReply(round.id, round.results);
-    assert.deepEqual(removed, { ...round, results: [] });
+    assert.deepEqual(removed, { ...round, results: [], selectedResultId: null, initialAssistantId: null });
     assert.deepEqual(await f.createStore().getRound(round.id), removed);
     assert.equal((await f.createStore().getFavorite(favorite.id)).text, favorite.text);
     assert.deepEqual(await f.store.listCharacters(), people);
@@ -39,7 +39,7 @@ test('删除用户消息保留 AI 回复；不能编辑恢复原提示词或用�
     assert.deepEqual((await f.store.getRound(round.id)).results, round.results);
 });
 
-test('两个消息都删掉后移除整轮；迟到保存、重复删除和收藏读取不会恢复它', async () => {
+test('两个消息都删掉后保留空历史，游玩不显示；迟到保存和收藏读取不会恢复消息', async () => {
     for (const firstRole of ['user', 'assistant']) {
         const f = memoryFiles(), round = await completedRound(f);
         const favorite = await f.store.addFavorite({ roundId: round.id, resultId: round.results[0].id,
@@ -47,11 +47,13 @@ test('两个消息都删掉后移除整轮；迟到保存、重复删除和收�
         const removePrompt = () => f.store.removePrompt(round.id, round.prompt);
         const removeReply = () => f.store.removeReply(round.id, round.results);
         await (firstRole === 'user' ? removePrompt() : removeReply());
-        assert.equal(await (firstRole === 'user' ? removeReply() : removePrompt()), null);
+        const empty = await (firstRole === 'user' ? removeReply() : removePrompt());
+        assert.equal(empty.prompt, null); assert.deepEqual(empty.results, []);
         assert.deepEqual(await f.store.listRounds(round.characterId), []);
-        await assert.rejects(f.store.getRound(round.id), error => error.code === 'round_missing');
+        assert.deepEqual(await f.store.getRound(round.id), empty);
+        assert.equal((await f.store.listChats(round.characterId)).length, 1);
         assert.equal((await f.store.getFavorite(favorite.id)).text, '第一份回复');
-        assert.equal(await removeReply(), null); assert.equal(await removePrompt(), null);
+        assert.deepEqual(await removeReply(), empty); assert.deepEqual(await removePrompt(), empty);
         await assert.rejects(f.store.saveResult(round.id, round.results[0].id,
             { status: 'complete', text: '迟到的回复', finishedAt: time(3) }), error => error.code === 'result_missing');
         assert.deepEqual(await f.store.listRounds(round.characterId), []);
@@ -73,7 +75,8 @@ test('删除保存失败保留原记录；目录确认成功后才清理旧正�
     assert.deepEqual(await f.store.getRound(round.id), removed);
     assert.equal(f.files.has(promptFile), true);
     f.io.beforeWrite = null;
-    assert.equal(await f.store.removePrompt(round.id, round.prompt), null);
+    const empty = await f.store.removePrompt(round.id, round.prompt);
+    assert.equal(empty.prompt, null); assert.deepEqual(empty.results, []);
     assert.equal(f.files.has(promptFile), false);
 });
 

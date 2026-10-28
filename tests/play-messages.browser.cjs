@@ -80,7 +80,7 @@ async function verifyDeletion(page, url, viewport) {
             inside: rects.every(rect => rect.left >= area.left - 1 && rect.right <= area.right + 1),
             separate: rects.every((rect, index) => index === 0 || rect.left >= rects[index - 1].right) };
     });
-    assert.deepEqual(layout.labels, ['取消收藏', '编辑回复原文', '删除 AI 消息']);
+    assert.deepEqual(layout.labels, ['创建分支', '取消收藏', '编辑回复原文', '删除 AI 消息']);
     if (viewport.width <= 760) assert.equal(layout.avatarsAligned && layout.namesAligned, true, '手机端用户与 AI 的头像、姓名和时间共用左侧排列');
     else assert.equal(layout.userOnRight, true, '电脑端用户头像、姓名和时间靠右，操作按钮在其左侧');
     assert.equal(layout.sameRow && layout.inside && layout.separate, true, '收藏、编辑、删除在同一行且不重叠');

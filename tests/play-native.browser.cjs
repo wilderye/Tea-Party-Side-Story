@@ -9,10 +9,13 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 (async () => {
+  assert.ok(process.env.PLAY_NATIVE_URLS,'请明确指定已确认可丢弃的酒馆测试地址');
+  const urls=process.env.PLAY_NATIVE_URLS.split(',').map(value=>new URL(value.trim()));
+  assert.ok(urls.every(url=>url.hostname==='127.0.0.1'),'原生测试只使用隔离酒馆的本地地址');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
-    for (const url of (process.env.PLAY_NATIVE_URLS || 'http://127.0.0.1:9051,http://127.0.0.1:9052').split(',')) {
-      const port = new URL(url.trim()).port;
+    for (const target of urls) {
+      const url=target.href,port=target.port;
       const page = await browser.newPage();
       const errors = [], outbound = [];
       page.on('pageerror', error => errors.push(error.message));
@@ -29,6 +32,12 @@ const root = path.resolve(__dirname, '..');
       await page.goto(url.trim());
       await page.waitForFunction(() => window.SillyTavern?.getContext?.().chatCompletionSettings?.prompts?.length > 0);
       await page.evaluate(() => new Promise(resolve => { const ctx = SillyTavern.getContext(); ctx.eventSource.once(ctx.eventTypes.APP_READY, resolve); }));
+      await page.evaluate(async()=>{
+        const core=await import('/script.js'),ctx=SillyTavern.getContext(),form=new FormData();
+        form.set('ch_name','Tea Runtime Synthetic');form.set('description','合成角色说明');form.set('first_mes','合成前情');
+        const response=await fetch('/api/characters/create',{method:'POST',headers:{'X-CSRF-Token':ctx.getRequestHeaders()['X-CSRF-Token']},body:form});
+        if(!response.ok)throw Error('创建合成角色失败');window.teaRuntimeAvatar=await response.text();await core.getCharacters();
+      });
       const result = await page.evaluate(async () => {
         const openai = await import('/scripts/openai.js');
         const core = await import('/script.js');
@@ -159,7 +168,7 @@ const root = path.resolve(__dirname, '..');
         const openai=await import('/scripts/openai.js'), core=await import('/script.js');
         const {createPlayRuntime}=await import('/scripts/extensions/third-party/tea-review/play-runtime.js');
         const {createPlayHistory}=await import('/scripts/extensions/third-party/tea-review/play-history.js');
-        await SillyTavern.getContext().selectCharacterById(0);
+        await SillyTavern.getContext().selectCharacterById(SillyTavern.getContext().characters.findIndex(character=>character.avatar===window.teaRuntimeAvatar));
         Object.assign(openai.oai_settings,structuredClone(window.playNativeBase.settings),{chat_completion_source:'openai',openai_model:'gpt-4o',temp_openai:0.7,stream_openai:false,n:3});
         openai.oai_settings.prompts.find(item=>item.identifier==='main').content='固定预设正文';
         let gate,entered;const held=new Promise(resolve=>gate=resolve),began=new Promise(resolve=>entered=resolve);
@@ -170,14 +179,16 @@ const root = path.resolve(__dirname, '..');
         const sending=runtime.send({prompt:'测试本次小剧场'});await Promise.race([began,sending.then(()=>{throw Error('Missing save checkpoint')})]);
         openai.oai_settings.openai_model='gpt-4.1';openai.oai_settings.temp_openai=1.3;openai.oai_settings.prompts.find(item=>item.identifier==='main').content='不应混入的后来预设';gate();
         const result=await sending;
-        return {result,payload,chatUnchanged:JSON.stringify(before)===JSON.stringify(original.chat),latestModel:openai.oai_settings.openai_model};
+        const {DEFAULT_PLAY_PROMPT}=await import('/scripts/extensions/third-party/tea-review/play-settings.js');
+        return {result,payload,chatUnchanged:JSON.stringify(before)===JSON.stringify(original.chat),latestModel:openai.oai_settings.openai_model,customPrompt:DEFAULT_PLAY_PROMPT};
       });
       assert.equal(runtime.result.result.status,'complete',JSON.stringify(runtime.result));
+      runtime.payload ??= outbound.at(-1);
       assert.equal(runtime.payload.model,'gpt-4o');assert.equal(runtime.payload.temperature,0.7);assert.equal(runtime.payload.n??1,1);
       assert.ok(runtime.payload.messages.some(message=>String(message.content).includes('固定预设正文')));
       assert.ok(!JSON.stringify(runtime.payload.messages).includes('不应混入的后来预设'));
       assert.equal(runtime.latestModel,'gpt-4.1');assert.equal(runtime.chatUnchanged,true);
-      assert.equal(outbound.at(-1).messages[0].content,'本次仅输出小剧场，不生成任何状态栏或待办等附加内容。');
+      assert.ok(outbound.at(-1).messages.some(message=>String(message.content).includes(runtime.customPrompt)));
       assert.deepEqual(errors, [], 'native flow must not raise browser errors');
       console.log(JSON.stringify({port,check:'full runtime with settings switched during save',status:runtime.result.result.status,model:runtime.payload.model,n:runtime.payload.n}));
 
@@ -193,7 +204,7 @@ const root = path.resolve(__dirname, '..');
         const ctx=()=>SillyTavern.getContext();
         Object.assign(openai.oai_settings,structuredClone(window.playNativeBase.settings),{chat_completion_source:'openai',openai_model:'gpt-4o',stream_openai:false,n:1});
         const files=new Map(),history=createPlayHistory({readFile:async name=>files.get(name)??null,writeFile:async(name,text)=>files.set(name,text),removeFile:async name=>files.delete(name)});
-        const settings={enabled:true,playPrompt:'自定义请求最前段',playApi:{mode:'tavern'}};
+        const settings={enabled:true,playPrompt:'自定义请求最前段',playPromptConfig:{position:'start'},playApi:{mode:'tavern'}};
         const runtime=createPlayRuntime(ctx,settings,history);await runtime.initialize();
         const assembled=data=>data.prompt.unshift({role:'system',content:'ASSEMBLED_CALLBACK'});
         const final=data=>data.messages.unshift({role:'system',content:'SETTINGS_CALLBACK'});
@@ -274,6 +285,52 @@ const root = path.resolve(__dirname, '..');
       assert.equal(additions.regex.excluded,'GLOBAL');assert.equal(new Set(additions.regex.keys).size,3);
       assert.deepEqual(errors,[]);
       console.log(JSON.stringify({port,check:'prefix, token budget, native regex',requests:additions.requests,budget:additions.budget,regex:additions.regex.rendered,errors}));
+      const branchStart=outbound.length;
+      const branches=await page.evaluate(async()=>{
+        const core=await import('/script.js'),openai=await import('/scripts/openai.js');
+        const regex=await import('/scripts/extensions/regex/engine.js');
+        const {createPlayHistory}=await import('/scripts/extensions/third-party/tea-review/play-history.js');
+        const {createPlayRuntime}=await import('/scripts/extensions/third-party/tea-review/play-runtime.js');
+        const ctx=()=>SillyTavern.getContext();
+        const form=new FormData();form.set('ch_name','Tea Branch Synthetic');form.set('description','合成分支测试角色');form.set('first_mes','合成酒馆开头');
+        const response=await fetch('/api/characters/create',{method:'POST',headers:{'X-CSRF-Token':ctx().getRequestHeaders()['X-CSRF-Token']},body:form});
+        if(!response.ok)throw Error('无法创建合成角色');
+        const avatar=await response.text();await core.getCharacters();
+        await ctx().selectCharacterById(ctx().characters.findIndex(character=>character.avatar===avatar));
+        const before=JSON.stringify(core.chat),beforeMetadata=JSON.stringify(core.chat_metadata);
+        Object.assign(openai.oai_settings,structuredClone(window.playNativeBase.settings),{stream_openai:false,n:1,function_calling:false});
+        const script=(id,findRegex,replaceString,extra={})=>({id,scriptName:id,findRegex,replaceString,trimStrings:[],placement:[1,2],
+          disabled:false,markdownOnly:false,promptOnly:false,runOnEdit:true,substituteRegex:0,minDepth:999,maxDepth:1000,...extra});
+        await regex.saveScriptsByType([script('branch-normal','分支原文','分支替换'),script('branch-prompt','发送标记','发送替换',{promptOnly:true}),
+          script('branch-display','显示标记','不应发送替换',{markdownOnly:true})],regex.SCRIPT_TYPES.GLOBAL);
+        await regex.saveScriptsByType([],regex.SCRIPT_TYPES.PRESET);await regex.saveScriptsByType([],regex.SCRIPT_TYPES.SCOPED);
+        const files=new Map(),history=createPlayHistory({readFile:async name=>files.get(name)??null,writeFile:async(name,text)=>files.set(name,text),removeFile:async name=>files.delete(name)});
+        const character={avatar,name:'Tea Branch Synthetic'},stamp=new Date().toISOString();
+        const round=await history.begin({character,prompt:'分支原文发送标记显示标记<隐藏>不发用户</隐藏>',resultId:ctx().uuidv4(),startedAt:stamp,
+          context:{chatId:'synthetic',apiMode:'tavern',characterName:character.name}});
+        await history.saveResult(round.id,round.results[0].id,{text:'分支原文发送标记显示标记<隐藏>不发AI</隐藏>',status:'complete',finishedAt:stamp});
+        const chat=await history.getChat(round.id),branch=await history.createBranch(chat.id,chat.messages[1].id);
+        const settings={enabled:true,playHiddenTags:'隐藏',playPrompt:'本轮合成要求',playPromptConfig:{position:'user-after'}};
+        const runtime=createPlayRuntime(ctx,settings,history);await runtime.initialize();
+        const completed=await runtime.sendChat(branch.id,{character,characterId:branch.characterId,prompt:'本轮分支原文发送标记显示标记<隐藏>不发本轮</隐藏>'});
+        settings.playNoChat=true;
+        const noChat=await runtime.sendChat(branch.id,{character,characterId:branch.characterId,prompt:'不含酒馆续聊'});
+        const current=await runtime.getChat(branch.id),last=current.messages.at(-1);
+        const continuation=await runtime.continueChat(branch.id,last.id,last.selectedResultId,{character,characterId:branch.characterId});
+        return{statuses:[completed.result.status,noChat.result.status,continuation.result.status],
+          unchanged:before===JSON.stringify(core.chat)&&beforeMetadata===JSON.stringify(core.chat_metadata),
+          savedRaw:(await history.getChat(branch.id)).messages[0].text};
+      });
+      assert.deepEqual(branches.statuses,['complete','complete','complete']);assert.equal(branches.unchanged,true);
+      assert.match(branches.savedRaw,/<隐藏>不发用户<\/隐藏>/);
+      const branchRequests=outbound.slice(branchStart);assert.equal(branchRequests.length,3);
+      const first=JSON.stringify(branchRequests[0].messages);
+      assert.match(first,/合成酒馆开头/);assert.match(first,/分支替换发送替换显示标记/);
+      assert.doesNotMatch(first,/不发用户|不发AI|不发本轮|不应发送替换/);
+      assert.equal(first.split('本轮合成要求').length,2);
+      const independent=JSON.stringify(branchRequests[1].messages);assert.doesNotMatch(independent,/合成酒馆开头/);
+      assert.match(independent,/分支替换发送替换显示标记/);
+      assert.deepEqual(errors,[]);console.log(JSON.stringify({port,check:'native branch followup, regex, noChat, continuation, main-chat preservation',passed:true}));
       await page.close();
     }
   } finally { await browser.close(); }

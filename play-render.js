@@ -111,6 +111,30 @@ export function playTextPreview(source, firstLine = false) {
     return web ? '网页结果' : '';
 }
 
+/** Full searchable text without running scripts or loading page resources. */
+export function playSearchText(source) {
+    const visibleHtml = html => {
+        const template = document.createElement('template'); template.innerHTML = html;
+        for (const node of template.content.querySelectorAll('script,style,template,iframe,svg,head,meta,link,[hidden],[aria-hidden="true"]')) node.remove();
+        for (const node of template.content.querySelectorAll('[style]')) {
+            if (node.style.display === 'none' || node.style.visibility === 'hidden') node.remove();
+        }
+        return template.content.textContent ?? '';
+    };
+    if (/^\s*(?:<!doctype\s+html\b|<html\b)/i.test(source)) return visibleHtml(source).replace(/\s+/g, ' ').trim();
+    const text = [];
+    for (const token of parser.parse(source, {})) {
+        if (token.type === 'html_block' || token.type === 'fence' && /^html$/i.test(token.info.trim())) text.push(visibleHtml(token.content));
+        else if (token.type === 'fence' || token.type === 'code_block') text.push(token.content);
+        else if (token.type === 'inline') {
+            const html = token.children.some(child => child.type === 'html_inline');
+            if (html) text.push(visibleHtml(parser.renderInline(token.content)));
+            else text.push(token.children.map(child => ['text', 'code_inline', 'image'].includes(child.type) ? child.content : ' ').join(''));
+        }
+    }
+    return text.join('\n').replace(/\s+/g, ' ').trim();
+}
+
 /** Render prose and fenced or unfenced HTML, without changing the saved text. */
 export function renderPlayText(container, source, anchor, renderHtml = false, hideEnglishTags = false) {
     const fragment = document.createDocumentFragment();

@@ -30,6 +30,8 @@ tests/*
 !tests/random-sort.test.js
 !tests/generation.test.js
 !tests/play-history.test.js
+!tests/play-chat.test.js
+!tests/play-chat.browser.cjs
 !tests/play-storage.test.js
 !tests/playground.test.js
 !tests/play-concurrency.test.js

@@ -52,7 +52,7 @@ export function hidePlayTags(source, names) {
 }
 
 /** Keep the host's source order, with source identity attached for exclusions. */
-export function readTavernRegex(engine, context, character) {
+export function readTavernRegex(engine, context, character, placement = engine.regex_placement.AI_OUTPUT) {
     if (context.extensionSettings?.disabledExtensions?.includes('regex')) return [];
     const current = context.characters?.[context.characterId];
     const target = character?.avatar ? context.characters?.find(item => item.avatar === character.avatar) : current;
@@ -65,7 +65,7 @@ export function readTavernRegex(engine, context, character) {
         (source === 'SCOPED' && target?.avatar !== current?.avatar
             ? (context.extensionSettings?.character_allowed_regex?.includes(target?.avatar) ? target?.data?.extensions?.regex_scripts ?? [] : [])
             : engine.getScriptsByType(type, { allowedOnly: true }))
-            .filter(script => !script.disabled && script.placement?.includes(engine.regex_placement.AI_OUTPUT)
+            .filter(script => !script.disabled && script.placement?.includes(placement)
                 && (!script.promptOnly || script.markdownOnly))
             .map(script => ({ source, key: JSON.stringify([source, ...owner[source], script.id]), script: structuredClone(script) })));
 }
@@ -198,6 +198,24 @@ export function processPlayText(source, settings, rules, runRegex) {
     return text;
 }
 
+/** Branch originals have not passed Tavern's ordinary write-time regex stage. */
+export function processPlayPromptText(source, hiddenTags, engine, placement, scripts) {
+    let text = hidePlayTags(source, hiddenTags ?? '');
+    const rules = scripts ?? engine.getRegexScripts?.({ allowedOnly: true });
+    if (!rules) {
+        text = engine.getRegexedString(text, placement);
+        return engine.getRegexedString(text, placement, { isPrompt: true });
+    }
+    for (const promptOnly of [false, true]) for (const script of rules) {
+        if (script.disabled || !script.placement?.includes(placement)) continue;
+        if (promptOnly ? !script.promptOnly : script.promptOnly || script.markdownOnly) continue;
+        // runRegexScript performs Tavern's matching/substitution. Depth is
+        // intentionally not a condition for any plugin branch message.
+        text = engine.runRegexScript(script, text);
+    }
+    return text;
+}
+
 const loadNativeRegex = () => import(new URL('../../../../scripts/extensions/regex/engine.js', import.meta.url).href);
 
 function displaySnapshot(config, rules) {
@@ -273,7 +291,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             syncState(structuredClone(readPlaySettings(settings)), nextRules);
             return rules;
         },
-        process(source, character, requestContext) {
+        process(source, character, requestContext, role = 'assistant') {
             let targetRules = rules;
             if (engine && character?.avatar) {
                 if (!roleRules.has(character.avatar)) roleRules.set(character.avatar, readTavernRegex(engine, ctx(), character));
@@ -281,6 +299,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             }
             const target = character ?? selectedCharacter;
             const targetEngine = roleEngines.get(target?.avatar) ?? engine;
+            if (targetEngine && role === 'user') targetRules = readTavernRegex(targetEngine, ctx(), target, targetEngine.regex_placement.USER_INPUT);
             return processPlayText(source, config, targetRules, (script, text) => {
                 // Resolve target names before the native engine consults the
                 // host's current character while substituting replacement text.

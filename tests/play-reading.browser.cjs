@@ -60,7 +60,7 @@ async function checkHistory(page, mode, viewport) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   await button('剧场演出').click();
-  const targetId = ['anchor', 'jump', 'automatic'].includes(mode) ? ids[90] : ids.at(-1);
+  const targetId = ids.at(-1);
   const target = panel.locator(`[data-record="${targetId}"]`);
   await target.waitFor();
   assert.equal(await page.evaluate(() => progress.started[0]), targetId);
@@ -76,9 +76,12 @@ async function checkHistory(page, mode, viewport) {
     return node.getBoundingClientRect().top - visibleTop;
   });
   const before = await headOffset(target);
-  if (mode === 'anchor') assert.ok(Math.abs(before) < 2, '优先恢复上次读到的消息位置');
+  if (mode === 'anchor') {
+    assert.equal(await page.locator('.play-feed').evaluate(feed=>feed.scrollHeight-feed.clientHeight-feed.scrollTop<4),true,
+      '首次打开忽略跨刷新旧位置，从末尾打开');return;
+  }
   if (mode === 'automatic') {
-    for (const [direction, count] of [['earlier', 20], ['later', 30]]) {
+    for (const [direction, count] of [['earlier', 20], ['earlier', 30]]) {
       await page.locator('.play-feed').evaluate((feed, direction) => {
         feed.scrollTop = direction === 'earlier' ? 80 : feed.scrollHeight - feed.clientHeight - 80;
       }, direction);
@@ -91,6 +94,7 @@ async function checkHistory(page, mode, viewport) {
     return;
   }
   if (mode === 'jump') {
+    await page.locator('.play-feed').evaluate(feed=>{feed.scrollTop=0;});
     await button('跳到最新消息').click();
     await panel.locator(`[data-record="${ids.at(-1)}"]`).getByText('第 180 场的正文', { exact: false }).waitFor();
     await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 10);

@@ -74,6 +74,10 @@ export async function copyText(text) {
 }
 
 const paths = {
+    branch: '<path d="M6 4v11a5 5 0 0 0 5 5h7M6 9h5a5 5 0 0 0 5-5"/><circle cx="6" cy="3" r="2"/><circle cx="16" cy="3" r="2"/><circle cx="19" cy="20" r="2"/>',
+    history: '<path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/>',
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    conversation: '<rect x="3" y="3" width="15" height="13" rx="2"/><path d="m7 16-4 4v-4M18 7h3v14l-4-3h-6v-2"/>',
     star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
     close: '<path d="m6 6 12 12M18 6 6 18"/>', plus: '<path d="M12 4v16M4 12h16"/>',
     left: '<path d="m14 6-6 6 6 6"/>', right: '<path d="m10 6 6 6-6 6"/>',

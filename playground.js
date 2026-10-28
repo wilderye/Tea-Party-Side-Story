@@ -1,4 +1,4 @@
-import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning } from './play-history.js';
+import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
 
 export class PlaygroundError extends Error {
@@ -63,6 +63,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         return { phase: job.phase,
             roundId: job.round?.id ?? null, resultId: job.resultId, characterId: job.round?.characterId ?? null,
             requestedRoundId: job.requestedRoundId ?? null, replaceResultId: job.replaceResultId ?? null,
+            chatMode: !!job.chatMode, messageId: job.messageId ?? null,
+            ...(job.chatMode ? { operation: job.operation } : {}),
             characterName: job.characterName, characterAvatar: job.characterAvatar,
             text: job.text, error: clone(job.saveError ?? job.error ?? null),
             retry: clone(job.retry ?? null),
@@ -90,6 +92,21 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         }
         return round;
     }
+    function withLiveChat(chat) {
+        for (const message of chat.messages) for (const result of message.results ?? []) {
+            const job = findJob(result.id);
+            if (!job) continue;
+            result.text = job.text; result.status = job.phase;
+            if (job.extra) result.extra = clone(job.extra);
+            if (job.context) result.context = clone(job.context);
+            if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
+        }
+        return chat;
+    }
+    function assertIdleChat(id) {
+        if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+        if (hasRoundJob(id)) throw new PlaygroundError('busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
+    }
     function notify(job) {
         for (const listener of listeners) {
             try { listener(readJob(job)); }
@@ -103,11 +120,12 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             return result;
         } catch (error) { diagnostics?.error(operation, error); throw error; }
     }
-    function availability({ resultId } = {}) {
+    function availability({ resultId, chatId } = {}) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
         const job = resultId && findJob(resultId);
         if (job?.phase === 'save-failed') return { available: false, code: 'unsaved_result', message: '这份回复尚未保存，请先重试保存' };
         if (job) return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
+        if (chatId && hasRoundJob(chatId)) return { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' };
         if (typeof prepareRequest !== 'function') return { available: false, code: 'generation_unavailable', message: PLAY_GENERATION_UNAVAILABLE };
         if (prepareRequest.isReady && !prepareRequest.isReady()) return { available: false, code: 'generation_loading', message: '正在载入酒馆的生成接口…' };
         return { available: true };
@@ -156,8 +174,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         }, checkpointMs);
         job.timer?.unref?.();
     }
-    async function start({ roundId, replaceResultId, continueResultId, characterId, character, prompt, origin }) {
-        const available = availability({ resultId: replaceResultId || continueResultId });
+    async function start({ roundId, replaceResultId, continueResultId, characterId, character, prompt, origin,
+        chatMode = false, operation, messageId, expectedRevision }) {
+        const available = availability({ resultId: replaceResultId || continueResultId, ...(chatMode ? { chatId: roundId } : {}) });
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
         // Synchronous capture: later settings changes do not change this request.
@@ -174,7 +193,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let baseText = '';
         let continueExtra;
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
-            requestedRoundId: roundId, replaceResultId,
+            requestedRoundId: roundId, replaceResultId, chatMode, messageId, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
             text: '', context, closed: false, checkpoint: Promise.resolve() };
         const privateValues = [environment.api?.key, environment.tavern?.settings?.proxy_password];
@@ -187,8 +206,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let resultContext = context;
         try {
             if (continueResultId) {
-                const currentRound = await abortable(() => history.getRound(roundId), job.controller.signal);
-                const target = currentRound?.results?.find(result => result.id === continueResultId);
+                const currentRound = await abortable(() => chatMode ? history.getChat(roundId) : history.getRound(roundId), job.controller.signal);
+                const results = chatMode ? currentRound.messages.at(-1)?.results : currentRound?.results;
+                const target = results?.find(result => result.id === continueResultId);
                 if (!target) throw new PlaygroundError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
                 if (!target.text.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
                 baseText = target.text;
@@ -199,12 +219,26 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             }
             job.round = await history.begin({ roundId, replaceResultId, continueResultId, characterId, character: environment.character,
                 prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
+                ...(chatMode ? { chatMode, operation, messageId, expectedRevision } : {}),
                 ...(continueResultId ? { expectedText: baseText } : {}) }, { signal: job.controller.signal });
+            let requestPrompt = job.round.prompt;
+            if (chatMode) {
+                const messages = playCurrentMessages(job.round);
+                job.messageId = messages.at(-1).messageId;
+                // The final user message is passed separately so the current
+                // custom instruction is added once, never saved into history.
+                messages.pop();
+                const user = messages.at(-1)?.role === 'user' ? messages.pop() : null;
+                requestPrompt = user?.text;
+                environment.branchHistory = messages.map(message => ({ role: message.role, text: message.text, extra: message.extra,
+                    context: message.context }));
+                environment.branchMode = true;
+            }
             notify(job);
             job.controller.signal.throwIfAborted();
             assertCurrent(environment);
             const request = await abortable(() => prepareRequest({
-                generationId: job.resultId, prompt: job.round.prompt, environment,
+                generationId: job.resultId, prompt: requestPrompt, environment,
                 continueMessage: continueResultId ? baseText : undefined,
                 ...(continueResultId ? { continueExtra } : {}),
                 signal: job.controller.signal,
@@ -296,7 +330,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         try {
             const round = await history.saveResult(job.round.id, job.resultId, update);
             diagnostics?.info('小剧场回复已保存', { phase: 'saving', savedAt: now() });
-            return { roundId: round.id, characterId: round.characterId, result: clone(round.results.find(result => result.id === job.resultId)) };
+            return { roundId: round.id, characterId: round.characterId,
+                result: clone(round.savedResult ?? round.results.find(result => result.id === job.resultId)) };
         } catch (error) {
             diagnostics?.error('保存小剧场回复', error, { phase: 'saving' });
             // Deletion in another window is final; a late generation must not
@@ -318,6 +353,63 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         getStates: () => [...jobs.values()].map(readJob),
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         send({ characterId, character, prompt, origin = null }) { return start({ characterId, character, prompt, origin }); },
+        sendChat(chatId, { characterId, character, prompt, origin = null, expectedRevision }) {
+            return start({ roundId: chatId, chatMode: true, operation: 'send', characterId, character, prompt, origin, expectedRevision });
+        },
+        generateChatVersion(chatId, messageId, target = {}) {
+            return start({ ...target, roundId: chatId, messageId, chatMode: true, operation: 'another' });
+        },
+        regenerateChat(chatId, messageId, resultId, target = {}) {
+            return start({ ...target, roundId: chatId, messageId, replaceResultId: resultId, chatMode: true, operation: 'regenerate' });
+        },
+        continueChat(chatId, messageId, resultId, target = {}) {
+            return start({ ...target, roundId: chatId, messageId, continueResultId: resultId, chatMode: true, operation: 'continue' });
+        },
+        listChats: characterId => historyAction('读取聊天历史目录', () => history.listChats(characterId)),
+        getChatPreview: (id, options) => historyAction('读取历史记录预览', () => history.getChatPreview(id, options)),
+        getChatSearch: (id, options) => historyAction('搜索聊天内容', () => history.getChatSearch(id, options)),
+        async getChat(id, options) { return withLiveChat(await historyAction('读取分支聊天', () => history.getChat(id, options))); },
+        async finishUnfinishedChat(id) {
+            assertIdleChat(id);
+            const chat = await history.getChat(id);
+            for (const message of chat.messages) for (const result of message.results ?? []) {
+                if (result.status === 'unfinished') await historyAction('结束未完成回复', () => history.saveResult(id, result.id,
+                    { status: 'stopped', finishedAt: now() }));
+            }
+        },
+        createBranch(id, messageId, revision) {
+            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+            return historyAction('创建分支', () => history.createBranch(id, messageId, revision), true);
+        },
+        setMessageVersion(id, messageId, resultId, expectedResultId) {
+            assertIdleChat(id);
+            return historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId));
+        },
+        renameChat(id, name, revision) {
+            assertIdleChat(id);
+            return historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true);
+        },
+        editMessage(id, messageId, update) {
+            assertIdleChat(id);
+            return historyAction('保存聊天消息修改', () => history.editMessage(id, messageId, update), true);
+        },
+        removeMessage(id, messageId, revision) {
+            assertIdleChat(id);
+            return historyAction('删除聊天消息', () => history.removeMessage(id, messageId, revision), true);
+        },
+        truncateChat(id, messageId, revision) {
+            assertIdleChat(id);
+            return historyAction('删除所选消息及后续对话', () => history.truncateChat(id, messageId, revision), true);
+        },
+        deleteChat(id, revision, options) {
+            assertIdleChat(id);
+            return historyAction('删除该聊天', () => history.deleteChat(id, revision, options), true);
+        },
+        addChatFavorite(input) {
+            assertIdleChat(input.chatId);
+            return historyAction('收藏该聊天', () => history.addChatFavorite(input), true);
+        },
+        syncChatFavorite(id, input) { return historyAction('更新聊天收藏', () => history.syncChatFavorite(id, input)); },
         generateAnother(roundId, target = {}) { return start({ ...target, roundId }); },
         regenerate(roundId, resultId, target = {}) {
             if (!resultId) throw new PlaygroundError('result_missing', '请先选择要重新生成的结果');

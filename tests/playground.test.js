@@ -515,7 +515,10 @@ test('保存缓慢时合并流式片段，最终结果不会等待一长串过�
     assert.equal(f.service.getState().text, '完整的最终正文');
     releaseSave.resolve();
     const result = await task;
-    assert.equal(f.writes.length - before, 4, '只保存进行中的一次片段，以及最终正文；每次各写正文和目录');
+    const savedFiles = f.writes.slice(before);
+    assert.equal(savedFiles.filter(name => name.startsWith('teahouse-play-body-')).length, 2,
+        '只写进行中的一次正文片段，以及最终正文，不积压过时片段');
+    assert.equal(savedFiles.filter(name => name === PLAY_HISTORY_INDEX).length, 2);
     assert.equal(result.result.text, '完整的最终正文');
 });
 

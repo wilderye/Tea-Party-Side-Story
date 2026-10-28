@@ -3,14 +3,14 @@ import { element, textButton, glyph, iconButton, createPageJump } from './ui.js'
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
 const batchSize = 24;
 
-export function createCharacterAvatar(ctx, character, className) {
+export function createCharacterAvatar(ctx, character, className, type = 'avatar') {
     const fallback = element('span', character.name.slice(0, 1), `${className} play-avatar-fallback`);
     fallback.setAttribute('aria-hidden', 'true');
     if (!character.avatar) return fallback;
     const image = element('img', undefined, className); image.alt = ''; image.draggable = false;
     image.loading = 'lazy'; image.decoding = 'async';
-    image.src = ctx().getThumbnailUrl?.('avatar', character.avatar)
-        ?? `/thumbnail?type=avatar&file=${encodeURIComponent(character.avatar)}`;
+    image.src = ctx().getThumbnailUrl?.(type, character.avatar)
+        ?? `/thumbnail?type=${type}&file=${encodeURIComponent(character.avatar)}`;
     image.addEventListener('error', () => image.replaceWith(fallback), { once: true });
     return image;
 }

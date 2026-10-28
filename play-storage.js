@@ -1,10 +1,12 @@
 import { createPlayHistory, PlayHistoryError } from './play-history.js';
 import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js';
 
-const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite'];
+const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite', 'getChatPreview', 'getChatSearch'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
-    'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply'];
-const workerVersion = 9;
+    'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
+    'listChats', 'getChat', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
+    'addChatFavorite', 'syncChatFavorite'];
+const workerVersion = 10;
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {
@@ -114,7 +116,7 @@ export function createBrowserPlayHistory(ctx, diagnostics) {
         });
     }
     return Object.fromEntries(playHistoryMethods.map(method => [method, async (...args) => {
-        if (readMethods.includes(method)) return local[method](...args);
+        if (readMethods.includes(method) || method === 'listChats') return local[method](...args);
         const signal = method === 'begin' ? args[1]?.signal : undefined;
         const port = await waitForConnection(signal);
         signal?.throwIfAborted();
