@@ -25,7 +25,7 @@ function createMobileNavigation(panel, media) {
     const options = { passive: true, signal: listeners.signal };
     let slot, nav, tools, scope, gesture, paintFrame = 0;
     let height = 44, offset = 0, paintedOffset = 0;
-    const isReading = () => media.matches && panel.dataset.mode === 'list' && slot?.isConnected;
+    const isReading = () => media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
     function paint() {
         paintFrame = 0;
         if (!slot) return;
@@ -103,7 +103,7 @@ function createMobileNavigation(panel, media) {
             if (nav && media.matches) height = nav.offsetHeight || 44;
             const area = slot?.parentElement.querySelector('.tea-list');
             const shortCatalog = media.matches && area && area.scrollHeight <= area.clientHeight + 1;
-            if (scope !== value || resetPosition || !isReading() || shortCatalog) offset = 0;
+            if (scope !== value || value === 'community' || resetPosition || !isReading() || shortCatalog) offset = 0;
             scope = value;
             panel.classList.toggle('tea-mobile-navigation-collapsed', offset >= height);
             paint();
@@ -703,6 +703,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function renderCatalog(visible, total) {
         const catalogNode = element('aside', undefined, 'tea-catalog'); catalogNode.id = 'tea-catalog'; catalogNode.setAttribute('aria-label', '小剧场目录');
+        catalogNode.dataset.scope = scope;
         catalogNode.append(brandHeader());
         catalogNode.append(mobileTabs());
         const searchLine = element('div', undefined, 'tea-search-line'), label = element('label', undefined, 'tea-search-box');

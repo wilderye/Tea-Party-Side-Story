@@ -423,6 +423,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .tea-kinds button[aria-pressed=true] { color:var(--tea-heading,var(--tea-forest))!important; font-weight:700; }
     #teahouse-panel .tea-kinds button[aria-pressed=true]::after { bottom:8px; background:var(--tea-accent,var(--tea-coral)); }
     #teahouse-panel .tea-list { margin-top:44px; padding:44px 18px calc(72px + env(safe-area-inset-bottom)); scroll-padding-top:44px; scroll-padding-bottom:calc(64px + env(safe-area-inset-bottom)); overflow-anchor:none; }
+    #teahouse-panel .tea-catalog[data-scope=community] :is(.tea-mobile-tab-slot,.tea-mobile-tools) { position:static; flex:none; }
+    #teahouse-panel .tea-catalog[data-scope=community] .tea-list { margin-top:0; padding-top:0; scroll-padding-top:0; }
     #teahouse-panel .tea-pagination { position:absolute; z-index:2; isolation:isolate; bottom:calc(8px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); height:44px; padding:0; gap:7px; border:0; background:transparent; color:var(--tea-ink); }
     #teahouse-panel .tea-pagination::before { content:''; position:absolute; z-index:-1; pointer-events:none; width:292px; height:100px; left:50%; bottom:-20px; transform:translateX(-50%); background:var(--tea-page-fade,radial-gradient(ellipse at 50% 62%,#faf7ee 0%,#faf7eeef 32%,#faf7ee99 52%,#faf7ee00 75%)); }
     #teahouse-panel .tea-pagination>.tea-icon { width:44px; min-width:44px; height:44px; }

@@ -1,5 +1,5 @@
 // Browser plugin not available; use the project's Playwright + Edge workflow.
-// Flow: scroll synthetic catalogs/history -> hide/reveal tabs -> preserve reading.
+// Flow: keep community tabs fixed -> follow other reading gestures -> preserve reading.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { harness } = require('./play-processing.browser.cjs');
 const http = require('node:http');
@@ -134,6 +134,32 @@ async function verify(browser, viewport, reducedMotion = false) {
             await touchScroll(page, list, 180); assert.equal(await offset(page), 0);
             await screenshot(page, 'navigation-desktop.png'); assert.deepEqual(errors, []); return;
         }
+        const communityLayout = () => panel.locator('.tea-catalog:not([hidden])').evaluate(catalog => {
+            const slot = catalog.querySelector('.tea-mobile-tab-slot').getBoundingClientRect();
+            const tools = catalog.querySelector('.tea-mobile-tools').getBoundingClientRect();
+            const list = catalog.querySelector('.tea-list');
+            const box = list.getBoundingClientRect(), style = getComputedStyle(list);
+            return { slotTop: slot.top, slotBottom: slot.bottom, toolsTop: tools.top, toolsBottom: tools.bottom,
+                listTop: box.top, listHeight: box.height, paddingTop: style.paddingTop, scrollPaddingTop: style.scrollPaddingTop };
+        });
+        const communityBefore = await communityLayout();
+        assert.equal(communityBefore.toolsTop, communityBefore.slotBottom, '选集分类行在栏目下方');
+        assert.equal(communityBefore.listTop, communityBefore.toolsBottom, '选集正文不被固定栏目遮挡');
+        assert.equal(communityBefore.paddingTop, '0px', '选集正文恢复原有顶部留白');
+        assert.equal(communityBefore.scrollPaddingTop, '0px', '选集无收起功能的滚动补偿');
+        await touchScroll(page, list, 22); assert.equal(await offset(page), 0, '茶会选集不随手指收起');
+        await nativeTouchScroll(page, list, 44); assert.equal(await offset(page), 0, '茶会选集原生触摸不收起');
+        await nativeTouchScroll(page, list, -22); assert.equal(await offset(page), 0);
+        await page.locator(list).hover(); await page.mouse.wheel(0, 18); await settle(page);
+        assert.equal(await offset(page), 0, '茶会选集滚轮不收起');
+        assert.deepEqual(await communityLayout(), communityBefore, '选集栏目、分类和正文区域尺寸固定');
+        assert.equal(await slot.evaluate(node => node.inert), false, '选集栏目一直可操作');
+        await button('搜索剧场').click(); await panel.getByRole('searchbox').fill('合成故事'); await settle(page);
+        await touchScroll(page, list, 20); assert.equal(await offset(page), 0, '选集搜索时栏目固定');
+        assert.deepEqual(await communityLayout(), communityBefore);
+        await button('取消搜索').click(); await button('独立剧场').click(); await button('全部').click(); await settle(page);
+        await screenshot(page, 'navigation-community-fixed-' + viewport.width + '.png');
+        await button('我的收藏').click(); await settle(page);
         await screenshot(page, 'navigation-expanded-' + viewport.width + '.png');
         await touchScroll(page, list, 22); assert.equal(await offset(page), 22, '从顶部立即按1:1收起一半');
         await screenshot(page, 'navigation-half-' + viewport.width + '.png');
@@ -144,11 +170,17 @@ async function verify(browser, viewport, reducedMotion = false) {
         assert.equal(await slot.evaluate(node => node.inert), true);
         assert.equal(await button('设置').isVisible(), true);
         assert.equal(await button('搜索剧场').isVisible(), true);
-        assert.equal(await button('全部').isVisible(), true);
+        assert.equal(await button('独立剧场').isVisible(), true);
         await screenshot(page, 'navigation-collapsed-' + viewport.width + '.png');
         await touchScroll(page, list, -1); assert.equal(await offset(page), 43, '反向1px也立即有反馈');
         assert.equal(await slot.evaluate(node => node.inert), false);
         await touchScroll(page, list, -43); assert.equal(await offset(page), 0);
+        await touchScroll(page, list, 22);
+        await button('茶会选集').click(); await settle(page);
+        assert.equal(await offset(page), 0, '从半收起页面切回茶会选集时完全展开');
+        await touchScroll(page, list, 22); assert.equal(await offset(page), 0);
+        assert.deepEqual(await communityLayout(), communityBefore, '切回选集仍使用原有固定正文区域');
+        await button('我的收藏').click(); await settle(page); assert.equal(await offset(page), 0);
         await page.locator(list).evaluate(node => node.scrollTop = 200); await settle(page);
         assert.equal(await offset(page), 0, '程序滚动不收起');
         await verifyContinuousScrolling(page, list);
@@ -251,7 +283,7 @@ async function verify(browser, viewport, reducedMotion = false) {
         assert.equal(readingAfterClose.id, readingBeforeClose.id, '半收起时关闭重开仍读到同一段');
         assert.ok(Math.abs(readingAfterClose.offset - readingBeforeClose.offset) < 2, '重开后按实际可见上边缘恢复阅读位置');
         assert.deepEqual(errors, []);
-        console.log(JSON.stringify({ viewport, reducedMotion, checks: '1:1 proportion, native touch/wheel, immediate reverse, no animation, fixed viewport, search/input, streaming, content resize, paging, empty, breakpoint/reopen', errors }));
+        console.log(JSON.stringify({ viewport, reducedMotion, checks: 'community fixed, 1:1 proportion elsewhere, native touch/wheel, immediate reverse, no animation, fixed viewport, search/input, streaming, content resize, paging, empty, breakpoint/reopen', errors }));
     } finally { await context.close(); }
 }
 (async () => {
