@@ -18,12 +18,13 @@ const typeLabel = type => ({ preset: '随文剧场', standalone: '独立剧场',
 const scopeLabel = scope => ({ community: '茶会选集', favorites: '我的收藏', local: '亲笔手稿', play: '剧场演出' })[scope];
 const bodyFontSizes = Array.from({ length: 11 }, (_, index) => 12 + index * 2);
 
-// Follow the reading gesture, using transforms only. The scroll viewport
+// Follow native reading scroll, using transforms only. The scroll viewport
 // stays fixed so header movement cannot trigger pagination or history layout.
 function createMobileNavigation(panel, media) {
     const listeners = new AbortController();
     const options = { passive: true, signal: listeners.signal };
-    let slot, nav, tools, scope, gesture, paintFrame = 0;
+    const scrollTops = new WeakMap();
+    let slot, nav, tools, scope, readingScroll, endTimer, paintFrame = 0;
     let height = 44, offset = 0, paintedOffset = 0;
     const isReading = () => media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
     function paint() {
@@ -53,50 +54,69 @@ function createMobileNavigation(panel, media) {
         return area && panel.contains(area) && area.getClientRects().length
             && (offset > 0 || area.scrollHeight > area.clientHeight + 1) ? area : null;
     }
-    function cancelGesture() { gesture = null; }
+    const scrollPosition = area => Math.max(0, Math.min(area.scrollTop, Math.max(0, area.scrollHeight - area.clientHeight)));
+    function cancelScroll() { clearTimeout(endTimer); readingScroll = null; }
+    function startScroll(area, touching) {
+        clearTimeout(endTimer);
+        // Passive wheel notifications can arrive after the compositor moved.
+        if (touching || !scrollTops.has(area)) scrollTops.set(area, scrollPosition(area));
+        readingScroll = { area, touching, moved: false };
+    }
+    function followScroll(top = scrollPosition(readingScroll.area)) {
+        const delta = top - scrollTops.get(readingScroll.area);
+        scrollTops.set(readingScroll.area, top);
+        if (delta) { readingScroll.moved = true; setOffset(top === 0 ? 0 : offset + delta); }
+    }
+    panel.addEventListener('pointerdown', cancelScroll, options);
     panel.addEventListener('touchstart', event => {
-        cancelGesture();
+        cancelScroll();
         const area = event.touches.length === 1 && readingArea(event.target);
         if (!area) return;
-        const touch = event.touches[0];
-        gesture = { area, id: touch.identifier, x: touch.clientX, y: touch.clientY };
+        startScroll(area, true);
     }, options);
-    panel.addEventListener('touchmove', event => {
-        if (!gesture) return;
-        const touch = event.touches[0];
-        if (event.touches.length !== 1 || touch.identifier !== gesture.id || !isReading()) { cancelGesture(); return; }
-        const dx = touch.clientX - gesture.x, dy = gesture.y - touch.clientY;
-        gesture.x = touch.clientX; gesture.y = touch.clientY;
-        if (Math.abs(dy) <= Math.abs(dx)) return;
-        // Pulling past the top only restores navigation. There is no delay,
-        // direction gate, height equality check, or post-gesture timer.
-        if (dy < 0 && gesture.area.scrollTop <= 0) setOffset(0);
-        else setOffset(offset + dy);
+    panel.addEventListener('touchend', event => {
+        if (!readingScroll || event.touches.length) return;
+        followScroll();
+        readingScroll.touching = false;
+        // A tap must not arm navigation for a later automatic scroll.
+        if (!readingScroll.moved) cancelScroll();
+        else if (!('onscrollend' in readingScroll.area)) endTimer = setTimeout(cancelScroll, 160);
     }, options);
-    panel.addEventListener('touchend', cancelGesture, options);
-    panel.addEventListener('touchcancel', cancelGesture, options);
+    panel.addEventListener('touchcancel', cancelScroll, options);
     panel.addEventListener('wheel', event => {
         if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
         const area = readingArea(event.target);
         if (!area) return;
-        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? area.clientHeight : 1;
-        setOffset(offset + event.deltaY * unit);
+        if (readingScroll?.area !== area) startScroll(area, false);
     }, options);
     panel.addEventListener('scroll', event => {
-        if (!offset || gesture || !isReading()) return;
         const area = event.target;
-        if (area instanceof Element && area.matches('.tea-list, .play-feed, .play-people')
-            && area.scrollTop === 0 && area.getClientRects().length) setOffset(0);
+        if (!(area instanceof Element) || !area.matches('.tea-list, .play-feed, .play-people')) return;
+        const top = scrollPosition(area);
+        if (isReading() && readingScroll?.area === area) {
+            followScroll(top);
+            // Older browsers have no native notification that inertia ended.
+            if (!('onscrollend' in area) && !readingScroll.touching) {
+                clearTimeout(endTimer); endTimer = setTimeout(cancelScroll, 160);
+            }
+        } else {
+            scrollTops.set(area, top);
+            if (isReading() && offset && top === 0 && area.getClientRects().length) setOffset(0);
+        }
     }, { ...options, capture: true });
+    panel.addEventListener('scrollend', event => {
+        if (readingScroll?.area === event.target && !readingScroll.touching) cancelScroll();
+    }, { ...options, capture: true });
+    panel.addEventListener('keydown', cancelScroll, { signal: listeners.signal });
     panel.addEventListener('focusin', event => {
         if (event.target.matches('input, textarea, select') || slot?.contains(event.target)) {
-            cancelGesture(); setOffset(0);
+            cancelScroll(); setOffset(0);
         }
     }, { signal: listeners.signal });
-    window.visualViewport?.addEventListener('resize', cancelGesture, options);
+    window.visualViewport?.addEventListener('resize', cancelScroll, options);
     return {
         sync(value, resetPosition = false) {
-            cancelGesture(); cancelAnimationFrame(paintFrame); paintFrame = 0;
+            cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0;
             slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
             nav = slot?.firstElementChild;
             tools = slot?.parentElement.querySelector('.tea-mobile-tools');
@@ -113,7 +133,10 @@ function createMobileNavigation(panel, media) {
         getReadingInset() {
             return isReading() && scope === 'play' ? height - paintedOffset : 0;
         },
-        dispose() { listeners.abort(); cancelAnimationFrame(paintFrame); cancelGesture(); },
+        ignoreScroll(area) {
+            scrollTops.set(area, scrollPosition(area));
+        },
+        dispose() { listeners.abort(); cancelAnimationFrame(paintFrame); cancelScroll(); },
     };
 }
 
@@ -148,7 +171,8 @@ export function createTheatrePanel(ctx, state, actions) {
     const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
-        { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0 });
+        { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
+            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area) });
     const randomOrders = new Map();
     const sortMode = () => state.settings.sortMode === 'random' ? 'random' : 'time';
     const scopeEntries = value => value === 'record-favorites'
@@ -207,7 +231,7 @@ export function createTheatrePanel(ctx, state, actions) {
     function restoreCatalogPosition() {
         if (!restoringCatalog || !panel?.isConnected || scope === 'play') return;
         const list = panel.querySelector('.tea-list');
-        if (list) list.scrollTop = catalog.listScroll;
+        if (list) { list.scrollTop = catalog.listScroll; mobileNavigation?.ignoreScroll(list); }
         const reading = catalogReader();
         if (reading && reading.dataset.id === catalog.readingId) reading.scrollTop = catalog.readingScroll;
     }
@@ -845,7 +869,10 @@ export function createTheatrePanel(ctx, state, actions) {
             article.classList.toggle('tea-expanded', !closing); fold.replaceChildren(glyph(closing ? 'down' : 'up'));
             if (!closing) fold.append(element('span', '收起'));
             fold.title = `${closing ? '展开全文' : '收起'}：${item.title}`; fold.setAttribute('aria-label', fold.title); fold.setAttribute('aria-expanded', String(!closing));
-            if (closing && above) list.scrollTop += article.getBoundingClientRect().top - list.getBoundingClientRect().top;
+            if (closing && above) {
+                list.scrollTop += article.getBoundingClientRect().top - list.getBoundingClientRect().top;
+                mobileNavigation?.ignoreScroll(list);
+            }
             measureBodies();
         });
         fold.classList.add('tea-fold'); fold.setAttribute('aria-controls', excerpt.id); fold.setAttribute('aria-expanded', String(catalog.expanded.has(item.id)));

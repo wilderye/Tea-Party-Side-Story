@@ -28,7 +28,8 @@ function recentTime(value) {
 }
 
 /** A persistent conversation view. History and generation stay in playground. */
-export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites, { getReadingInset = () => 0 } = {}) {
+export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites,
+    { getReadingInset = () => 0, onProgrammaticScroll = () => {} } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
@@ -359,20 +360,25 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         jump.hidden = !visible || feed.clientHeight <= 0 || (!hasLater && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= feed.clientHeight);
         jump.disabled = jump.hidden;
     }
+    function setFeedScroll(value) {
+        const previous = feed.scrollTop;
+        feed.scrollTop = value;
+        if (feed.scrollTop !== previous) onProgrammaticScroll(feed);
+    }
     function restorePosition(position) {
         if (!visible || !feed.clientHeight) return;
         if (!position || position.bottom) {
             const target = feed.scrollHeight;
-            if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+            if (Math.abs(feed.scrollTop - target) > 2) setFeedScroll(target);
         } else {
             const item = views.get(position.anchor?.split('/')[0])?.item;
             const anchor = item && !item.hidden && [...item.querySelectorAll('[data-read-anchor]')].find(node => node.dataset.readAnchor === position.anchor && !node.closest('[hidden]'));
             if (anchor) {
                 const target = feed.scrollTop + (anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top - readingInset()) + (Number(position.offset) || 0);
-                if (Math.abs(feed.scrollTop - target) > 0.5) feed.scrollTop = target;
+                if (Math.abs(feed.scrollTop - target) > 0.5) setFeedScroll(target);
             } else {
                 const target = Number(position.scrollTop) || 0;
-                if (Math.abs(feed.scrollTop - target) > 2) feed.scrollTop = target;
+                if (Math.abs(feed.scrollTop - target) > 2) setFeedScroll(target);
             }
         }
         cachedPosition = position ? { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, inset: readingInset(), key: characterKey(selected) } : null;
@@ -396,7 +402,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function jumpToMessage(id, role) {
         const view = views.get(id), message = view?.[role];
         if (!visible || !message?.getClientRects().length) return;
-        feed.scrollTop += message.getBoundingClientRect().top - feed.getBoundingClientRect().top - readingInset() - 10;
+        setFeedScroll(feed.scrollTop + message.getBoundingClientRect().top - feed.getBoundingClientRect().top - readingInset() - 10);
         rememberPosition(true, true); updateJump();
     }
     function resizeInput(force = false) {
@@ -471,7 +477,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             // Finish restoring a reopened panel during generation too, so later
             // user scrolls can replace the saved position before completion.
             if (jobsHere().some(job => activePhases.has(job.phase)) && !restoringPosition) {
-                if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) feed.scrollTop = feed.scrollHeight;
+                if (feed.scrollHeight - feed.clientHeight - feed.scrollTop <= 24) setFeedScroll(feed.scrollHeight);
                 updateJump();
                 return;
             }

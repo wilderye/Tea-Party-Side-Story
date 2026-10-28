@@ -45,10 +45,11 @@ async function touchScroll(page, selector, pixels, { horizontal = false, target 
         const start = point(180, 400), moved = point(horizontal ? 180 - pixels : 180, horizontal ? 400 : 400 - pixels);
         node.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [start] }));
         node.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, touches: [moved] }));
-        area.scrollTop += pixels;
+        if (!horizontal && !target) area.scrollTop += pixels;
         node.dispatchEvent(new TouchEvent('touchend', { bubbles: true, changedTouches: [moved] }));
     }, { pixels, horizontal, target });
     await settle(page);
+    await page.locator(selector).evaluate(area => area.dispatchEvent(new Event('scrollend')));
     const after = await page.locator(selector).evaluate(area => ({
         height: area.clientHeight, top: area.getBoundingClientRect().top, scroll: area.scrollTop,
         y: area.querySelector('.tea-article-title, .play-prose p')?.getBoundingClientRect().top,
@@ -62,13 +63,47 @@ async function nativeTouchScroll(page, selector, pixels) {
     const session = await page.context().newCDPSession(page);
     const box = await page.locator(selector).boundingBox();
     const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
+    const before = await offset(page);
+    await page.locator(selector).evaluate(area => {
+        const nav = document.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tabs');
+        const currentOffset = () => -new DOMMatrixReadOnly(getComputedStyle(nav).transform).m42 || 0;
+        window.nativeProof = { top: area.scrollTop, expected: currentOffset(), samples: [], finished: false, touchEnded: false };
+        const track = () => {
+            const top = Math.max(0, Math.min(area.scrollTop, area.scrollHeight - area.clientHeight));
+            nativeProof.expected = Math.max(0, Math.min(44, nativeProof.expected + top - nativeProof.top));
+            if (top === 0) nativeProof.expected = 0;
+            nativeProof.top = top;
+            nativeProof.samples.push({ top, expected: nativeProof.expected, touchEnded: nativeProof.touchEnded });
+        };
+        area.addEventListener('scroll', track, { passive: true });
+        area.addEventListener('touchend', () => nativeProof.touchEnded = true, { once: true, passive: true });
+        area.addEventListener('scrollend', () => { nativeProof.finished = true; area.removeEventListener('scroll', track); }, { once: true });
+    });
     await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
     for (let step = 1; step <= 8; step++) {
         await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y - pixels * step / 8 }] });
         await page.waitForTimeout(18);
     }
     await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    await settle(page); await session.detach();
+    await page.waitForFunction(() => nativeProof.finished);
+    await settle(page);
+    const proof = await page.evaluate(() => nativeProof);
+    const enabled = await page.locator('.tea-catalog:not([hidden])').evaluate(catalog => catalog.dataset.scope !== 'community' && matchMedia('(max-width:760px)').matches);
+    assert.ok(Math.abs(await offset(page) - (enabled ? proof.expected : 0)) < 1,
+        '原生触摸按实际正文滚动距离跟随，包括松手滑行；选集保持固定');
+    await session.detach(); return { before, ...proof };
+}
+async function nativeWheel(page, selector, pixels) {
+    const before = { offset: await offset(page), top: await page.locator(selector).evaluate(area => area.scrollTop) };
+    await page.locator(selector).evaluate(area => {
+        window.wheelFinished = false;
+        area.addEventListener('scrollend', () => wheelFinished = true, { once: true });
+    });
+    await page.locator(selector).hover(); await page.mouse.wheel(0, pixels);
+    await page.waitForFunction(() => wheelFinished); await settle(page);
+    const delta = await page.locator(selector).evaluate(area => area.scrollTop) - before.top;
+    assert.ok(Math.abs(await offset(page) - Math.max(0, Math.min(44, before.offset + delta))) < 1,
+        '滚轮栏目位移与正文实际滚动相同：' + JSON.stringify({ before, delta, after: await offset(page) }));
 }
 async function verifyContinuousScrolling(page, selector) {
     const session = await page.context().newCDPSession(page);
@@ -92,11 +127,12 @@ async function verifyContinuousScrolling(page, selector) {
             area.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, touches: [point(testY)] }));
             area.scrollTop += delta;
             if (++count < 60) requestAnimationFrame(frame);
-            else { area.dispatchEvent(new TouchEvent('touchend', { bubbles: true })); resolve(); }
+            else { area.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] })); resolve(); }
         };
         requestAnimationFrame(frame);
     }));
     await settle(page);
+    await page.locator(selector).evaluate(area => area.dispatchEvent(new Event('scrollend')));
     const after = await session.send('Performance.getMetrics');
     const layouts = after.metrics.find(item => item.name === 'LayoutCount').value - before.metrics.find(item => item.name === 'LayoutCount').value;
     const proof = await page.evaluate(() => {
@@ -108,14 +144,25 @@ async function verifyContinuousScrolling(page, selector) {
     console.log(JSON.stringify({ proportionalFrames: 60, layouts, ...proof }));
     await session.detach();
 }
-async function verify(browser, viewport, reducedMotion = false) {
+async function verify(browser, viewport, reducedMotion = false, plainHttp = false) {
     const context = await browser.newContext({ viewport, hasTouch: true, reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
     const page = await context.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
     try {
-        const url = 'http://127.0.0.1:' + server.address().port + '/';
+        if (plainHttp) await page.addInitScript(() => {
+            // Synthetic history fixture uses UUIDs; production has its own fallback.
+            if (!crypto.randomUUID) crypto.randomUUID = () => {
+                const bytes = crypto.getRandomValues(new Uint8Array(16));
+                bytes[6] = bytes[6] & 15 | 64; bytes[8] = bytes[8] & 63 | 128;
+                const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+                return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+            };
+        });
+        const url = 'http://' + (plainHttp ? 'tea.test' : '127.0.0.1') + ':' + server.address().port + '/';
         await page.goto(url); await page.waitForFunction(() => window.ready);
+        if (plainHttp) assert.deepEqual(await page.evaluate(() => ({ secure: isSecureContext, rawUpdate: 'onpointerrawupdate' in window })),
+            { secure: false, rawUpdate: false }, '普通HTTP不依赖受限制的手指接口');
         assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
         await page.evaluate(() => {
             for (let i = 0; i < 12; i++) {
@@ -161,11 +208,30 @@ async function verify(browser, viewport, reducedMotion = false) {
         await screenshot(page, 'navigation-community-fixed-' + viewport.width + '.png');
         await button('我的收藏').click(); await settle(page);
         await screenshot(page, 'navigation-expanded-' + viewport.width + '.png');
+        // Finger movement alone does not move navigation. Native scrolling does.
+        await page.locator(list).evaluate(area => {
+            const point = y => new Touch({ identifier: 1, target: area, clientX: 180, clientY: y });
+            area.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [point(400)] }));
+            area.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, touches: [point(300)] }));
+        });
+        await settle(page); assert.equal(await offset(page), 0, '手指通知变化100px、正文没动时栏目不动');
+        await page.locator(list).evaluate(area => area.scrollTop += 7); await settle(page);
+        assert.equal(await offset(page), 7, '不等touchmove，正文移动7px栏目就收起7px');
+        await page.locator(list).evaluate(area => area.scrollTop -= 3); await settle(page);
+        assert.equal(await offset(page), 4, '反向实际滚动3px，栏目展开3px');
+        await page.locator(list).evaluate(area => area.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] })));
+        await page.locator(list).evaluate(area => area.scrollTop += 6); await settle(page);
+        assert.equal(await offset(page), 10, '松手后正文滑行6px，栏目继续移动6px');
+        await page.locator(list).evaluate(area => area.dispatchEvent(new Event('scrollend')));
+        await page.locator(list).evaluate(area => area.scrollTop += 20); await settle(page);
+        assert.equal(await offset(page), 10, '阅读滚动结束后，程序改变位置不继续移动栏目');
+        await page.locator(list).evaluate(area => area.scrollTop = 0); await settle(page);
+        assert.equal(await offset(page), 0);
         await touchScroll(page, list, 22); assert.equal(await offset(page), 22, '从顶部立即按1:1收起一半');
         await screenshot(page, 'navigation-half-' + viewport.width + '.png');
         await touchScroll(page, list, 80, { horizontal: true }); assert.equal(await offset(page), 22);
         await touchScroll(page, list, -10); assert.equal(await offset(page), 12, '反向10px立即展开10px');
-        await page.waitForTimeout(800); assert.equal(await offset(page), 12, '松手不补播动画');
+        await page.waitForTimeout(200); assert.equal(await offset(page), 12, '正文停止时不补播动画');
         await touchScroll(page, list, 32); assert.equal(await offset(page), 44);
         assert.equal(await slot.evaluate(node => node.inert), true);
         assert.equal(await button('设置').isVisible(), true);
@@ -187,11 +253,12 @@ async function verify(browser, viewport, reducedMotion = false) {
         await touchScroll(page, list, -100); assert.equal(await offset(page), 0);
         await page.locator(list).hover();
         await page.mouse.wheel(90, 0); await settle(page); assert.equal(await offset(page), 0);
-        await page.mouse.wheel(0, 18); await settle(page); assert.equal(await offset(page), 18);
-        await page.mouse.wheel(0, -8); await settle(page); assert.equal(await offset(page), 10);
-        await nativeTouchScroll(page, list, 22); assert.ok(Math.abs(await offset(page) - 32) < 1, '原生触摸也按距离移动');
-        await nativeTouchScroll(page, list, 60); assert.equal(await offset(page), 44);
-        await nativeTouchScroll(page, list, -44); assert.equal(await offset(page), 0);
+        await nativeWheel(page, list, 18); assert.equal(await offset(page), 18);
+        await nativeWheel(page, list, -8); assert.equal(await offset(page), 10);
+        await nativeTouchScroll(page, list, 22);
+        const inertia = await nativeTouchScroll(page, list, 60); assert.equal(await offset(page), 44);
+        assert.ok(inertia.samples.some(sample => sample.touchEnded), '原生测试实际发生松手后滑行');
+        await nativeTouchScroll(page, list, -80); assert.equal(await offset(page), 0);
         await touchScroll(page, list, 44); await button('搜索剧场').click(); await settle(page);
         assert.equal(await offset(page), 0, '聚焦输入框恢复入口');
         await touchScroll(page, list, 16); assert.equal(await offset(page), 16, '搜索打开时仍能阅读并收起');
@@ -217,6 +284,15 @@ async function verify(browser, viewport, reducedMotion = false) {
         assert.equal(await offset(page), 0, '收藏变空时恢复');
         await button('亲笔手稿').click(); await settle(page);
         await touchScroll(page, list, 44); assert.equal(await offset(page), 0, '空内容不收起');
+        await page.evaluate(() => {
+            for (let index = 1; index <= 5; index++) {
+                const id = 'local:' + String(index).repeat(32);
+                fixture.manuscripts.set(id, { id, title: '合成手稿' + index, type: 'standalone', body: '合成手稿正文。'.repeat(300) });
+            }
+            ui.refresh();
+        }); await settle(page);
+        await touchScroll(page, list, 22); assert.equal(await offset(page), 22, '亲笔手稿也按正文实际距离收起');
+        await touchScroll(page, list, -10); assert.equal(await offset(page), 12);
         await button('剧场演出').click(); await panel.locator('.play-prose').first().waitFor(); await settle(page);
         const feed = '.play-feed';
         await panel.locator(feed).evaluate(node => node.scrollTop = 200); await settle(page);
@@ -224,7 +300,7 @@ async function verify(browser, viewport, reducedMotion = false) {
         await touchScroll(page, feed, -10); assert.equal(await offset(page), 12);
         await screenshot(page, 'navigation-play-half-' + viewport.width + '.png');
         await nativeTouchScroll(page, feed, 60); assert.equal(await offset(page), 44);
-        await nativeTouchScroll(page, feed, -44); assert.equal(await offset(page), 0);
+        await nativeTouchScroll(page, feed, -80); assert.equal(await offset(page), 0);
         await button('选择角色').click(); await settle(page);
         await button('返回演出记录').click(); await settle(page);
         assert.equal(await offset(page), 0, '角色目录返回按钮不被栏目遮住');
@@ -239,6 +315,7 @@ async function verify(browser, viewport, reducedMotion = false) {
             area.dispatchEvent(new TouchEvent('touchend', { bubbles: true }));
         });
         await settle(page); assert.equal(await offset(page), 20, '内容高度变化不取消跟随');
+        await panel.locator(feed).evaluate(area => area.dispatchEvent(new Event('scrollend')));
         const input = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
         await input.fill('合成生成请求'); await settle(page); assert.equal(await offset(page), 0);
         await touchScroll(page, feed, 22); assert.equal(await offset(page), 22, '输入框仍有焦点也可阅读');
@@ -255,6 +332,18 @@ async function verify(browser, viewport, reducedMotion = false) {
         await page.evaluate(() => emitGeneration('生成正文。\n\n'.repeat(40))); await settle(page);
         assert.equal(await offset(page), generationOffset, '生成自动滚动不改变栏目');
         await page.evaluate(() => finishGeneration('生成正文。\n\n'.repeat(40))); await settle(page);
+        // Programmatic reading restoration during a touch only re-bases scrolling.
+        await panel.locator(feed).evaluate(area => area.scrollTop = area.scrollHeight); await settle(page);
+        await panel.locator(feed).evaluate(area => {
+            area.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [new Touch({ identifier: 1, target: area, clientX: 180, clientY: 400 })] }));
+            area.scrollTop -= 10;
+        }); await settle(page);
+        const beforeResize = await offset(page);
+        await input.evaluate(node => { node.value = '合成输入。\n'.repeat(6); node.dispatchEvent(new InputEvent('input', { bubbles: true })); }); await settle(page);
+        assert.equal(await offset(page), beforeResize, '阅读触摸期间输入框变高，程序恢复正文位置不移动栏目');
+        await panel.locator(feed).evaluate(area => area.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] })));
+        await panel.locator(feed).evaluate(area => area.dispatchEvent(new Event('scrollend')));
+        await input.fill(''); await settle(page);
         await page.evaluate(() => document.activeElement.blur());
         await panel.locator(feed).evaluate(node => node.scrollTop = 200); await settle(page);
         await touchScroll(page, feed, -44); assert.equal(await offset(page), 0);
@@ -283,14 +372,16 @@ async function verify(browser, viewport, reducedMotion = false) {
         assert.equal(readingAfterClose.id, readingBeforeClose.id, '半收起时关闭重开仍读到同一段');
         assert.ok(Math.abs(readingAfterClose.offset - readingBeforeClose.offset) < 2, '重开后按实际可见上边缘恢复阅读位置');
         assert.deepEqual(errors, []);
-        console.log(JSON.stringify({ viewport, reducedMotion, checks: 'community fixed, 1:1 proportion elsewhere, native touch/wheel, immediate reverse, no animation, fixed viewport, search/input, streaming, content resize, paging, empty, breakpoint/reopen', errors }));
+        console.log(JSON.stringify({ viewport, reducedMotion, plainHttp, checks: 'community fixed, actual scroll 1:1, native touch/wheel and inertia, no touchmove dependency, immediate reverse, no animation, fixed viewport, search/input, streaming, content resize, paging, empty, breakpoint/reopen', errors }));
     } finally { await context.close(); }
 }
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const browser = await chromium.launch({ channel: 'msedge', headless: true });
+    const browser = await chromium.launch({ channel: 'msedge', headless: true,
+        args: ['--host-resolver-rules=MAP tea.test 127.0.0.1', '--no-proxy-server'] });
     try {
         for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) await verify(browser, viewport);
         await verify(browser, { width: 390, height: 844 }, true);
+        await verify(browser, { width: 390, height: 844 }, false, true);
     } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
