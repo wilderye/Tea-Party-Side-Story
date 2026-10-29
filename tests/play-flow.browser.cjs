@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const deferred = () => { let resolve; const promise = new Promise(yes => resolve = yes); return { promise, resolve }; };
 const files = new Map();
+const fileMutations = [];
 let hold = null, entered = null, activeWrites = 0, maxWrites = 0;
 const harness = `<!doctype html><meta charset="utf-8"><title>剧场演出回归验证</title>
 <link rel="stylesheet" href="/style.css"><style>#teahouse-panel{display:block;height:auto;padding:20px;box-sizing:border-box}body{margin:0}</style>
@@ -43,6 +44,7 @@ const server = http.createServer(async (request, response) => {
       assert.equal(request.headers['x-csrf-token'], 'play-test', '共享任务保留本次请求的认证头');
       let body = ''; for await (const chunk of request) body += chunk;
       const data = JSON.parse(body);
+      fileMutations.push({ operation: file, name: data.name ?? data.path });
       activeWrites++; maxWrites = Math.max(maxWrites, activeWrites);
       if (file === 'api/files/upload') {
         const wait = hold; hold = null; entered?.resolve(); entered = null;
@@ -184,7 +186,7 @@ async function verifyExpiredWriter(page) {
       {host:httpHost, mode:'mixed'},
     ]) {
       const {host, mode} = scenario;
-      files.clear(); maxWrites = 0;
+      files.clear(); fileMutations.length = 0; maxWrites = 0;
       const context = await browser.newContext();
       const a = await context.newPage(), b = await context.newPage(), errors = [];
       await browserCapabilities(a, mode === 'mixed' ? 'missing' : mode);
@@ -213,6 +215,39 @@ async function verifyExpiredWriter(page) {
       const results = await Promise.all([a.evaluate(()=>runtime.send({prompt:'页面一'})), b.evaluate(()=>runtime.send({prompt:'页面二'}))]);
       assert.equal(JSON.parse(files.get('teahouse-play-index.json')).rounds.length, 2);
       assert.equal(maxWrites, 1, '两个页面的完整读写事务按顺序执行');
+      if (['native', 'missing'].includes(mode)) {
+        await a.evaluate(({ roundId, resultId }) => {
+          const gate = new Promise(resolve => window.finishStreamSaveTest = resolve);
+          window.reply = async ({ onText, onReasoning }) => {
+            onReasoning({ reasoning: '测试思考内容' }); onText('模拟回复');
+            await gate; return '模拟回复';
+          };
+          window.streamSaveTest = runtime.regenerate(roundId, resultId);
+        }, { roundId: results[0].roundId, resultId: results[0].result.id });
+        await a.waitForFunction(() => runtime.getState().phase === 'generating' && runtime.getState().text === '模拟回复');
+        const writesBeforeStream = [...fileMutations], filesBeforeStream = [...files];
+        try {
+          await a.waitForTimeout(2300);
+          const live = await a.evaluate(id => runtime.getRound(id), results[0].roundId);
+          assert.equal(live.results[0].text, '模拟回复');
+          assert.equal(live.results[0].extra.reasoning, '测试思考内容');
+          const stored = await b.evaluate(id => runtime.getRound(id), results[0].roundId);
+          assert.equal(stored.results[0].text, '');
+          assert.equal(stored.results[0].status, 'unfinished');
+          assert.deepEqual(fileMutations, writesBeforeStream, '生成中的正文和思考内容不触发上传或删除请求');
+          assert.deepEqual([...files], filesBeforeStream);
+          if (mode === 'missing') assert.equal(await a.evaluate(() => runtime.stop()), true);
+        } finally {
+          await a.evaluate(async () => { window.finishStreamSaveTest(); await window.streamSaveTest; window.reply = null; });
+        }
+        const saved = await b.evaluate(id => runtime.getRound(id), results[0].roundId);
+        assert.equal(saved.results[0].text, '模拟回复');
+        assert.equal(saved.results[0].extra.reasoning, '测试思考内容');
+        assert.equal(saved.results[0].status, mode === 'missing' ? 'stopped' : 'complete');
+        const finalWrites = fileMutations.slice(writesBeforeStream.length);
+        assert.equal(finalWrites.filter(item => item.name === 'teahouse-play-index.json').length, 1, '结束或停止后只提交一批保存');
+        assert.equal(finalWrites.filter(item => item.operation === 'api/files/upload' && item.name.startsWith('teahouse-play-body-')).length, 1);
+      }
       const round = await b.evaluate(id=>runtime.getRound(id), results[0].roundId);
       assert.equal(round.results[0].text, '模拟回复');
       await b.evaluate(({roundId, resultId}) => runtime.editResult(roundId, resultId, '通过历史保存接口编辑后的正文', '模拟回复'),

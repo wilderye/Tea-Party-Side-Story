@@ -12,7 +12,7 @@ const config = overrides => ({ rateLimit: true, empty: true, maxRetries: 3, inte
 const apiError = (status = 429) => Response.json({ error: { message: 'original failure', code: status } }, { status });
 const reply = text => Response.json({ text });
 
-function fixture(t, respond, { retry = config(), stream = false, apiMode = 'tavern', checkpointMs = 0 } = {}) {
+function fixture(t, respond, { retry = config(), stream = false, apiMode = 'tavern' } = {}) {
     const io = memoryFiles(), calls = [], prepared = [];
     const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
     const environment = { character: characterA, context: { ...contextA, apiMode }, independent: true, retry,
@@ -24,7 +24,7 @@ function fixture(t, respond, { retry = config(), stream = false, apiMode = 'tave
         return respond(calls.length, { data, signal, environment, payload, io });
     }, data => data.text);
     const service = createPlayground({ history: io.store, captureEnvironment: () => environment, isCurrent: () => true,
-        diagnostics, uuid: randomUUID, checkpointMs,
+        diagnostics, uuid: randomUUID,
         prepareRequest: async request => {
             prepared.push(request);
             return createPreparedPlayRequest(context, payload, { streaming: testStreaming,
@@ -208,7 +208,7 @@ test('失败请求的迟到回调不能覆盖正在重试的正文，主动取�
     const io = memoryFiles(), firstFinished = deferred(), release = deferred();
     let sends = 0, oldCallbacks;
     const environment = { character: characterA, context: contextA, retry: config() };
-    const service = createPlayground({ history: io.store, captureEnvironment: () => environment, isCurrent: () => true, checkpointMs: 0,
+    const service = createPlayground({ history: io.store, captureEnvironment: () => environment, isCurrent: () => true,
         prepareRequest: async () => ({ send: async options => {
             sends++;
             if (sends === 1) { oldCallbacks = options; throw Object.assign(new Error('429'), { status: 429 }); }
@@ -249,25 +249,36 @@ test('回复保存失败只重试保存，不再次请求模型；准备阶段42
     assert.equal(preparations, 1);
 });
 
-test('慢速思维链保存完成后才开始下一次，最终结果不保留上次空回复的思维链', async t => {
-    const saved = deferred(), release = deferred(), firstDone = deferred();
+test('自动重试期间不保存空回复的思维链，结束后只保存最后一次的结果', async t => {
+    const secondStarted = deferred(), release = deferred(), firstDone = deferred();
     const f = fixture(t, async attempt => {
-        if (attempt > 1) return streamResponse([{ choices: [{ delta: { content: '成功正文' } }] }, '[DONE]']);
-        return streamResponse([{ choices: [{ delta: { reasoning_content: 'discarded thought' } }] }, '[DONE]']);
-    }, { stream: true, checkpointMs: 1, retry: config({ intervalSeconds: 0.03 }) });
-    // A delayed checkpoint may already be running when the empty response is
-    // discovered. Keep it pending past the retry interval.
-    let held = false;
-    f.io.beforeWrite = async (name, text) => {
-        if (!held && name !== PLAY_HISTORY_INDEX && text.includes('discarded thought')) {
-            held = true; saved.resolve(); await release.promise;
+        if (attempt > 1) {
+            secondStarted.resolve(); await release.promise;
+            return streamResponse([{ choices: [{ delta: { content: '成功正文' } }] }, '[DONE]']);
         }
+        return streamResponse([{ choices: [{ delta: { reasoning_content: 'discarded thought' } }] }, '[DONE]']);
+    }, { stream: true, retry: config({ intervalSeconds: 0.03 }) });
+    f.io.beforeWrite = async (_name, text) => {
+        assert.doesNotMatch(text, /discarded thought/, '已放弃尝试的思维链不写入历史文件');
     };
     f.service.subscribe(state => { if (state.phase === 'retry-wait') firstDone.resolve(); });
-    const task = f.service.send({ prompt: '慢速保存' });
-    await firstDone.promise; await saved.promise; await delay(45); assert.equal(f.calls.length, 1);
-    release.resolve();
+    const task = f.service.send({ prompt: '重试期间保存' });
+    try {
+        await firstDone.promise;
+        const writes = [...f.writes], removals = [...f.removals];
+        assert.equal(writes.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+        await secondStarted.promise;
+        assert.equal(f.calls.length, 2);
+        assert.deepEqual(f.writes, writes, '再次请求模型前不额外上传');
+        assert.deepEqual(f.removals, removals);
+        const stored = await f.createStore().getRound(f.service.getState().roundId);
+        assert.equal(stored.results[0].extra, undefined);
+        assert.equal(stored.results[0].status, 'unfinished');
+        assert.deepEqual((await f.service.getRound(stored.id)).results[0].extra, {});
+    } finally { release.resolve(); }
     const result = await task;
     assert.equal(result.result.extra.reasoning, '');
     assert.equal((await f.createStore().getRound(result.roundId)).results[0].extra.reasoning, '');
+    assert.equal(result.result.text, '成功正文');
+    assert.equal(f.writes.filter(name => name === PLAY_HISTORY_INDEX).length, 2, '整个生成只保存开始和结束状态');
 });

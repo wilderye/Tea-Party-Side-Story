@@ -44,10 +44,12 @@ function retryReason(error) {
  * prepareRequest uses the native prompt pipeline and returns
  * { send({ signal, onText, onReasoning }), context? }. Callbacks receive the
  * full text or native reasoning metadata so far, stored independently.
+ * Like Tavern's chat flow, streamed content stays in this page's memory.
+ * History is saved before sending and after completion, stopping or failure.
  * This module neither evaluates outputs nor broadcasts SillyTavern events.
  */
 export function createPlayground({ history, captureEnvironment, isCurrent, prepareRequest,
-    diagnostics, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString(), checkpointMs = 2000 }) {
+    diagnostics, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString() }) {
     const jobs = new Map();
     const listeners = new Set();
     function findJob(resultId) {
@@ -69,7 +71,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             text: job.text, error: clone(job.saveError ?? job.error ?? null),
             retry: clone(job.retry ?? null),
             context: clone(job.context),
-            unsaved: !!job.pendingUpdate || !!job.checkpointError };
+            unsaved: !!job.pendingUpdate };
     }
     function getState(resultId) {
         return readJob(resultId ? findJob(resultId) : [...jobs.values()].at(-1));
@@ -147,33 +149,6 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             } finally { clearTimeout(timer); }
         }
     }
-    function scheduleCheckpoint(job) {
-        if (job.timer || job.checkpointPending || job.closed || checkpointMs <= 0) return;
-        job.timer = setTimeout(() => {
-            job.timer = null;
-            const text = job.text;
-            const extra = job.extra;
-            job.checkpointPending = true;
-            job.checkpoint = (async () => {
-                try {
-                    await history.saveResult(job.round.id, job.resultId, { text, ...(extra ? { extra } : {}), status: 'unfinished', finishedAt: null });
-                    job.checkpointError = null;
-                } catch (error) {
-                    diagnostics?.error('保存生成中的小剧场', error, { phase: 'saving' });
-                    job.checkpointError = true;
-                    if (isRemovedResult(error)) job.controller.abort(new DOMException('这条消息已在其他窗口删除或替换', 'AbortError'));
-                }
-                finally { job.checkpointPending = false; }
-                if (jobs.get(job.resultId) === job && !job.closed) {
-                    notify(job);
-                    // Coalesce text received during a slow upload; never build
-                    // a queue of obsolete full-text checkpoints behind it.
-                    if (job.text !== text || job.extra !== extra) scheduleCheckpoint(job);
-                }
-            })();
-        }, checkpointMs);
-        job.timer?.unref?.();
-    }
     async function start({ roundId, replaceResultId, continueResultId, characterId, character, prompt, origin,
         chatMode = false, operation, messageId, expectedRevision }) {
         const available = availability({ resultId: replaceResultId || continueResultId, ...(chatMode ? { chatId: roundId } : {}) });
@@ -195,7 +170,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
             requestedRoundId: roundId, replaceResultId, chatMode, messageId, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
-            text: '', context, closed: false, checkpoint: Promise.resolve() };
+            text: '', context, closed: false };
         const privateValues = [environment.api?.key, environment.tavern?.settings?.proxy_password];
         const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成',
             { phase: 'preparing', apiMode: environment.api?.mode }, privateValues);
@@ -259,7 +234,6 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                         onReasoning(extra) {
                             if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                             job.extra = readPlayReasoning(extra);
-                            scheduleCheckpoint(job);
                         },
                         onText(text) {
                             if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
@@ -271,7 +245,6 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                                     lastContentAt: receivedAt, receivedCharacters: text.length });
                             }
                             job.text = text;
-                            scheduleCheckpoint(job);
                             notify(job);
                         },
                     }), job.controller.signal);
@@ -292,15 +265,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 job.retry = { reason, attempt: retryCount + 1, maxRetries: retrySettings.maxRetries, remainingSeconds: 0 };
                 diagnostic?.update({ phase: job.phase });
                 await waitForRetry(job, retrySettings.intervalSeconds);
-                // Complete any old checkpoint before resetting this attempt's
-                // output. A slow upload must not restore the previous thoughts.
-                clearTimeout(job.timer); job.timer = null;
-                await abortable(() => job.checkpoint, job.controller.signal);
                 job.controller.signal.throwIfAborted();
-                if (job.checkpointError) throw new PlaygroundError('history_save_failed', '生成中的回复保存失败，已停止自动重试。');
                 job.text = baseText;
                 job.extra = continueExtra ? clone(continueExtra) : {};
-                scheduleCheckpoint(job);
                 retryCount++;
                 diagnostics?.info(`开始第 ${retryCount}/${retrySettings.maxRetries} 次自动重试`);
             }
@@ -319,9 +286,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             job.closed = true;
             job.finishedAt = now();
             diagnostic?.finish(finalStatus, generationError, { phase: job.phase, receivedCharacters: job.text.length });
-            clearTimeout(job.timer);
             if (job.round) { job.phase = 'saving'; notify(job); }
-            await job.checkpoint;
             if (!job.round) { jobs.delete(job.resultId); job.phase = 'idle'; notify(job); }
         }
         const update = { text: job.text, status: finalStatus, finishedAt: job.finishedAt, context: resultContext,

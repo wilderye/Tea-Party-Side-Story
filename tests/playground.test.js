@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { setTimeout as delay, setImmediate as nextTurn } from 'node:timers/promises';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { createPlayground } from '../playground.js';
 import { PLAY_HISTORY_INDEX } from '../play-history.js';
 import { createDiagnostics } from '../diagnostics.js';
@@ -97,7 +97,7 @@ function fixture(overrides = {}) {
         } }),
         response: async () => '固定的测试回复',
     };
-    const options = { history: f.store, uuid: randomUUID, now: () => time(tick++), checkpointMs: 0,
+    const options = { history: f.store, uuid: randomUUID, now: () => time(tick++),
         captureEnvironment: () => current,
         isCurrent: environment => current.character.avatar === environment.character.avatar && current.chatId === environment.chatId,
         enabled: () => control.enabled,
@@ -140,20 +140,33 @@ test('无效的第二种续写提示词不改写已有回复状态，也不开�
     assert.equal(f.service.getState().phase, 'idle');
 });
 
-test('流式尚未返回正文时也定期保存思维链，重开历史不会丢失', async () => {
-    const f = fixture({ checkpointMs: 1 }), started = deferred(), finish = deferred();
+test('生成中的思维链只保留在本页，结束后随正文保存', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = fixture(), started = deferred(), finish = deferred();
+    const extra = { reasoning: '尚在思考', api: 'custom', model: 'test-model' };
+    let id;
     f.control.response = async ({ onReasoning }) => {
-        onReasoning({ reasoning: '尚在思考', api: 'custom', model: 'test-model' });
+        onReasoning(extra);
         started.resolve(); await finish.promise; return '完成正文';
     };
     const task = f.service.send({ prompt: '测试思考阶段保存' });
     try {
-        await started.promise; await delay(25);
-        const round = await f.createStore().getRound(f.service.getState().roundId);
+        await started.promise;
+        id = f.service.getState().roundId;
+        const writes = [...f.writes], removals = [...f.removals];
+        t.mock.timers.tick(30_000); await nextTurn();
+        assert.deepEqual(f.writes, writes, '等待思考内容期间不上传文件');
+        assert.deepEqual(f.removals, removals, '等待思考内容期间不清理旧文件');
+        assert.deepEqual((await f.service.getRound(id)).results[0].extra, extra);
+        const round = await f.createStore().getRound(id);
         assert.equal(round.results[0].text, '');
-        assert.equal(round.results[0].extra.reasoning, '尚在思考');
+        assert.equal(round.results[0].extra, undefined, '另一个页面只读取开始生成时保存的状态');
         assert.equal(round.results[0].status, 'unfinished');
     } finally { finish.resolve(); await task; }
+    const saved = await f.createStore().getRound(id);
+    assert.equal(saved.results[0].text, '完成正文');
+    assert.deepEqual(saved.results[0].extra, extra);
+    assert.equal(saved.results[0].status, 'complete');
 });
 
 test('删除消息不请求模型或改主聊天；全部回复删除后可重新生成，用户消息删除后不可生成', async () => {
@@ -463,19 +476,36 @@ test('提示词保存失败不请求模型；回复保存失败可独立重试�
     assert.equal(f.service.getState().phase, 'idle');
 });
 
-test('流式片段定期保存，重开能看见已保存片段，但不冒充已完成或本页正在生成', async () => {
-    const f = fixture({ checkpointMs: 5 }), started = deferred(), finish = deferred();
-    f.control.response = async ({ onText }) => { onText('可恢复片段'); started.resolve(); await finish.promise; return '最终正文'; };
+test('连续生成不上传或删除文件，本页实时显示片段，结束后保存完整回复', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const f = fixture(), started = deferred(), finish = deferred();
+    f.control.response = async ({ onText }) => { onText('生成中的片段'); started.resolve(onText); await finish.promise; return '最终正文'; };
     const task = f.service.send({ prompt: '测试恢复' });
-    await started.promise;
-    await delay(25);
-    const id = f.service.getState().roundId;
-    const reopened = await f.restart().getRound(id);
-    assert.equal(reopened.results[0].status, 'unfinished');
-    assert.equal(reopened.results[0].text, '可恢复片段');
-    assert.equal((await f.service.getRound(id)).results[0].status, 'generating');
-    finish.resolve(); await task;
-    assert.equal((await f.restart().getRound(id)).results[0].text, '最终正文');
+    let id, writes;
+    try {
+        const onText = await started.promise;
+        id = f.service.getState().roundId; writes = [...f.writes];
+        const removals = [...f.removals];
+        assert.equal(writes.filter(name => name === PLAY_HISTORY_INDEX).length, 1, '发送模型前已保存输入和生成状态');
+        for (let i = 0; i < 3; i++) {
+            onText(`最新片段${i}`);
+            t.mock.timers.tick(30_000); await nextTurn();
+            assert.equal((await f.service.getRound(id)).results[0].text, `最新片段${i}`);
+            assert.deepEqual(f.writes, writes, '连续收到文字也不定时上传');
+            assert.deepEqual(f.removals, removals, '生成中也不产生旧文件删除');
+        }
+        const reopened = await f.restart().getRound(id);
+        assert.equal(reopened.prompt, '测试恢复');
+        assert.equal(reopened.results[0].status, 'unfinished');
+        assert.equal(reopened.results[0].text, '');
+        assert.equal((await f.service.getRound(id)).results[0].status, 'generating');
+    } finally { finish.resolve(); await task; }
+    const saved = await f.restart().getRound(id);
+    assert.equal(saved.results[0].text, '最终正文');
+    assert.equal(saved.results[0].status, 'complete');
+    const finalWrites = f.writes.slice(writes.length);
+    assert.equal(finalWrites.filter(name => name.startsWith('teahouse-play-body-')).length, 1);
+    assert.equal(finalWrites.filter(name => name === PLAY_HISTORY_INDEX).length, 1, '结束后只进行一批保存');
 });
 
 test('无已验证的提示词处理器、插件停用、空输入均不伪造生成或写空历史', async () => {
@@ -490,8 +520,8 @@ test('无已验证的提示词处理器、插件停用、空输入均不伪造�
     assert.equal(f.files.size, 0);
 });
 
-test('保存缓慢时合并流式片段，最终结果不会等待一长串过时快照', async () => {
-    const f = fixture({ checkpointMs: 1 });
+test('慢速保存只写最终正文，保存期间忽略迟到片段并等待保存完成', async () => {
+    const f = fixture();
     const started = deferred(), saving = deferred(), releaseSave = deferred(), finish = deferred();
     let delayed = false;
     f.control.response = async ({ onText }) => {
@@ -505,21 +535,28 @@ test('保存缓慢时合并流式片段，最终结果不会等待一长串过�
         return '完整的最终正文';
     };
     const task = f.service.send({ prompt: '测试慢保存' });
-    const onText = await started.promise;
-    await saving.promise;
-    const before = f.writes.length;
-    for (let i = 0; i < 4; i++) { onText(`收到更多文字${i}`); await delay(3); }
-    finish.resolve();
-    await nextTurn();
-    assert.equal(f.service.getState().phase, 'saving');
-    assert.equal(f.service.getState().text, '完整的最终正文');
-    releaseSave.resolve();
+    let before;
+    try {
+        const onText = await started.promise;
+        before = f.writes.length;
+        for (let i = 0; i < 4; i++) { onText(`收到更多文字${i}`); await nextTurn(); }
+        assert.equal(delayed, false, '流式片段没有触发保存');
+        assert.equal(f.writes.length, before);
+        finish.resolve(); await saving.promise;
+        assert.equal(f.service.getState().phase, 'saving');
+        assert.equal(f.service.getState().text, '完整的最终正文');
+        assert.equal(f.service.availability({ resultId: f.service.getState().resultId }).code, 'busy');
+        onText('迟到片段'); await nextTurn();
+        assert.equal(f.service.getState().text, '完整的最终正文');
+    } finally { finish.resolve(); releaseSave.resolve(); }
     const result = await task;
     const savedFiles = f.writes.slice(before);
-    assert.equal(savedFiles.filter(name => name.startsWith('teahouse-play-body-')).length, 2,
-        '只写进行中的一次正文片段，以及最终正文，不积压过时片段');
-    assert.equal(savedFiles.filter(name => name === PLAY_HISTORY_INDEX).length, 2);
+    assert.equal(savedFiles.filter(name => name.startsWith('teahouse-play-body-')).length, 1,
+        '只写最终正文');
+    assert.equal(savedFiles.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
     assert.equal(result.result.text, '完整的最终正文');
+    assert.equal((await f.restart().getRound(result.roundId)).results[0].text, '完整的最终正文');
+    assert.equal(f.service.getState().phase, 'idle');
 });
 
 test('准备阶段停止，迟到的准备结果不会继续发送，也不影响下一次生成', async () => {

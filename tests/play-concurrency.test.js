@@ -16,7 +16,7 @@ async function until(predicate) {
 function fixture(t, prepare) {
     const f = memoryFiles(), calls = new Map(), events = [];
     let tick = 0;
-    const service = createPlayground({ history: f.store, uuid: randomUUID, now: () => time(tick++), checkpointMs: 0,
+    const service = createPlayground({ history: f.store, uuid: randomUUID, now: () => time(tick++),
         captureEnvironment: ({ character = characterA } = {}) => ({ character, chat: [],
             context: { chatId: `${character.avatar}-chat`, apiMode: 'tavern', characterName: character.name },
             api: { mode: 'tavern', key: 'synthetic-private-key' } }),
