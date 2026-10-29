@@ -776,7 +776,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel.tea-play-mode[data-mode=list] { display:flex; flex-direction:column; }
     #teahouse-panel.tea-play-mode[data-mode=list] .play-catalog { display:flex; flex:none; height:auto; padding:0; background:var(--tea-paper); z-index:3; }
     #teahouse-panel .play-character-browser,#teahouse-panel .play-person-time,#teahouse-panel .play-people-pagination { display:none; }
-    #teahouse-panel .play-character-browser { margin-top:44px; }
+    #teahouse-panel .play-catalog>.play-character-browser { margin-top:44px; }
     #teahouse-panel.tea-play-mode.play-choosing-character[data-mode=list] .play-catalog { flex:1; min-height:0; }
     #teahouse-panel.tea-play-mode.play-choosing-character[data-mode=list] .play-character-browser { display:flex; }
     #teahouse-panel .play-character-heading { display:flex; flex:none; align-items:center; gap:8px; min-height:56px; padding:6px; }
