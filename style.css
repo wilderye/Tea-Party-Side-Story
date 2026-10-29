@@ -400,11 +400,14 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel:not([data-mode=list]) .tea-catalog { display:none; }
     #teahouse-panel:not([data-mode=list]) .tea-workspace { display:flex; }
     #teahouse-panel .tea-brand { height:calc(64px + env(safe-area-inset-top)); padding:calc(8px + env(safe-area-inset-top)) 18px 8px; margin:0; background:var(--tea-sidebar-paper,var(--tea-forest)); color:var(--tea-sidebar-ink,var(--tea-paper)); gap:8px; }
+    #teahouse-panel .tea-brand>div:not(.tea-mobile-actions) { flex:none; }
     #teahouse-panel .tea-brand h1 { font-size:20px; line-height:26px; letter-spacing:2px; }
     #teahouse-panel .tea-brand p { font-size:9px; line-height:12px; }
     #teahouse-panel .tea-brand>.tea-glyph svg { width:28px; height:36px; }
-    #teahouse-panel .tea-mobile-actions { display:flex; margin-left:auto; gap:0; }
+    #teahouse-panel .tea-mobile-actions { display:flex; margin-left:auto; gap:2px; }
     #teahouse-panel .tea-icon { width:48px; min-width:48px; height:48px; }
+    #teahouse-panel .tea-mobile-actions .tea-icon { width:36px; min-width:36px; height:44px; }
+    #teahouse-panel .tea-mobile-actions .tea-glyph svg { width:18px; height:18px; }
     #teahouse-panel .tea-brand { position:relative; z-index:2; }
     #teahouse-panel .tea-mobile-tab-slot { display:block; position:absolute; z-index:1; top:calc(64px + env(safe-area-inset-top)); left:0; right:0; height:44px; overflow:hidden; pointer-events:none; }
     #teahouse-panel .tea-tabs.tea-mobile-tabs { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); height:44px; flex:none; padding:0 18px; gap:0; background:var(--tea-sidebar-paper,var(--tea-forest)); pointer-events:auto; }
@@ -589,6 +592,12 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-header-actions .tea-glyph svg { width:18px; height:18px; stroke-width:1.55; }
 #teahouse-panel .play-header-actions .tea-star[aria-pressed=true] { background:var(--tea-accent-paper,#f0e4d5)!important; color:var(--tea-accent,#aa6a4a)!important; }
 #teahouse-panel .play-header-actions .tea-star[aria-pressed=true] svg { fill:var(--tea-accent-fill,#ce987b38); }
+/* Keep speaker details readable while the assistant's tools wrap independently. */
+#teahouse-panel .play-assistant-meta .play-message-identity { min-width:120px; max-width:40%; }
+#teahouse-panel .play-assistant-meta .play-header-actions { flex:0 1 auto; min-width:30px; flex-wrap:wrap; justify-content:flex-end; gap:2px; }
+#teahouse-panel .play-assistant-meta .play-header-actions .tea-icon { width:30px; min-width:30px; height:36px; }
+#teahouse-panel .play-assistant-meta .play-header-actions .tea-glyph svg { width:16px; height:16px; }
+#teahouse-panel .play-assistant-meta .play-header-actions .play-reply-more { display:none; }
 #teahouse-panel :is(.play-user-text,.play-results) { padding-bottom:17px; }
 #teahouse-panel :where(.play-prose) { display:flow-root; color:var(--play-prose-ink,var(--tea-ink)); font:var(--play-prose-weight,400) var(--tea-body-size)/var(--play-prose-leading,1.85) var(--play-prose-font,var(--tea-ui)); overflow-wrap:anywhere; }
 #teahouse-panel .play-assistant-message .play-result { touch-action:pan-y; }
@@ -804,8 +813,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-again .tea-glyph svg { width:14px; height:14px; }
     #teahouse-panel .play-header-actions { gap:0; }
     #teahouse-panel .play-header-actions .tea-icon { width:40px; min-width:40px; height:44px; }
-    #teahouse-panel .play-assistant-meta:has(.play-sent-prompt-action) { flex-wrap:wrap; }
-    #teahouse-panel .play-assistant-meta:has(.play-sent-prompt-action) .play-header-actions { margin-left:auto; }
+    #teahouse-panel .play-assistant-meta .play-message-identity { min-width:104px; max-width:none; }
+    #teahouse-panel .play-assistant-meta .play-reply-tools:not(.is-expanded)>.play-reply-more { display:inline-flex; }
+    #teahouse-panel .play-assistant-meta .play-reply-tools:not(.is-expanded)>.play-reply-secondary { display:none; }
     #teahouse-panel .play-swipes { gap:0; margin-left:16px; }
     #teahouse-panel .play-swipes .tea-icon { width:44px; min-width:44px; height:44px; }
     #teahouse-panel .play-count { min-width:58px; min-height:44px; padding:0 3px; font-size:13px; white-space:nowrap; }

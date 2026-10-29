@@ -112,7 +112,9 @@ async function verify(page, url, viewport) {
                 separate: boxes.every((box, index) => !index || box.left >= boxes[index - 1].right) };
         });
     });
-    assert.deepEqual(layout.map(item => item.labels), [['取消收藏', '修改提示词', '删除用户消息'], ['取消收藏', '编辑回复原文', '删除 AI 消息']]);
+    assert.deepEqual(layout.map(item => item.labels), [['取消收藏', '修改提示词', '删除用户消息'], viewport.width <= 760
+        ? ['更多回复操作', '取消收藏', '编辑回复原文']
+        : ['创建分支', '查看实际提示词', '删除 AI 消息', '取消收藏', '编辑回复原文']]);
     assert.ok(layout.every(item => item.inside && item.sameRow && item.separate), '用户和 AI 的三个操作按钮在同一行、不重叠、不越界');
     await record(sourceId).evaluate(node => {
         const feed = node.closest('.play-feed'); feed.scrollTop += node.getBoundingClientRect().top - feed.getBoundingClientRect().top - 12;

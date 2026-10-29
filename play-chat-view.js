@@ -4,7 +4,7 @@ import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText } from './play-render.js';
 import { playChatTitle } from './play-history.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
-import { createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer } from './play-message-ui.js';
 
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 const pad = value => String(value).padStart(2, '0');
@@ -342,7 +342,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             const branch = iconButton('branch', '创建分支', () => void branchAt(message));
             branch.classList.add('play-branch-action');
             branch.disabled = branchDisabled(message);
-            tools.prepend(branch); tools.append(prompt);
+            setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit });
             const index = message.results.indexOf(result), atEnd = index === message.results.length - 1;
             const { actions: footer, swipes, prev, count, next, again, continueBtn, stop, assistantTop } = createPlayReplyActions({
                 onPrevious: () => void selectVersion(message, index - 1), onChoose: () => void showVersions(message),
@@ -675,7 +675,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             }
             for (const button of content.querySelectorAll('.play-header-actions button')) {
                 const message = chat.messages.find(message => message.id === button.closest('[data-message-id]').dataset.messageId);
-                button.disabled = button.classList.contains('play-sent-prompt-action') ? false : button.classList.contains('play-branch-action')
+                button.disabled = button.classList.contains('play-sent-prompt-action') || button.classList.contains('play-reply-more') ? false : button.classList.contains('play-branch-action')
                     ? branchDisabled(message)
                     : busy() || settings.enabled === false;
             }

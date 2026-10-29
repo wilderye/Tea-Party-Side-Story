@@ -22,6 +22,10 @@ const server = http.createServer(async (request, response) => {
     } catch (error) { response.statusCode = 500; response.end(error.message); }
 });
 const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+async function expandReplyTools(message) {
+    const more = message.getByRole('button', { name: '更多回复操作', exact: true });
+    if (await more.isVisible()) await more.click();
+}
 async function screenshot(page, name) {
     if (!process.env.TEA_QA_DIR) return;
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
@@ -34,7 +38,7 @@ async function verifyReadingControls(page, panel, branch, viewport) {
     const offset = locator => locator.evaluate(node => -new DOMMatrixReadOnly(getComputedStyle(node).transform).m42 || 0);
     const top = ai.getByRole('button', { name: '回到这条消息开头', exact: true });
     const jump = branch.getByRole('button', { name: '跳到最新消息', exact: true });
-    const branchButton = ai.getByRole('button', { name: '创建分支', exact: true });
+    const branchButton = ai.getByRole('button', { name: '创建分支', exact: true, includeHidden: true });
     assert.equal(await branchButton.evaluate(node => !!node.closest('.play-message-meta')), true, '分支按钮在回复顶部');
     assert.equal(await ai.locator('.play-message-actions').getByRole('button', { name: '创建分支', exact: true }).count(), 0);
     await settle(page); await top.waitFor();
@@ -140,11 +144,12 @@ async function verify(page, url, viewport) {
     await button('剧场演出').click();
     const seedId = await page.evaluate(() => seed.a);
     const original = panel.locator(`[data-record="${seedId}"]`);
-    await original.getByRole('button', { name: '创建分支', exact: true }).waitFor();
+    await original.locator('.play-assistant-message').waitFor();
     const originalFeed = panel.locator('.play-feed').filter({ visible: true });
     await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 200)));
     await originalFeed.evaluate(node => { node.scrollTop = 140; }); await settle(page);
     const oldScroll = await originalFeed.evaluate(node => node.scrollTop);
+    await expandReplyTools(original);
     await original.getByRole('button', { name: '创建分支', exact: true }).click();
     const branch = panel.locator('.play-branch-page').filter({ visible: true });
     await branch.locator('[data-message-id]').first().waitFor();
@@ -316,6 +321,7 @@ async function verify(page, url, viewport) {
             playSearchText('**加粗搜索词**\n\n```text\n完整代码内容\n```')];
     });
     assert.equal(searchSamples[0],'可搜索正文');assert.match(searchSamples[1],/加粗搜索词.*完整代码内容/);
+    await expandReplyTools(oldAi);
     await oldAi.getByRole('button',{name:'创建分支',exact:true}).click();
     await branch.locator('[data-message-id]').nth(1).waitFor();
     assert.equal(await input.inputValue(),'','新分支不复制草稿');
@@ -421,6 +427,7 @@ async function verifyRequestedControls(page, url, viewport) {
     const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click();
     const seedId = await page.evaluate(() => seed.a), original = panel.locator(`[data-record="${seedId}"]`);
+    await original.locator('.play-assistant-message').waitFor(); await expandReplyTools(original);
     await original.getByRole('button', { name: '创建分支', exact: true }).click();
     const branch = panel.locator('.play-branch-page').filter({ visible: true });
     await branch.locator('[data-message-id]').nth(1).waitFor();
@@ -431,6 +438,7 @@ async function verifyRequestedControls(page, url, viewport) {
     assert.equal(await header.evaluate(node => node.offsetHeight), viewport.width <= 760 ? 40 : 36);
     assert.equal(await header.evaluate(node => getComputedStyle(node).borderBottomWidth), '0px');
     assert.equal(await branch.locator('.play-chat-name').evaluate(node => getComputedStyle(node).fontSize), '14px');
+    await expandReplyTools(branch);
     await branch.getByRole('button', { name: '创建分支', exact: true }).click();
     await branch.locator('.play-chat-title-branch').getByText('· 分支#2', { exact: true }).waitFor();
     await button('关闭聊天页面').click();
@@ -469,7 +477,7 @@ async function verifyRequestedControls(page, url, viewport) {
     const firstUser = branch.locator('.play-user-message').first();
     await firstUser.getByRole('button', { name: '修改用户消息', exact: true }).click();
     await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('尚未保存的用户修改');
-    assert.equal(await branch.locator('.play-assistant-message').first().getByRole('button', { name: '创建分支', exact: true }).isDisabled(), true);
+    assert.equal(await branch.locator('.play-assistant-message').first().getByRole('button', { name: '创建分支', exact: true, includeHidden: true }).isDisabled(), true);
     await button('历史记录').click(); await directory.waitFor();
     assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[0].text, '测试小剧场', '切换页面不应用编辑框内容');
     await row.locator('.play-history-open').click();

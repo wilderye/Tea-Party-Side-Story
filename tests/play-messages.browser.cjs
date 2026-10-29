@@ -58,18 +58,31 @@ async function verifyDeletion(page, url, viewport) {
     const record = panel.locator(`[data-record="${id}"]`);
     const user = record.locator('.play-user-message'), reply = record.locator('.play-assistant-message');
     const removeUser = user.getByRole('button', { name: '删除用户消息', exact: true });
-    const removeReply = reply.getByRole('button', { name: '删除 AI 消息', exact: true });
+    const removeReply = reply.getByRole('button', { name: '删除 AI 消息', exact: true, includeHidden: true });
     await record.getByRole('button', { name: '第 2 / 2 个结果，选择历史结果', exact: true }).waitFor();
     await reply.getByRole('button', { name: '收藏演出记录', exact: true }).click();
     await reply.getByRole('button', { name: '取消收藏', exact: true }).waitFor();
     const favorite = await page.evaluate(async () => (await runtime.listFavorites())[0]);
+    const visibleLabels = () => reply.locator('.play-header-actions').evaluate(tools => [...tools.querySelectorAll('button')]
+        .filter(button => button.getClientRects().length).map(button => button.getAttribute('aria-label')));
+    const more = reply.getByRole('button', { name: '更多回复操作', exact: true });
+    const deleteReply = async () => { if (await more.isVisible()) await more.click(); await removeReply.click(); };
+    if (viewport.width <= 760) {
+        assert.deepEqual(await visibleLabels(), ['更多回复操作', '取消收藏', '编辑回复原文'], '手机默认收起分支、提示词和删除');
+        await more.click(); await reply.locator('.play-header-actions').press('Escape');
+        assert.deepEqual(await visibleLabels(), ['更多回复操作', '取消收藏', '编辑回复原文'], 'Esc 收起按钮');
+        await more.click(); await reply.locator('.play-results').click();
+        assert.deepEqual(await visibleLabels(), ['更多回复操作', '取消收藏', '编辑回复原文'], '点击按钮区外面收起按钮');
+        await more.click();
+    }
     const layout = await record.evaluate(node => {
-        const header = node.querySelector('.play-assistant-meta'), buttons = [...header.querySelectorAll('button')];
+        const header = node.querySelector('.play-assistant-meta'), buttons = [...header.querySelectorAll('button')].filter(button => button.getClientRects().length);
         const rects = buttons.map(button => button.getBoundingClientRect());
         const area = header.getBoundingClientRect();
         const box = selector => node.querySelector(selector).getBoundingClientRect();
         const userAvatar = box('.play-user-meta .play-message-avatar'), replyAvatar = box('.play-assistant-meta .play-message-avatar');
         const userIdentity = box('.play-user-meta .play-message-identity'), replyIdentity = box('.play-assistant-meta .play-message-identity');
+        const replyTools = box('.play-assistant-meta .play-header-actions'), replyTime = box('.play-assistant-meta .play-message-time');
         return { labels: buttons.map(button => button.getAttribute('aria-label')),
             avatarsAligned: Math.abs(userAvatar.left - replyAvatar.left) < 1 && Math.abs(userAvatar.left - box('.play-user-text').left) < 1,
             namesAligned: Math.abs(userIdentity.left - replyIdentity.left) < 1 && userIdentity.left > userAvatar.right,
@@ -77,33 +90,36 @@ async function verifyDeletion(page, url, viewport) {
                 && box('.play-user-meta .play-header-actions').right < userIdentity.left
                 && Math.abs(box('.play-user-meta .play-speaker').right - box('.play-user-meta .play-message-time').right) < 1,
             sameRow: rects.every(rect => Math.abs(rect.top - rects[0].top) < 1),
-            inside: rects.every(rect => rect.left >= area.left - 1 && rect.right <= area.right + 1),
-            separate: rects.every((rect, index) => index === 0 || rect.left >= rects[index - 1].right) };
+            identityReadable: replyIdentity.width >= 103 && replyTime.right <= replyIdentity.right + 1 && replyTools.left >= replyIdentity.right,
+            inside: rects.every(rect => rect.left >= area.left - 1 && rect.right <= area.right + 1 && rect.top >= area.top - 1 && rect.bottom <= area.bottom + 1),
+            separate: rects.every((rect, index) => rects.slice(index + 1).every(other => rect.right <= other.left + 1
+                || other.right <= rect.left + 1 || rect.bottom <= other.top + 1 || other.bottom <= rect.top + 1)) };
     });
-    assert.deepEqual(layout.labels, ['创建分支', '取消收藏', '编辑回复原文', '删除 AI 消息']);
+    assert.deepEqual(layout.labels, ['创建分支', '查看实际提示词', '删除 AI 消息', '取消收藏', '编辑回复原文']);
     if (viewport.width <= 760) assert.equal(layout.avatarsAligned && layout.namesAligned, true, '手机端用户与 AI 的头像、姓名和时间共用左侧排列');
     else assert.equal(layout.userOnRight, true, '电脑端用户头像、姓名和时间靠右，操作按钮在其左侧');
-    assert.equal(layout.sameRow && layout.inside && layout.separate, true, '收藏、编辑、删除在同一行且不重叠');
+    assert.equal(layout.identityReadable && layout.inside && layout.separate, true, '按钮不遮挡姓名、时间，也不重叠或越出消息顶部');
+    assert.equal(layout.sameRow, viewport.width >= 360, '正常手机宽度按钮保持一行，较窄屏幕只让按钮区换行');
     await record.evaluate(node => {
         const feed = node.closest('.play-feed'); feed.scrollTop += node.getBoundingClientRect().top - feed.getBoundingClientRect().top - 10;
     });
     await screenshot(page, `message-actions-${viewport.width}.png`);
 
     await page.evaluate(() => { window.confirmDeletion = 0; });
-    await removeReply.click();
+    await deleteReply();
     await page.waitForFunction(() => !!window.deleteConfirmation);
     assert.match(await page.evaluate(() => deleteConfirmation.text), /全部 2 个生成版本/);
     assert.equal((await page.evaluate(id => runtime.getRound(id), id)).results.length, 2);
     assert.equal(await reply.isVisible(), true, '取消删除保留原消息');
 
     await page.evaluate(() => { window.confirmDeletion = 1; window.failSave = true; });
-    await removeReply.click();
+    await deleteReply();
     await panel.getByText('模拟保存失败', { exact: true }).filter({ visible: true }).waitFor();
     assert.equal((await page.evaluate(id => runtime.getRound(id), id)).results.length, 2);
     assert.equal(await reply.isVisible(), true, '保存失败时不先从界面移除消息');
 
     await page.evaluate(() => { window.failSave = false; });
-    await removeReply.click();
+    await deleteReply();
     await reply.waitFor({ state: 'hidden' });
     assert.equal(await user.isVisible(), true);
     assert.equal((await page.evaluate(id => runtime.getRound(id), id)).results.length, 0);
@@ -128,7 +144,7 @@ async function verifyDeletion(page, url, viewport) {
     await openPlay(page, url);
     await reply.getByText('删除旧消息后重新生成的回复。', { exact: true }).waitFor();
     assert.equal(await user.isVisible(), false, '重新打开不恢复已删除用户消息');
-    await removeReply.click(); await record.waitFor({ state: 'hidden' });
+    await deleteReply(); await record.waitFor({ state: 'hidden' });
     assert.equal(await page.evaluate(async id => {
         const owner = (await runtime.listCharacters()).find(item => item.avatar === 'A.png');
         return (await runtime.listRounds(owner.id)).some(row => row.id === id);
@@ -228,7 +244,7 @@ async function verifyEditPosition(page, url, viewport) {
     try {
         browser = await chromium.launch({ channel: 'msedge', headless: true });
         const url = `http://127.0.0.1:${server.address().port}/`;
-        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }]) {
+        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 360, height: 844 }, { width: 320, height: 844 }]) {
             const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
             page.on('pageerror', error => errors.push(error.message));
             page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });

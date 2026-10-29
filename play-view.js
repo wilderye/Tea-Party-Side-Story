@@ -4,7 +4,7 @@ import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker } from './play-character-picker.js';
-import { createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText } from './play-message-ui.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
@@ -767,7 +767,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (result) onInspectPrompt?.(result.id);
         });
         prompt.classList.add('play-sent-prompt-action'); prompt.hidden = !onInspectPrompt;
-        const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(branch, favorite, editReply, removeReply, prompt); aiHead.head.append(replyTools);
+        const replyTools = element('div', undefined, 'play-header-actions');
+        const replyMore = setupPlayReplyHeaderActions(replyTools, { branch, prompt, remove: removeReply, favorite, edit: editReply });
+        aiHead.head.append(replyTools);
         const results = element('div', undefined, 'play-results');
         const error = element('p', undefined, 'play-result-error'); error.hidden = true;
         const { actions, again, continueBtn, assistantTop, stop, swipes, prev, count, next } = createPlayReplyActions({
@@ -782,7 +784,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         });
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
+            userTools, replyTools, replyMore, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) {
         const editingId = [...(views.get(round.id)?.outputs ?? [])].find(([, output]) => output.editor)?.[0];
@@ -836,7 +838,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
-        const tools = output.editor ? [output.editor.actions] : [view.branch, view.favorite, view.editReply, view.removeReply, view.prompt];
+        const tools = output.editor ? [output.editor.actions] : [view.replyMore, view.branch, view.prompt, view.removeReply, view.favorite, view.editReply];
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id);
         const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);

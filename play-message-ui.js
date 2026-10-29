@@ -5,6 +5,35 @@ const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 export const playResultStatusText = { preparing: '正在准备', generating: '正在生成', 'retry-wait': '等待自动重试',
     saving: '正在保存', 'save-failed': '尚未保存', unfinished: '未完成', failed: '生成失败', stopped: '已停止' };
 
+let replyToolsId = 0, replyToolsDismissalBound = false;
+
+/** Both reply views reveal the same secondary buttons inline on phones. */
+export function setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit }) {
+    tools.classList.add('play-reply-tools'); tools.id = `play-reply-tools-${++replyToolsId}`;
+    for (const button of [branch, prompt, remove]) button.classList.add('play-reply-secondary');
+    const more = iconButton('more', '更多回复操作', () => {
+        tools.classList.add('is-expanded'); more.setAttribute('aria-expanded', 'true');
+        [branch, prompt, remove, favorite, edit].find(button => !button.hidden && !button.disabled)?.focus({ preventScroll: true });
+    });
+    more.classList.add('play-reply-more'); more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', tools.id);
+    tools.replaceChildren(more, branch, prompt, remove, favorite, edit);
+    tools.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !tools.classList.contains('is-expanded')) return;
+        event.preventDefault(); event.stopPropagation(); tools.classList.remove('is-expanded');
+        more.setAttribute('aria-expanded', 'false'); more.focus({ preventScroll: true });
+    });
+    if (!replyToolsDismissalBound) {
+        document.addEventListener('pointerdown', event => {
+            for (const opened of document.querySelectorAll('.play-reply-tools.is-expanded')) {
+                if (opened.contains(event.target)) continue;
+                opened.classList.remove('is-expanded'); opened.querySelector('.play-reply-more')?.setAttribute('aria-expanded', 'false');
+            }
+        });
+        replyToolsDismissalBound = true;
+    }
+    return more;
+}
+
 /** Both conversation pages use the same button groups and layout. */
 export function createPlayReplyActions({ onPrevious, onNext, onChoose, onAgain, onContinue, onStop, onTop }) {
     const actions = element('footer', undefined, 'play-message-actions');
