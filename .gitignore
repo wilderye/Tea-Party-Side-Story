@@ -23,6 +23,7 @@ tests/*
 !tests/play-api.browser.cjs
 !tests/qr-entry.test.js
 !tests/uninstall.test.js
+!tests/update-reload.test.js
 !tests/markdown.test.js
 !tests/appearance.browser.cjs
 !tests/appearance-controls.browser.cjs

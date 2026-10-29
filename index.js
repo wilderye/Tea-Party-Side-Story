@@ -241,6 +241,11 @@ function syncEntrances() {
     })
         .catch(error => { diagnostics.error('更新快捷入口', error); notify(error.message); });
 }
+// Tavern calls this after successfully updating the plugin files.
+export function onUpdate() {
+    location.reload();
+}
+
 export async function onUninstall() {
     uninstalling = true;
     document.querySelector('#teahouse-edge')?.remove();
