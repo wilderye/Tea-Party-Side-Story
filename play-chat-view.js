@@ -18,7 +18,7 @@ export function playRecentTime(value) {
 
 /** Directory owns its list; only one branch transcript is mounted at a time. */
 export function createPlayChatView(ctx, settings, playground, promptFavorites, {
-    notify, onOpen, onBranch, onCharacter, onDelete, onInspectPrompt, getReadingInset = () => 0, onProgrammaticScroll = () => {},
+    notify, onOpen, onBranch, onCharacter, onClose, onDelete, onInspectPrompt, getReadingInset = () => 0, onProgrammaticScroll = () => {},
 }) {
     const mobile = matchMedia('(max-width: 760px)');
     const page = element('div', undefined, 'play-page play-history-page');
@@ -33,7 +33,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const list = element('div', undefined, 'tea-scroll play-history-list'); list.setAttribute('aria-label', '聊天历史目录');
     directory.append(searchLine, list);
     const branchPage = element('div', undefined, 'play-page play-branch-page'); branchPage.hidden = true;
-    const title = element('h2', '', 'play-chat-name');
+    const heading = element('header', undefined, 'play-chat-heading');
+    const headingInner = element('div', undefined, 'play-chat-heading-inner');
+    const title = element('h2', '', 'play-chat-name'), titleName = element('span', '', 'play-chat-title-text');
+    const titleBranch = element('span', '', 'play-chat-title-branch');
+    title.append(titleName, titleBranch);
+    const close = iconButton('close', '关闭聊天页面', () => onClose()); close.classList.add('play-chat-close');
+    headingInner.append(title, close); heading.append(headingInner);
     const readingArea = element('div', undefined, 'play-reading-area');
     const feed = element('div', undefined, 'tea-scroll play-feed play-chat-feed'); feed.setAttribute('aria-label', '分支对话');
     const content = element('div', undefined, 'play-feed-content'); feed.append(content);
@@ -47,7 +53,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.placeholder = '接着剧情继续聊…'; input.setAttribute('aria-label', '分支聊天输入');
     const send = iconButton('send', '发送消息', () => void sendDraft()); send.classList.add('play-send');
     inputRow.append(menu, input, send); inner.append(inputRow); compose.append(inner);
-    branchPage.append(title, readingArea, compose); page.append(directory, branchPage);
+    const deleteControls = element('div', undefined, 'play-delete-controls'); deleteControls.hidden = true;
+    const deleteDescription = element('span'), confirmDelete = textButton('确认删除', () => void confirmMessageDeletion());
+    deleteControls.append(deleteDescription, confirmDelete, textButton('取消', () => { deletingFrom = null; renderChat(position()); }));
+    branchPage.append(heading, readingArea, compose, deleteControls); page.append(directory, branchPage);
     let characters = [], selected, chat, visible = false, route = 'history', browsing = false;
     let searchOpen = false, queryTimer, queryId = 0, directoryId = 0, openId = 0, reloadId = 0, loading = false, mutating = false, panel;
     let editor, deletingFrom = null, restoring = false, renderFrame, versionMenu, inputFrame, inputComposing = false;
@@ -56,8 +65,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     let rows = [], limit = 24, start = 0, end = 0, favorites = new Map(), chatFavorite;
     const rowViews = new Map(), directoryRecords = new Map(), displayCache = new Map(), positions = new Map(), directories = new Map(), drafts = new Map();
     const pendingDrafts = new Map();
+    const editingSessions = new Map();
     const replyViews = new WeakMap();
     const cacheWeight = new WeakMap();
+    function canLeave() { return !mutating && ![...editingSessions.values()].some(session => session.editor.saving); }
+    menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
     function cacheEntry(cache, key, value) {
         const weight = entry => entry?.messages ? entry.messages.reduce((size, message) => size + (message.text?.length ?? 0), 0)
             : (entry?.raw?.length ?? 0) + (entry?.text?.length ?? 0);
@@ -91,12 +103,12 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const owner = () => characters.find(character => character.id === chat?.characterId) ?? selected;
     const target = () => ({ characterId: chat.characterId, character: { avatar: owner()?.avatar, name: owner()?.name } });
     const ownJobs = () => playground.getStates().filter(job => (job.roundId ?? job.requestedRoundId) === chat?.id);
-    const busy = () => !chat || mutating || loading || ownJobs().length > 0 || chat.messages.some(message => message.results?.some(result => result.status === 'unfinished'));
+    const busy = () => !chat || mutating || loading || editingSessions.has(chat.id) || ownJobs().length > 0 || chat.messages.some(message => message.results?.some(result => result.status === 'unfinished'));
     const canWrite = () => settings.enabled !== false && !!ctx().characters?.some(character => character.avatar === owner()?.avatar);
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
     function branchDisabled(message) {
         const result = currentResult(message);
-        return mutating || result.status === 'unfinished' || ownJobs().some(job => job.resultId === result.id) || settings.enabled === false;
+        return mutating || editingSessions.has(chat.id) || result.status === 'unfinished' || ownJobs().some(job => job.resultId === result.id) || settings.enabled === false;
     }
     function processed(message, result = currentResult(message)) {
         const text = result?.text ?? message.text;
@@ -122,7 +134,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (selected?.id && route === 'history' && visible) directories.set(selected.id, { rows, query: search.value, searchOpen, scroll: list.scrollTop, limit });
     }
     async function chooseCharacter(character) {
-        saveDirectory(); remember(); openId++; queryId++; directoryId++; closeVersions(); editor?.dispose(); editor = null; selected = character; chat = null;
+        if (!canLeave()) return;
+        saveDirectory(); remember(); openId++; queryId++; directoryId++; closeVersions(); editor = null; selected = character; chat = null;
+        deletingFrom = null;
         route = 'history'; branchPage.hidden = true; directory.hidden = false; setBrowsing(false);
         const saved = directories.get(character.id);
         rows = saved?.rows ?? []; search.value = saved?.query ?? ''; searchOpen = saved?.searchOpen ?? false; limit = saved?.limit ?? 24;
@@ -204,21 +218,28 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const nodes = matching.map(row => {
             let view = rowViews.get(row.id);
             if (!view) {
-                const button = textButton('', () => onOpen(view.row.id, view.row.matchMessageId)); button.className = 'play-history-row'; button.dataset.chatId = row.id;
+                const node = element('div', undefined, 'play-history-row'); node.dataset.chatId = row.id;
+                const button = textButton('', () => onOpen(view.row.id, view.row.matchMessageId)); button.className = 'play-history-open';
                 const text = element('span', undefined, 'play-history-copy'), name = element('strong'), preview = element('span', undefined, 'play-history-preview');
                 const time = element('time', undefined, 'play-person-time'); text.append(name, preview); button.append(text, time);
-                view = { button, name, preview, time }; rowViews.set(row.id, view);
+                const tools = element('div', undefined, 'play-history-actions');
+                const rename = iconButton('edit', '修改聊天名称', () => void renameChat(view.row));
+                const remove = iconButton('trash', '删除该聊天', () => void deleteChat(view.row)); tools.append(rename, remove);
+                node.append(button, tools);
+                view = { node, button, name, preview, time, rename, remove }; rowViews.set(row.id, view);
             }
             view.row = row; view.name.textContent = row.name; view.preview.textContent = row.preview;
+            view.button.disabled = mutating;
+            view.rename.disabled = view.remove.disabled = mutating || settings.enabled === false;
             const recent = playRecentTime(row.lastPlayedAt); view.time.dateTime = row.lastPlayedAt;
             view.time.replaceChildren(element('span', recent.day, 'play-person-date'), element('small', recent.time, 'play-person-clock'));
-            return view.button;
+            return view.node;
         });
         if (!nodes.length) nodes.push(element('p', term ? '没有找到符合条件的聊天。' : '这个角色还没有演出记录。', 'play-empty-title'));
         if (!term && count < rows.length) nodes.push(textButton('显示更多历史记录', () => { limit += 24; void renderDirectory(); }));
         const scroll = list.scrollTop; list.replaceChildren(...nodes); list.scrollTop = scroll;
         const currentIds = new Set(rows.map(row => row.id));
-        for (const [key, view] of rowViews) if (!currentIds.has(key)) { view.button.remove(); rowViews.delete(key); }
+        for (const [key, view] of rowViews) if (!currentIds.has(key)) { view.node.remove(); rowViews.delete(key); }
     }
     search.addEventListener('input', event => {
         queryId++; clearTimeout(queryTimer);
@@ -246,14 +267,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         for (const node of content.querySelectorAll('.play-assistant-message')) {
             const top = node.querySelector('.play-message-top');
             if (!top) continue;
-            const hidden = !!editor || node.querySelector('.play-results').scrollHeight + node.querySelector('.play-message-meta').offsetHeight <= height;
+            const hidden = !!editor || deletingFrom !== null || node.querySelector('.play-results').scrollHeight + node.querySelector('.play-message-meta').offsetHeight <= height;
             if (top.hidden !== hidden) updates.push({ top, hidden });
         }
         if (jump.hidden !== hidden) jump.hidden = hidden;
         for (const { top, hidden } of updates) top.hidden = hidden;
         for (const node of content.querySelectorAll('.play-assistant-message')) {
             const view = replyViews.get(node);
-            if (view && !view.actions.querySelector('button:not(.tea-icon):not(.play-count)')) syncPlayReplyFooter(view, !!editor);
+            if (view && !view.actions.querySelector('button:not(.tea-icon):not(.play-count)')) syncPlayReplyFooter(view, !!editor || deletingFrom !== null);
         }
     }
     function jumpToMessage(node) {
@@ -353,31 +374,56 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             node.append(footer);
         }
         if (deletingFrom !== null) {
-            node.classList.toggle('play-delete-selected', chat.messages.indexOf(message) >= deletingFrom);
-            const choose = textButton('从这里删除到最后', () => { deletingFrom = chat.messages.indexOf(message); renderChat(); });
-            choose.className = 'play-delete-select'; node.prepend(choose);
+            const choose = element('input', undefined, 'play-delete-checkbox'); choose.type = 'checkbox';
+            choose.setAttribute('aria-label', `从第 ${chat.messages.indexOf(message) + 1} 条消息删除到最后`);
+            choose.tabIndex = 0; node.prepend(choose);
+            tools.hidden = true;
+            node.querySelector('.play-message-actions')?.setAttribute('hidden', '');
+            node.addEventListener('click', event => {
+                if (mutating) return;
+                if (event.target !== choose) event.preventDefault();
+                deletingFrom = chat.messages.indexOf(message); updateDeletionSelection();
+            });
+        }
+        const session = editingSessions.get(chat.id);
+        if (session?.messageId === message.id) {
+            editor = session.editor; tools.replaceChildren(editor.actions); body.replaceChildren(editor.body);
         }
         return node;
     }
     function renderChat(saved = positions.get(chat?.id), targetId) {
-        if (!chat || editor) return;
-        title.textContent = playChatTitle(chat); menuItems.replaceChildren();
+        if (!chat) return;
+        editor = null;
+        const name = playChatTitle(chat), parts = /^(.*?)\s*·\s*(分支#\d+)$/.exec(name);
+        titleName.textContent = parts?.[1] ?? name; titleName.title = name;
+        titleBranch.textContent = parts ? `· ${parts[2]}` : ''; titleBranch.hidden = !parts;
+        menuItems.replaceChildren();
         menuItems.append(textButton(chatFavorite ? '取消收藏该聊天' : '收藏该聊天', () => void toggleChatFavorite()),
-            textButton('修改聊天名称', () => void rename()), textButton('删除该聊天', () => void deleteChat()),
-            textButton('删除', () => { menu.open = false; deletingFrom = chat.messages.length ? chat.messages.length - 1 : null; renderChat(position()); }));
+            textButton('修改聊天名称', () => void renameChat(chat)), textButton('删除该聊天', () => void deleteChat(chat)),
+            textButton('删除', () => { menu.open = false; deletingFrom = -1; renderChat(position()); }));
         for (const button of menuItems.children) button.disabled = busy() || settings.enabled === false;
         const nodes = chat.messages.slice(start, end).map(renderMessage);
         if (start > 0) nodes.unshift(textButton('显示更早的消息', () => { const saved = position(); start = Math.max(0, start - 24); renderChat(saved); }));
         if (end < chat.messages.length) nodes.push(textButton('显示后面的消息', () => { const saved = position(); end = Math.min(chat.messages.length, end + 24); renderChat(saved); }));
         if (!nodes.length) nodes.push(element('p', '输入内容，开始这段剧情。', 'play-empty-title'));
-        if (deletingFrom !== null) {
-            const controls = element('div', undefined, 'play-delete-controls');
-            controls.append(element('span', `将删除所选楼层到最后，共 ${chat.messages.length - deletingFrom} 条消息`),
-                textButton('确认删除', () => void run(() => playground.truncateChat(chat.id, chat.messages[deletingFrom].id, chat.revision))),
-                textButton('取消', () => { deletingFrom = null; renderChat(position()); }));
-            nodes.push(controls);
+        content.replaceChildren(...nodes); updateDeletionSelection(); updateInput(); restore(saved, targetId);
+    }
+    function updateDeletionSelection() {
+        deleteControls.hidden = deletingFrom === null;
+        confirmDelete.disabled = mutating || deletingFrom === null || deletingFrom < 0;
+        deleteDescription.textContent = deletingFrom >= 0 && deletingFrom !== null
+            ? `将删除所选消息到最后，共 ${chat.messages.length - deletingFrom} 条消息` : '请选择要从哪里开始删除';
+        for (const node of content.querySelectorAll('[data-message-id]')) {
+            const selected = deletingFrom !== null && deletingFrom >= 0 && chat.messages.findIndex(message => message.id === node.dataset.messageId) >= deletingFrom;
+            node.classList.toggle('play-delete-selected', selected);
+            const checkbox = node.querySelector('.play-delete-checkbox');
+            if (checkbox) checkbox.checked = selected;
         }
-        content.replaceChildren(...nodes); updateInput(); restore(saved, targetId);
+    }
+    async function confirmMessageDeletion() {
+        if (deletingFrom === null || deletingFrom < 0 || mutating) return;
+        const message = chat.messages[deletingFrom];
+        if (message) await run(() => playground.truncateChat(chat.id, message.id, chat.revision));
     }
     function updateInput() {
         const jobs = ownJobs(), generating = jobs.find(job => activePhases.has(job.phase));
@@ -419,7 +465,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     async function open(id, targetId) {
         remember(); saveDirectory(); closeVersions(); queryId++; directoryId++; const request = ++openId; loading = true;
-        editor?.dispose(); editor = null; deletingFrom = null; chat = null; content.replaceChildren(element('p', '正在读取聊天…'));
+        editor = null; deletingFrom = null; chat = null; content.replaceChildren(element('p', '正在读取聊天…'));
+        deleteControls.hidden = true; menu.open = false;
         route = 'chat'; branchPage.hidden = false; directory.hidden = true; input.value = drafts.get(id) ?? '';
         try {
             const next = await playground.getChat(id);
@@ -432,12 +479,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 targetId = chat.messages.find(message => chat.startMessageIds.includes(message.id)
                     && message.role === (targetId === 'initial-user' ? 'user' : 'assistant'))?.id;
             }
-            const saved = positions.get(id), anchor = targetId ?? saved?.messageId;
+            const saved = positions.get(id), editingMessageId = editingSessions.get(id)?.messageId;
+            const anchor = editingMessageId ?? targetId ?? saved?.messageId;
             const index = chat.messages.findIndex(message => message.id === anchor);
-            end = !targetId && saved?.bottom ? chat.messages.length : index < 0 ? chat.messages.length : Math.min(chat.messages.length, index + 24);
+            end = !editingMessageId && !targetId && saved?.bottom ? chat.messages.length : index < 0 ? chat.messages.length : Math.min(chat.messages.length, index + 24);
             start = index < 0 ? Math.max(0, end - 24) : Math.max(0, index - 12);
-            if (!targetId && saved?.bottom) start = Math.max(0, end - 24);
-            loading = false; renderChat(saved, targetId);
+            if (!editingMessageId && !targetId && saved?.bottom) start = Math.max(0, end - 24);
+            loading = false; renderChat(saved, targetId ?? editingMessageId);
             if (visible) { resize.observe(content); resize.observe(feed); resize.observe(branchPage); }
             if (targetId && index < 0) notify('原回复已删除');
         } catch (error) { if (request === openId) showError(content, error, () => open(id, targetId)); }
@@ -453,6 +501,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         end = saved?.bottom ? chat.messages.length : Math.min(Math.max(end, start + 24), chat.messages.length);
         start = Math.min(start, Math.max(0, end - 1));
         if (saved?.bottom) start = Math.max(0, end - 24);
+        const editingIndex = chat.messages.findIndex(message => message.id === editingSessions.get(id)?.messageId);
+        if (editingIndex >= 0 && (editingIndex < start || editingIndex >= end)) {
+            start = Math.max(0, editingIndex - 12); end = Math.min(chat.messages.length, editingIndex + 24);
+        }
         if (visible && route === 'chat') renderChat(saved);
     }
     async function run(action) {
@@ -509,13 +561,23 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     function editMessage(message, body, tools) {
         if (busy() || editor) return;
         remember(); const result = currentResult(message), text = result?.text ?? message.text, id = chat.id;
-        const finish = () => { editor?.dispose(); editor = null; renderChat(positions.get(id)); };
-        editor = createPlayEditor({ text, label: message.role === 'user' ? '用户消息原文' : '回复原文', onCancel: finish,
+        const session = { messageId: message.id };
+        const finish = () => {
+            session.editor.dispose(); editingSessions.delete(id);
+            if (chat?.id === id) { editor = null; renderChat(positions.get(id)); }
+        };
+        session.editor = createPlayEditor({ text, label: message.role === 'user' ? '用户消息原文' : '回复原文', onCancel: finish,
             async onSave({ text }) {
-                chat = await playground.editMessage(id, message.id, { text, expectedText: result?.text ?? message.text, resultId: result?.id });
+                const updated = await playground.editMessage(id, message.id, { text, expectedText: result?.text ?? message.text, resultId: result?.id });
+                if (chat?.id === id) chat = updated;
                 finish();
             } });
-        tools.replaceChildren(editor.actions); body.replaceChildren(editor.body); compose.hidden = true; updateReadingControls(); editor.body.focus({ preventScroll: true });
+        editingSessions.set(id, session); editor = session.editor;
+        tools.replaceChildren(editor.actions); body.replaceChildren(editor.body); compose.hidden = true;
+        for (const button of content.querySelectorAll('.play-header-actions button, .play-message-actions button')) {
+            if (!editor.actions.contains(button)) button.disabled = true;
+        }
+        updateReadingControls(); editor.body.focus({ preventScroll: true });
     }
     async function removeMessage(message) {
         if (busy()) return;
@@ -535,20 +597,44 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (busy()) return;
         await run(() => chatFavorite ? playground.removeFavorite(chatFavorite.id) : playground.favoriteChat(chat.id));
     }
-    async function rename() {
-        menu.open = false;
-        const name = await ctx().callGenericPopup('修改聊天名称', ctx().POPUP_TYPE.INPUT, chat.name || playChatTitle(chat));
-        if (typeof name === 'string') await run(() => playground.renameChat(chat.id, name, chat.revision));
+    async function changeChatRecord(record, action) {
+        if (mutating) return;
+        const characterId = selected?.id, inDirectory = route === 'history', scroll = list.scrollTop;
+        mutating = true; menu.open = false;
+        if (inDirectory) for (const view of rowViews.values()) view.button.disabled = view.rename.disabled = view.remove.disabled = true;
+        else updateInput();
+        try {
+            await action();
+            if (inDirectory && route === 'history' && selected?.id === characterId) { await refreshDirectory(false); list.scrollTop = scroll; }
+            else if (chat?.id === record.id && route === 'chat') await reload();
+        } catch (error) { notify(error.message); }
+        finally {
+            mutating = false;
+            if (inDirectory) for (const view of rowViews.values()) {
+                view.button.disabled = false; view.rename.disabled = view.remove.disabled = settings.enabled === false;
+            }
+            else if (chat && visible) renderChat(positions.get(chat.id));
+        }
     }
-    async function deleteChat() {
-        if (busy()) return;
+    async function renameChat(record) {
+        menu.open = false;
+        if (mutating || settings.enabled === false) return;
+        const name = await ctx().callGenericPopup('修改聊天名称', ctx().POPUP_TYPE.INPUT, record.name || '未命名聊天');
+        if (typeof name === 'string') await changeChatRecord(record, () => playground.renameChat(record.id, name, record.revision));
+    }
+    async function deleteChat(record) {
+        if (mutating || settings.enabled === false || route === 'chat' && busy()) return;
         menu.open = false;
         const confirmed = await ctx().callGenericPopup(element('p', '删除整条聊天？已有收藏会保留，聊天将从历史记录移除。'),
             ctx().POPUP_TYPE.CONFIRM, '', { okButton: '删除该聊天', cancelButton: '取消' });
         if (confirmed !== ctx().POPUP_RESULT.AFFIRMATIVE) return;
-        const id = chat.id;
-        try { await playground.deleteChat(id, chat.revision); drafts.delete(id); positions.delete(id); saveDrafts(); onDelete(id); }
-        catch (error) { notify(error.message); }
+        const id = record.id, inDirectory = route === 'history';
+        await changeChatRecord(record, async () => {
+            await playground.deleteChat(id, record.revision);
+            drafts.delete(id); positions.delete(id); editingSessions.get(id)?.editor.dispose(); editingSessions.delete(id); saveDrafts();
+            if (chat?.id === id) { chat = null; editor = null; }
+        });
+        if (!inDirectory && !chat) onDelete(id);
     }
     function updateReplyStops() {
         const multiple = playground.getStates().filter(job => activePhases.has(job.phase)).length > 1;
@@ -599,9 +685,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     });
     window.addEventListener('pagehide', saveDrafts);
     return {
-        page, browser: picker.node, chooseButton, open, get route() { return route; }, get selected() { return selected; },
+        page, browser: picker.node, chooseButton, open, get route() { return route; }, get selected() { return selected; }, get chatId() { return chat?.id; },
         async showDirectory(character, sort = true) {
-            remember(); route = 'history'; branchPage.hidden = true; directory.hidden = false; editor?.dispose(); editor = null;
+            remember(); route = 'history'; branchPage.hidden = true; directory.hidden = false; editor = null; menu.open = false; deletingFrom = null;
+            deleteControls.hidden = true;
             if (character) selected = character;
             const saved = directories.get(selected?.id);
             search.value = saved?.query ?? ''; searchOpen = saved?.searchOpen ?? false; limit = saved?.limit ?? 24;
@@ -620,7 +707,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 await reload();
             }
         },
-        canLeave: () => !mutating && !editor?.saving,
+        canLeave,
         prepareLayout: remember,
     };
 }

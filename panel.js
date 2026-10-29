@@ -124,7 +124,7 @@ function createMobileNavigation(panel, media) {
         nav = slot?.firstElementChild;
         tools = slot?.parentElement.querySelector('.tea-mobile-tools');
         const nextHeading = media.matches && value === 'play' && panel.dataset.mode === 'list'
-            ? [...panel.querySelectorAll('.play-chat-name')].find(node => node.getClientRects().length) : null;
+            ? [...panel.querySelectorAll('.play-chat-heading')].find(node => node.getClientRects().length) : null;
         if (heading !== nextHeading) {
             if (heading) heading.style.transform = '';
             headingResize.disconnect(); heading = nextHeading;
@@ -160,7 +160,8 @@ export function createTheatrePanel(ctx, state, actions) {
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
     let searchComposing = false, catalogCollapsed = false, restoringCatalog = false;
     let playView, playCatalog, playWorkspace, settingsView, diagnosticsView, apiSettings, playActive = false;
-    let chatView, chatCatalog, chatWorkspace, playRoute = 'play', branchReturn, chatActive = false;
+    let chatView, chatCatalog, chatWorkspace, playRoute = 'play', chatActive = false;
+    const chatReturns = [];
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
     let favoriteComposer, sentPromptViewer;
@@ -194,37 +195,41 @@ export function createTheatrePanel(ctx, state, actions) {
         onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area),
         onBranch: branch => void enterBranch(branch.id),
         onCharacter: () => { playRoute = 'history'; render(); },
-        onDelete: () => void returnFromBranch(),
+        onClose: () => void closeChatPage(), onDelete: () => void closeChatPage(),
     });
     async function enterBranch(id, messageId) {
         if (!await canLeave()) return;
-        if (playRoute !== 'chat' || scope !== 'play') {
-            captureCatalogPosition();
-            branchReturn = { scope, mode, route: scope === 'play' ? playRoute : 'favorites', catalog };
-        }
+        captureCatalogPosition();
+        if (playRoute !== 'chat' || scope !== 'play') chatReturns.length = 0;
+        chatReturns.push({ scope, mode, route: playRoute, catalog,
+            chatId: scope === 'play' && playRoute === 'chat' ? getChatView().chatId : null,
+            character: scope === 'play' && playRoute === 'history' ? getChatView().selected : null });
         playView?.prepareLayout();
         scope = 'play'; mode = 'list'; playRoute = 'chat'; render();
         await getChatView().open(id, messageId);
         mobileNavigation?.sync(scope);
     }
-    async function returnFromBranch() {
+    async function closeChatPage() {
         if (!await canLeave()) return;
         chatView?.deactivate(); chatActive = false;
-        const destination = branchReturn ?? { scope: 'play', mode: 'list', route: 'history' };
-        branchReturn = null; scope = destination.scope; mode = destination.mode; playRoute = destination.route === 'favorites' ? 'play' : destination.route;
+        const destination = chatReturns.pop() ?? { scope: 'play', mode: 'list', route: 'history' };
+        scope = destination.scope; mode = destination.mode; playRoute = destination.route;
         if (destination.catalog) catalog = destination.catalog;
-        if (playRoute === 'history' && scope === 'play') await getChatView().showDirectory(undefined, false);
+        if (scope === 'play' && playRoute === 'history') await getChatView().showDirectory(destination.character, false);
+        if (scope === 'play' && playRoute === 'chat') await getChatView().open(destination.chatId);
         render();
+        mobileNavigation?.sync(scope);
         if (scope !== 'play') restoreCatalogPosition();
     }
     async function toggleHistory() {
         if (mode === 'settings') return back();
-        if (playRoute === 'chat') return returnFromBranch();
         if (!await canLeave()) return;
         if (playRoute === 'history') { chatView?.deactivate(); chatActive = false; playRoute = 'play'; render(); }
         else {
+            const character = playRoute === 'chat' ? getChatView().selected : getPlayView().getSelectedCharacter();
+            chatReturns.length = 0;
             playView?.prepareLayout(); playRoute = 'history'; render();
-            await getChatView().showDirectory(getPlayView().getSelectedCharacter());
+            await getChatView().showDirectory(character);
         }
     }
     const randomOrders = new Map();
@@ -516,7 +521,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (scope === 'play' && mobileHeader) box.append(playRoute === 'play' ? getPlayView().chooseButton : getChatView().chooseButton);
         if (scope === 'play') {
             const history = iconButton('history', '历史记录', () => void toggleHistory()); history.classList.add('tea-history-toggle');
-            history.setAttribute('aria-pressed', String(playRoute !== 'play')); box.append(history);
+            history.setAttribute('aria-pressed', String(mode === 'list' && playRoute === 'history')); box.append(history);
         }
         box.append(settingsButton(), iconButton('close', '关闭面板', close));
         return box;
@@ -1153,7 +1158,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 mobileNavigation = createMobileNavigation(panel, media);
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
-                    for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open]')) {
+                    for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open], .play-chat-menu[open]')) {
                         if (!menu.contains(event.target)) menu.open = false;
                     }
                 });

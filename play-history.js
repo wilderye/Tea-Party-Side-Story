@@ -719,7 +719,15 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     }
                 }
                 const now = new Date().toISOString();
-                return commitChat(directory, { ...source, id: uuid(), createdAt: now,
+                const baseName = playChatTitle(source).replace(/\s*·\s*分支#\d+$/, '');
+                const names = new Set(directory.rounds.filter(row => row.characterId === source.characterId).map(row => row.name));
+                let name;
+                for (let number = 1; ; number++) {
+                    const suffix = ` · 分支#${number}`;
+                    name = baseName.slice(0, 100 - suffix.length).replace(/[\uD800-\uDBFF]$/, '') + suffix;
+                    if (!names.has(name)) break;
+                }
+                return commitChat(directory, { ...source, id: uuid(), name, createdAt: now,
                     source: { chatId: id, messageId }, startMessageIds: source.startMessageIds.map(id => ids.get(id)).filter(Boolean), messages }, now);
             });
         },

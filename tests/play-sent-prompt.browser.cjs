@@ -165,7 +165,7 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             await inspect(branch.locator('.play-assistant-message').last()).click();
             assert.ok((await viewer.locator('pre').textContent()).includes('分支第二条专属提示词'));
             await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
-            await button('历史记录').click();
+            await button('关闭聊天页面').click();
             await send('刷新清空的合成测试');
             await page.reload(); await open();
             assert.equal(await page.evaluate(resultId => promptCapture.read(resultId), resultId), null);

@@ -69,6 +69,28 @@ test('完整聊天追加后游玩只读起始对子；从早期层分支保留�
     assert.notEqual(another.id, branch.id, '每次点击都新建');
 });
 
+test('新分支名称避免重名，连续分支不叠加后缀，改名和删除不改变来源关系', async () => {
+    const f = memoryFiles(), initial = await seed(f);
+    const original = await f.store.renameChat(initial.id, '测试剧情', initial.revision);
+    const [first, second] = await Promise.all([
+        f.store.createBranch(original.id, original.messages[1].id),
+        f.store.createBranch(original.id, original.messages[1].id),
+    ]);
+    assert.equal(first.name, '测试剧情 · 分支#1');
+    assert.equal(second.name, '测试剧情 · 分支#2');
+    const third = await f.store.createBranch(first.id, first.messages[1].id);
+    assert.equal(third.name, '测试剧情 · 分支#3');
+    assert.deepEqual(third.source, { chatId: first.id, messageId: first.messages[1].id });
+    await f.store.renameChat(first.id, '独立改名');
+    await f.store.deleteChat(second.id);
+    assert.deepEqual((await f.store.getChat(third.id)).source, third.source);
+    const longName = '长'.repeat(100);
+    const renamed = await f.store.renameChat(original.id, longName);
+    const longBranch = await f.store.createBranch(renamed.id, renamed.messages[1].id);
+    assert.equal(longBranch.name.length, 100);
+    assert.match(longBranch.name, / · 分支#1$/);
+});
+
 test('版本选择只写元数据；编辑后只写改变的正文，消息删除和清空不删除聊天', async () => {
     const f = memoryFiles(), chat = await seed(f), ai = chat.messages[1];
     const before = f.writes.length, oldTime = (await f.store.listChats(chat.characterId))[0].lastPlayedAt;

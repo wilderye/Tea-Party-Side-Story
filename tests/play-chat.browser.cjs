@@ -29,7 +29,7 @@ async function screenshot(page, name) {
 }
 async function verifyReadingControls(page, panel, branch, viewport) {
     const feed = branch.locator('.play-chat-feed'), ai = branch.locator('.play-assistant-message').first();
-    const title = branch.locator('.play-chat-name');
+    const title = branch.locator('.play-chat-heading');
     const tabs = panel.locator('.play-chat-catalog .tea-mobile-tabs');
     const offset = locator => locator.evaluate(node => -new DOMMatrixReadOnly(getComputedStyle(node).transform).m42 || 0);
     const top = ai.getByRole('button', { name: '回到这条消息开头', exact: true });
@@ -45,7 +45,7 @@ async function verifyReadingControls(page, panel, branch, viewport) {
     assert.ok(Math.abs(buttons.right - buttons.footerRight) < 2, '回顶按钮在回复右下角');
     await top.click(); await settle(page);
     const visibleTop = await feed.evaluate(node => {
-        const heading = document.querySelector('.play-chat-name');
+        const heading = document.querySelector('.play-chat-heading');
         return Math.max(node.getBoundingClientRect().top, matchMedia('(max-width:760px)').matches ? heading.getBoundingClientRect().bottom : 0);
     });
     assert.ok(Math.abs((await ai.boundingBox()).y - visibleTop - 10) < 2, '回到回复开头且不被标题遮住');
@@ -76,7 +76,7 @@ async function verifyReadingControls(page, panel, branch, viewport) {
         assert.equal(await offset(title), 0); assert.equal(await offset(tabs), 0, '反向滑动完全展开');
         await touchScroll(22);
         const reading = await feed.evaluate(node => {
-            const top = document.querySelector('.play-chat-name').getBoundingClientRect().bottom;
+            const top = document.querySelector('.play-chat-heading').getBoundingClientRect().bottom;
             const anchor = [...node.querySelectorAll('[data-read-anchor]')].find(item => item.getBoundingClientRect().bottom > top + 1);
             return { id: anchor.dataset.readAnchor, offset: anchor.getBoundingClientRect().top - top };
         });
@@ -84,7 +84,7 @@ async function verifyReadingControls(page, panel, branch, viewport) {
         await panel.waitFor({ state: 'detached' });
         await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await settle(page);
         const restored = await feed.evaluate((node, reading) => {
-            const top = document.querySelector('.play-chat-name').getBoundingClientRect().bottom;
+            const top = document.querySelector('.play-chat-heading').getBoundingClientRect().bottom;
             return node.querySelector(`[data-read-anchor="${reading.id}"]`).getBoundingClientRect().top - top;
         }, reading);
         assert.ok(Math.abs(restored - reading.offset) < 2, `标题半收起时关闭再打开，按可见正文上边缘恢复阅读 ${reading.offset} → ${restored}`);
@@ -148,7 +148,7 @@ async function verify(page, url, viewport) {
     await original.getByRole('button', { name: '创建分支', exact: true }).click();
     const branch = panel.locator('.play-branch-page').filter({ visible: true });
     await branch.locator('[data-message-id]').first().waitFor();
-    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'true');
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'false');
     const branchId = await page.evaluate(async () => (await runtime.listChats((await runtime.listCharacters()).find(c => c.avatar === 'A.png').id)).find(row => row.branched).id);
     assert.notEqual(branchId, seedId);
     assert.equal(await branch.locator('[data-message-id]').count(), 2);
@@ -168,7 +168,7 @@ async function verify(page, url, viewport) {
     await input.fill('下一轮尚未发送的草稿');
     assert.equal(await branch.getByRole('button', { name: '停止这份回复', exact: true }).count() >= 1, true);
     assert.equal(await button('发送消息').count(), 0, '本分支生成时仍是停止按钮');
-    await button('历史记录').click();
+    await button('关闭聊天页面').click();
     await original.waitFor(); await settle(page);
     const returnScroll = await originalFeed.evaluate(node => node.scrollTop);
     assert.ok(Math.abs(returnScroll - oldScroll) < 3, `返回保留来源阅读位置：${oldScroll} → ${returnScroll}`);
@@ -184,7 +184,7 @@ async function verify(page, url, viewport) {
     const search = directory.getByRole('searchbox', { name: '搜索历史记录', exact: true });
     await search.fill('给这段剧情接上下一幕');
     await page.waitForFunction(() => document.querySelectorAll('.play-history-row').length === 1);
-    await directory.locator(`[data-chat-id="${branchId}"]`).click();
+    await directory.locator(`[data-chat-id="${branchId}"]`).locator('.play-history-open').click();
     await branch.locator('[data-message-id]').nth(3).waitFor();
     assert.equal(await input.inputValue(), '下一轮尚未发送的草稿');
     const oldAi = branch.locator('.play-assistant-message').first();
@@ -204,13 +204,13 @@ async function verify(page, url, viewport) {
     assert.equal(await panel.getByRole('button', { name: '编辑演出记录收藏', exact: true }).filter({ visible: true }).count(), 0);
     await button('前往分支').click();
     await branch.getByText('续聊后的最新AI回复', { exact: true }).waitFor();
-    await button('历史记录').click();
+    await button('关闭聊天页面').click();
     await panel.locator('.play-favorite-content').getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     if (viewport.width <= 760) await button('返回收藏目录').click();
     await button('剧场演出').click();
-    await button('历史记录').click();
+    if (!await directory.isVisible()) await button('历史记录').click();
     await directory.locator(`[data-chat-id="${branchId}"]`).waitFor();
-    await directory.locator(`[data-chat-id="${branchId}"]`).click();
+    await directory.locator(`[data-chat-id="${branchId}"]`).locator('.play-history-open').click();
     await branch.getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     await input.fill('重开后保留草稿');
     await button('关闭面板').click(); await panel.waitFor({ state: 'detached' });
@@ -257,7 +257,9 @@ async function verify(page, url, viewport) {
     await latest.getByText('重新生成的正文', { exact: true }).waitFor();
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '删除', exact: true }).click();
-    await branch.getByRole('button', { name: '从这里删除到最后', exact: true }).first().click();
+    assert.equal(await branch.getByRole('button', { name: '确认删除', exact: true }).isDisabled(), true);
+    assert.equal(await branch.locator('.play-delete-selected').count(), 0);
+    await branch.locator('.play-user-text').first().click();
     assert.equal(await branch.locator('.play-delete-selected').count(), 4);
     await branch.getByRole('button', { name: '确认删除', exact: true }).click();
     await branch.getByText('输入内容，开始这段剧情。', { exact: true }).waitFor();
@@ -288,7 +290,7 @@ async function verify(page, url, viewport) {
     }
     await searchAgain.fill('全局已处理');await directory.locator(`[data-chat-id="${seedId}"]`).waitFor();
     assert.equal(await directory.locator('.play-history-row').count(),1);
-    await directory.locator(`[data-chat-id="${seedId}"]`).click();
+    await directory.locator(`[data-chat-id="${seedId}"]`).locator('.play-history-open').click();
     await branch.locator('[data-message-id]').nth(1).waitFor();
     await input.fill('原对子自己的草稿');
     await button('设置').click();
@@ -306,7 +308,7 @@ async function verify(page, url, viewport) {
     assert.equal(await directory.locator('.play-history-row').count(),1);
     if(viewport.width<=760)await button('选择角色').click();
     await panel.locator('.play-people').filter({visible:true}).getByRole('button',{name:'测试甲',exact:true}).click();
-    await directory.locator(`[data-chat-id="${seedId}"]`).click();
+    await directory.locator(`[data-chat-id="${seedId}"]`).locator('.play-history-open').click();
     assert.equal(await input.inputValue(),'原对子自己的草稿');
     const searchSamples=await page.evaluate(async()=>{
         const {playSearchText}=await import('/play-render.js');
@@ -332,7 +334,7 @@ async function verify(page, url, viewport) {
     await button('历史记录').click();await button('历史记录').click();
     await searchAgain.fill('');await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,200)));
     await directory.locator(`[data-chat-id="${longId}"]`).waitFor();
-    const opened=Date.now();await directory.locator(`[data-chat-id="${longId}"]`).click();
+    const opened=Date.now();await directory.locator(`[data-chat-id="${longId}"]`).locator('.play-history-open').click();
     await branch.getByText(/长对话AI27/).waitFor();
     assert.ok(await branch.locator('[data-message-id]').count()<=24,'长对话初次只建立末尾24条消息');
     await settle(page);const longFeed=branch.locator('.play-chat-feed');
@@ -344,7 +346,7 @@ async function verify(page, url, viewport) {
         const top=node.getBoundingClientRect().top,anchor=[...node.querySelectorAll('[data-message-id]')].find(item=>item.getBoundingClientRect().bottom>top+1);
         return{id:anchor.dataset.messageId,offset:anchor.getBoundingClientRect().top-top};
     });
-    await button('历史记录').click();await directory.locator(`[data-chat-id="${longId}"]`).click();
+    await button('历史记录').click();await directory.locator(`[data-chat-id="${longId}"]`).locator('.play-history-open').click();
     await branch.locator('[data-message-id]').first().waitFor();await settle(page);
     const anchor=await longFeed.evaluate((node,id)=>node.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-node.getBoundingClientRect().top,scroll.id);
     assert.ok(Math.abs(anchor-scroll.offset)<4,`恢复本次阅读位置 ${scroll.offset} → ${anchor}`);
@@ -357,7 +359,7 @@ async function verify(page, url, viewport) {
         const chat=await runtime.getChat(id),message=chat.messages.find(message=>message.id===messageId);
         await runtime.editMessage(id,messageId,{text:'<div><p>高度变化前</p><button onclick="document.getElementById(\'more\').innerHTML=\'<p>增加的网页内容</p>\'.repeat(20)">展开网页</button><div id="more"></div></div>',expectedText:message.results[0].text,resultId:message.selectedResultId});
     },{id:longId,messageId:firstFloorId});
-    await button('历史记录').click();await directory.locator(`[data-chat-id="${longId}"]`).click();
+    await button('历史记录').click();await directory.locator(`[data-chat-id="${longId}"]`).locator('.play-history-open').click();
     await settle(page);
     const frame=branch.locator('iframe.play-web-output').first();await frame.waitFor();
     await longFeed.evaluate((node,id)=>{node.scrollTop+=node.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-node.getBoundingClientRect().top;},firstFloorId);await settle(page);
@@ -400,7 +402,7 @@ async function verify(page, url, viewport) {
     await page.reload();await page.waitForFunction(()=>window.ready);
     await page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
     await button('剧场演出').click();await button('历史记录').click();
-    await directory.locator(`[data-chat-id="${longId}"]`).click();
+    await directory.locator(`[data-chat-id="${longId}"]`).locator('.play-history-open').click();
     await branch.getByRole('button',{name:'结束未完成回复',exact:true}).click();
     await branch.getByText('已保存中断片段',{exact:true}).waitFor();
     await branch.getByRole('button',{name:'结束未完成回复',exact:true}).waitFor({state:'detached'});
@@ -409,6 +411,138 @@ async function verify(page, url, viewport) {
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ viewport, passed: true, checks: 'branch, followup, stop, history, search, favorite, return, reopen, responsive', errors }));
 }
+async function verifyRequestedControls(page, url, viewport) {
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(url); await page.waitForFunction(() => window.ready);
+    assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
+    await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+    const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+    await button('剧场演出').click();
+    const seedId = await page.evaluate(() => seed.a), original = panel.locator(`[data-record="${seedId}"]`);
+    await original.getByRole('button', { name: '创建分支', exact: true }).click();
+    const branch = panel.locator('.play-branch-page').filter({ visible: true });
+    await branch.locator('[data-message-id]').nth(1).waitFor();
+    const a = await page.evaluate(async () => (await runtime.listChats((await runtime.getChat(seed.a)).characterId)).find(row => row.branched).id);
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'false');
+    assert.match(await branch.locator('.play-chat-name').innerText(), /分支#1/);
+    const header = branch.locator('.play-chat-heading');
+    assert.equal(await header.evaluate(node => node.offsetHeight), viewport.width <= 760 ? 40 : 36);
+    assert.equal(await header.evaluate(node => getComputedStyle(node).borderBottomWidth), '0px');
+    assert.equal(await branch.locator('.play-chat-name').evaluate(node => getComputedStyle(node).fontSize), '14px');
+    await branch.getByRole('button', { name: '创建分支', exact: true }).click();
+    await branch.locator('.play-chat-title-branch').getByText('· 分支#2', { exact: true }).waitFor();
+    await button('关闭聊天页面').click();
+    await branch.locator('.play-chat-title-branch').getByText('· 分支#1', { exact: true }).waitFor();
+    await button('关闭聊天页面').click(); await original.waitFor();
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'false');
+    await button('历史记录').click();
+    const directory = panel.locator('.play-history-directory').filter({ visible: true });
+    await directory.locator(`[data-chat-id="${a}"]`).waitFor();
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'true');
+    await button('历史记录').click(); await original.waitFor();
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'false');
+    await button('历史记录').click(); await directory.waitFor();
+    if (viewport.width <= 760) await directory.getByRole('button', { name: '搜索历史记录', exact: true }).click();
+    const search = directory.getByRole('searchbox', { name: '搜索历史记录', exact: true });
+    await search.fill('分支#1');
+    await page.waitForFunction(() => document.querySelectorAll('.play-history-row').length === 1);
+    const row = directory.locator(`[data-chat-id="${a}"]`);
+    await page.evaluate(() => { ctx.callGenericPopup = async (_text, type) => type === ctx.POPUP_TYPE.CONFIRM ? 1 : '新名称 · 分支#1'; });
+    await row.getByRole('button', { name: '修改聊天名称', exact: true }).click();
+    await row.getByText('新名称 · 分支#1', { exact: true }).waitFor();
+    assert.equal(await directory.isVisible(), true); assert.equal(await search.inputValue(), '分支#1');
+    await row.locator('.play-history-open').click();
+    await branch.locator('[data-message-id]').nth(1).waitFor();
+    assert.equal(await button('历史记录').getAttribute('aria-pressed'), 'false');
+    await button('关闭聊天页面').click(); await directory.waitFor();
+    assert.equal(await search.inputValue(), '分支#1');
+    await row.locator('.play-history-open').click();
+    await branch.locator('[data-message-id]').nth(1).waitFor();
+    const menu = branch.locator('.play-chat-menu');
+    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
+    await header.click(); assert.equal(await menu.evaluate(node => node.open), false);
+    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
+    await branch.getByRole('button', { name: '收藏该聊天', exact: true }).click();
+    assert.equal(await menu.evaluate(node => node.open), false);
+    const firstUser = branch.locator('.play-user-message').first();
+    await firstUser.getByRole('button', { name: '修改用户消息', exact: true }).click();
+    await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('尚未保存的用户修改');
+    assert.equal(await branch.locator('.play-assistant-message').first().getByRole('button', { name: '创建分支', exact: true }).isDisabled(), true);
+    await button('历史记录').click(); await directory.waitFor();
+    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[0].text, '测试小剧场', '切换页面不应用编辑框内容');
+    await row.locator('.play-history-open').click();
+    await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).waitFor();
+    assert.equal(await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).inputValue(), '尚未保存的用户修改');
+    await button('关闭聊天页面').click(); await directory.waitFor();
+    await row.locator('.play-history-open').click();
+    assert.equal(await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).inputValue(), '尚未保存的用户修改');
+    await firstUser.getByRole('button', { name: '保存', exact: true }).click();
+    await firstUser.getByText('尚未保存的用户修改', { exact: true }).waitFor();
+    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[0].text, '尚未保存的用户修改');
+    const ai = branch.locator('.play-assistant-message').first();
+    const aiOriginal = (await page.evaluate(id => runtime.getChat(id), a)).messages[1].results[0].text;
+    await ai.getByRole('button', { name: '编辑回复原文', exact: true }).click();
+    await ai.getByRole('textbox', { name: '回复原文', exact: true }).fill('尚未保存的回复修改');
+    await button('关闭面板').click(); await panel.waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+    assert.equal(await ai.getByRole('textbox', { name: '回复原文', exact: true }).inputValue(), '尚未保存的回复修改');
+    await button('历史记录').click(); await directory.waitFor(); await search.fill('');
+    await directory.locator(`[data-chat-id="${seedId}"]`).waitFor();
+    await directory.locator(`[data-chat-id="${seedId}"]`).locator('.play-history-open').click();
+    await branch.locator('[data-message-id]').nth(1).waitFor();
+    assert.equal(await branch.getByRole('textbox', { name: '回复原文', exact: true }).count(), 0, '编辑框属于对应聊天');
+    await button('关闭聊天页面').click(); await directory.waitFor();
+    await row.locator('.play-history-open').click();
+    assert.equal(await ai.getByRole('textbox', { name: '回复原文', exact: true }).inputValue(), '尚未保存的回复修改');
+    await page.evaluate(() => { window.failSave = true; });
+    await ai.getByRole('button', { name: '保存', exact: true }).click();
+    await ai.getByText(/模拟保存失败/).waitFor();
+    await button('历史记录').click(); await directory.waitFor(); await row.locator('.play-history-open').click();
+    assert.equal(await ai.getByRole('textbox', { name: '回复原文', exact: true }).inputValue(), '尚未保存的回复修改');
+    await page.evaluate(() => { window.failSave = false; });
+    await ai.getByRole('button', { name: '取消', exact: true }).click();
+    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[1].results[0].text, aiOriginal);
+    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
+    await branch.getByRole('button', { name: '删除', exact: true }).click();
+    assert.equal(await branch.locator('.play-delete-selected').count(), 0);
+    assert.equal(await branch.getByRole('button', { name: '确认删除', exact: true }).isDisabled(), true);
+    await settle(page);
+    assert.equal(await branch.getByRole('button', { name: '生成新版本', exact: true }).isVisible(), false, '删除模式只显示删除操作');
+    await firstUser.locator('.play-user-text').click();
+    assert.equal(await branch.locator('.play-delete-selected').count(), 2);
+    assert.equal(await branch.getByRole('checkbox').first().isChecked(), true);
+    await ai.getByRole('checkbox').click();
+    assert.equal(await branch.locator('.play-delete-selected').count(), 1);
+    assert.equal(await firstUser.getByRole('checkbox').isChecked(), false);
+    await screenshot(page, `requested-delete-${viewport.width}.png`);
+    await branch.getByRole('button', { name: '确认删除', exact: true }).click();
+    await branch.locator('.play-assistant-message').waitFor({ state: 'detached' });
+    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages.length, 1);
+    await button('关闭聊天页面').click(); await directory.waitFor();
+    await page.evaluate(() => { ctx.callGenericPopup = async () => 0; });
+    await row.getByRole('button', { name: '删除该聊天', exact: true }).click();
+    assert.equal(await row.isVisible(), true, '取消删除保留目录记录');
+    await page.evaluate(() => { ctx.callGenericPopup = async () => 1; });
+    await row.getByRole('button', { name: '删除该聊天', exact: true }).click();
+    await row.waitFor({ state: 'detached' });
+    assert.equal(await directory.isVisible(), true); await assert.rejects(page.evaluate(id => runtime.getChat(id), a));
+    const child = await page.evaluate(async () => (await runtime.listChats((await runtime.getChat(seed.a)).characterId)).find(row => row.name.endsWith('分支#2')));
+    await directory.locator(`[data-chat-id="${child.id}"]`).locator('.play-history-open').click();
+    await branch.locator('[data-message-id]').nth(1).waitFor();
+    const longName = '在小镇的雨夜遇见久未谋面的朋友，然后一起等待末班车 · 分支#2';
+    await page.evaluate(async ({ id, name }) => { await runtime.renameChat(id, name); ui.refresh(); }, { id: child.id, name: longName });
+    await branch.locator('.play-chat-title-text').getByText(longName.split(' · ')[0], { exact: true }).waitFor();
+    await branch.locator('.play-chat-feed').evaluate(node => { node.scrollTop = 0; });
+    await settle(page);
+    assert.ok(await branch.locator('.play-chat-close').evaluate(node => node.getBoundingClientRect().right <= node.closest('.play-branch-page').getBoundingClientRect().right + 1));
+    await screenshot(page, `requested-header-${viewport.width}.png`);
+    assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ viewport, requestedControls: 'title, close return stack, history selection, directory rename/delete, outside menu, deletion selection, editing retained and explicit save', passed: true }));
+}
+
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${server.address().port}/`;
@@ -417,6 +551,8 @@ async function verify(page, url, viewport) {
         for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
             const context = await browser.newContext({ viewport });
             await verify(await context.newPage(), url, viewport); await context.close();
+            const controls = await browser.newContext({ viewport });
+            await verifyRequestedControls(await controls.newPage(), url, viewport); await controls.close();
         }
         const viewport = { width: 390, height: 844 }, context = await browser.newContext({ viewport });
         await context.addInitScript(() => {
