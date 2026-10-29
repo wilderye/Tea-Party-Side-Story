@@ -1,7 +1,18 @@
 import { element, textButton, glyph, iconButton, createPageJump } from './ui.js';
 
-const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
+export const playCharacterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
+const characterKey = playCharacterKey;
 const batchSize = 24;
+
+/** Merge only catalog identities; no character prompt contents are read. */
+export function mergePlayCharacters(saved, cards) {
+    const available = new Map((cards ?? []).filter(card => card?.avatar && card.name)
+        .map(card => [card.avatar, { avatar: card.avatar, name: card.name }]));
+    const characters = saved.map(character => ({ ...character, name: available.get(character.avatar)?.name ?? character.name }));
+    const savedAvatars = new Set(saved.map(character => character.avatar));
+    for (const character of available.values()) if (!savedAvatars.has(character.avatar)) characters.push(character);
+    return characters;
+}
 
 export function createCharacterAvatar(ctx, character, className, type = 'avatar') {
     const fallback = element('span', character.name.slice(0, 1), `${className} play-avatar-fallback`);
@@ -28,8 +39,12 @@ export function createPlayCharacterPicker(ctx, { getCharacters, getSelected, onS
     searchLabel.append(glyph('search'), search); searchLine.append(searchLabel);
     const people = element('nav', undefined, 'play-people'); people.setAttribute('aria-label', '角色列表');
     const pagination = element('nav', undefined, 'tea-pagination play-people-pagination'); pagination.setAttribute('aria-label', '角色列表翻页');
-    let query = '', page = 0, perPage = 8, limit = batchSize, scroll = 0, rowHeight = 0;
-    let composing = false, searchTimer, lastMobile = mobile.matches;
+    let query = '', page = 0, perPage = 8, limit = batchSize, scroll = 0;
+    let composing = false, searchTimer, layoutFrame, observedRow;
+    const resize = new ResizeObserver(() => {
+        if (!isVisible() || layoutFrame) return;
+        layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; render(); loadMore(); });
+    });
     const matches = () => {
         const term = query.trim().toLocaleLowerCase();
         return getCharacters().filter(character => !term || character.name.toLocaleLowerCase().includes(term));
@@ -53,18 +68,16 @@ export function createPlayCharacterPicker(ctx, { getCharacters, getSelected, onS
     }
     function measure() {
         if (mobile.matches || !people.clientHeight || !people.clientWidth) return perPage;
-        if (!rowHeight) {
-            const row = people.querySelector('.play-person');
-            const probe = !row && getCharacters().length ? characterButton(getCharacters()[0]) : null;
-            if (probe) people.append(probe);
-            rowHeight = (row ?? probe)?.getBoundingClientRect().height || 0;
-            probe?.remove();
-        }
+        const row = people.querySelector('.play-person');
+        const probe = !row && getCharacters().length ? characterButton(getCharacters()[0]) : null;
+        if (probe) people.append(probe);
+        const rowHeight = (row ?? probe)?.getBoundingClientRect().height || 0;
+        probe?.remove();
         return rowHeight ? Math.max(1, Math.floor(people.clientHeight / rowHeight)) : perPage;
     }
     function render(resetScroll = false) {
         if (!isVisible()) return;
-        if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; rowHeight = 0; }
+        resize.observe(people);
         if (resetScroll) scroll = 0;
         const count = measure();
         if (count !== perPage) { page = Math.floor(page * perPage / count); perPage = count; }
@@ -83,6 +96,12 @@ export function createPlayCharacterPicker(ctx, { getCharacters, getSelected, onS
             if (!shown.length) people.append(element('p', query.trim() ? '没有找到这个角色' : emptyText(), 'play-people-empty'));
         }
         jump.update(); previous.disabled = page === 0; next.disabled = page >= pages - 1;
+        const row = people.querySelector('.play-person');
+        if (row !== observedRow) {
+            if (observedRow) resize.unobserve(observedRow);
+            observedRow = row;
+            if (row) resize.observe(row);
+        }
         if (people.scrollTop !== scroll) people.scrollTop = scroll;
     }
     function loadMore() {
@@ -105,5 +124,6 @@ export function createPlayCharacterPicker(ctx, { getCharacters, getSelected, onS
     people.addEventListener('scroll', () => { scroll = people.scrollTop; loadMore(); }, { passive: true });
     return { node, people, back, render, layout() { render(); loadMore(); },
         focus() { back.focus({ preventScroll: true }); },
-        suspend() { clearTimeout(searchTimer); jump.node.open = false; } };
+        suspend() { clearTimeout(searchTimer); cancelAnimationFrame(layoutFrame); layoutFrame = 0;
+            resize.disconnect(); observedRow = null; jump.node.open = false; } };
 }

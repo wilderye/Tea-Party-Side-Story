@@ -253,7 +253,7 @@ async function verify(page, url, viewport) {
     await page.evaluate(() => { emitGeneration('重新生成的正文'); finishGeneration('重新生成的正文'); });
     await page.waitForFunction(() => runtime.getStates().length === 0);
     await latest.getByText('重新生成的正文', { exact: true }).waitFor();
-    assert.equal(await latest.locator('.play-count').getAttribute('aria-label'), '第 1 / 1 个结果，选择历史结果');
+    assert.equal(await latest.locator('.play-count').getAttribute('aria-label'), '第 2 / 2 个结果，选择历史结果');
     const firstUser = branch.locator('.play-user-message').first();
     await firstUser.getByRole('button', { name: '修改用户消息', exact: true }).click();
     await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('较早的用户消息修改');

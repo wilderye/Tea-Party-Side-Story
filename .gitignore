@@ -33,6 +33,7 @@ tests/*
 !tests/play-history.test.js
 !tests/play-chat.test.js
 !tests/play-chat.browser.cjs
+!tests/play-chat-regression.browser.cjs
 !tests/play-storage.test.js
 !tests/playground.test.js
 !tests/play-concurrency.test.js

@@ -1,5 +1,5 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
-import { createPlayCharacterPicker, createCharacterAvatar } from './play-character-picker.js';
+import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText } from './play-render.js';
 import { playChatTitle } from './play-history.js';
@@ -66,6 +66,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const rowViews = new Map(), directoryRecords = new Map(), displayCache = new Map(), positions = new Map(), directories = new Map(), drafts = new Map();
     const pendingDrafts = new Map();
     const editingSessions = new Map();
+    const messageViews = new Map();
     const replyViews = new WeakMap();
     const cacheWeight = new WeakMap();
     function canLeave() { return !mutating && ![...editingSessions.values()].some(session => session.editor.saving); }
@@ -131,36 +132,39 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         searchToggle.setAttribute('aria-expanded', String(!searchBox.hidden));
     }
     function saveDirectory() {
-        if (selected?.id && route === 'history' && visible) directories.set(selected.id, { rows, query: search.value, searchOpen, scroll: list.scrollTop, limit });
+        if (selected && route === 'history' && visible) directories.set(playCharacterKey(selected), { rows, query: search.value, searchOpen, scroll: list.scrollTop, limit });
     }
     async function chooseCharacter(character) {
         if (!canLeave()) return;
-        saveDirectory(); remember(); openId++; queryId++; directoryId++; closeVersions(); editor = null; selected = character; chat = null;
+        saveDirectory(); remember(); openId++; queryId++; directoryId++; loading = false; closeVersions(); editor = null; selected = character; chat = null;
         deletingFrom = null;
         route = 'history'; branchPage.hidden = true; directory.hidden = false; setBrowsing(false);
-        const saved = directories.get(character.id);
+        const saved = directories.get(playCharacterKey(character));
         rows = saved?.rows ?? []; search.value = saved?.query ?? ''; searchOpen = saved?.searchOpen ?? false; limit = saved?.limit ?? 24;
         updateSearch(); picker.render(); onCharacter?.(character);
         await refreshDirectory(false); list.scrollTop = saved?.scroll ?? 0;
     }
-    async function refreshCharacters(sort = true) {
+    async function refreshCharacters(sort = true, isCurrent = () => true) {
         const saved = await playground.listCharacters();
+        if (!isCurrent()) return false;
+        const next = mergePlayCharacters(saved, ctx().characters);
         if (!sort) {
-            const order = new Map(characters.map((character, index) => [character.id, index]));
-            saved.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+            const order = new Map(characters.map((character, index) => [playCharacterKey(character), index]));
+            next.sort((a, b) => (order.get(playCharacterKey(a)) ?? Infinity) - (order.get(playCharacterKey(b)) ?? Infinity));
         }
-        const available = new Map((ctx().characters ?? []).map(character => [character.avatar, character]));
-        characters = saved.map(character => ({ ...character, name: available.get(character.avatar)?.name ?? character.name }));
+        characters = next;
         if (!selected) {
             const current = ctx().characters?.[ctx().characterId];
             selected = characters.find(character => character.avatar === current?.avatar) ?? characters[0];
-        } else selected = characters.find(character => character.id === selected.id) ?? selected;
+        } else selected = characters.find(character => selected.id && character.id === selected.id)
+            ?? characters.find(character => selected.avatar && character.avatar === selected.avatar) ?? selected;
         picker.render();
+        return true;
     }
     async function refreshDirectory(sort = true) {
         const id = ++directoryId;
         try {
-            await refreshCharacters(sort);
+            if (!await refreshCharacters(sort, () => id === directoryId && route === 'history')) return;
             const next = selected?.id ? await playground.listChats(selected.id) : [];
             if (id !== directoryId) return;
             if (sort) rows = next;
@@ -169,6 +173,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 rows = next.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
             }
             await playground.display?.ensure(selected);
+            if (id !== directoryId || route !== 'history') return;
             await renderDirectory();
         } catch (error) { if (id === directoryId) showError(list, error, () => refreshDirectory(sort)); }
     }
@@ -319,14 +324,25 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function renderMessage(message) {
         const result = currentResult(message), last = chat.messages.at(-1)?.id === message.id;
-        const node = element('section', undefined, `play-message play-${message.role === 'user' ? 'user' : 'assistant'}-message`);
-        node.dataset.messageId = message.id;
+        let view = messageViews.get(message.id);
+        if (!view) {
+            const node = element('section', undefined, `play-message play-${message.role === 'user' ? 'user' : 'assistant'}-message`);
+            node.dataset.messageId = message.id;
+            const body = element('div', undefined, message.role === 'user' ? 'play-user-text' : 'play-results');
+            const error = element('p', undefined, 'play-result-error'); error.hidden = true;
+            view = { node, body, error, output: { box: body } }; node.append(body); messageViews.set(message.id, view);
+        }
+        const { node, body, output, error } = view;
+        node.querySelector('.play-message-meta')?.remove();
+        node.querySelector(':scope > .play-message-actions')?.remove();
+        node.querySelector(':scope > .play-delete-checkbox')?.remove();
+        node.onclick = null;
         const head = messageHeader(message, result), tools = element('div', undefined, 'play-header-actions');
-        const body = element('div', undefined, message.role === 'user' ? 'play-user-text' : 'play-results');
-        let output, error;
-        if (message.role === 'user') renderPlayText(body, processed(message), `${chat.id}/${message.id}`, false, true);
-        else {
-            error = element('p', undefined, 'play-result-error'); error.hidden = true; output = { box: body };
+        const session = editingSessions.get(chat.id), editing = session?.messageId === message.id;
+        if (message.role === 'user' && !editing) {
+            const text = processed(message);
+            if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true); view.userText = text; }
+        } else if (message.role === 'assistant' && !editing) {
             renderPlayReply(output, result, { displayText: processed(message, result), job: playground.getState(result.id),
                 error, anchor: `${chat.id}/${message.id}` });
         }
@@ -338,7 +354,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             : favorites.has(favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt }));
         if (starred) { favorite.title = '取消收藏'; favorite.setAttribute('aria-label', favorite.title); }
         favorite.setAttribute('aria-pressed', String(!!starred)); favorite.disabled = busy() || !(result?.text ?? message.text)?.trim() || settings.enabled === false;
-        tools.append(favorite, edit, remove); head.append(tools); node.append(head, body);
+        tools.append(favorite, edit, remove); head.append(tools); node.insertBefore(head, body);
         if (message.role === 'assistant') {
             const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt?.(currentResult(message).id));
             prompt.classList.add('play-sent-prompt-action'); prompt.hidden = !onInspectPrompt;
@@ -382,14 +398,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             choose.tabIndex = 0; node.prepend(choose);
             tools.hidden = true;
             node.querySelector('.play-message-actions')?.setAttribute('hidden', '');
-            node.addEventListener('click', event => {
+            node.onclick = event => {
                 if (mutating) return;
                 if (event.target !== choose) event.preventDefault();
                 deletingFrom = chat.messages.indexOf(message); updateDeletionSelection();
-            });
+            };
         }
-        const session = editingSessions.get(chat.id);
-        if (session?.messageId === message.id) {
+        if (editing) {
             editor = session.editor; tools.replaceChildren(editor.actions); body.replaceChildren(editor.body);
         }
         return node;
@@ -409,7 +424,16 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (start > 0) nodes.unshift(textButton('显示更早的消息', () => { const saved = position(); start = Math.max(0, start - 24); renderChat(saved); }));
         if (end < chat.messages.length) nodes.push(textButton('显示后面的消息', () => { const saved = position(); end = Math.min(chat.messages.length, end + 24); renderChat(saved); }));
         if (!nodes.length) nodes.push(element('p', '输入内容，开始这段剧情。', 'play-empty-title'));
-        content.replaceChildren(...nodes); updateDeletionSelection(); updateInput(); restore(saved, targetId);
+        const retained = new Set(nodes);
+        for (const node of [...content.children]) if (!retained.has(node)) node.remove();
+        let cursor = content.firstChild;
+        for (const node of nodes) {
+            if (node !== cursor) content.insertBefore(node, cursor);
+            cursor = node.nextSibling;
+        }
+        const ids = new Set(chat.messages.slice(start, end).map(message => message.id));
+        for (const id of messageViews.keys()) if (!ids.has(id)) messageViews.delete(id);
+        updateDeletionSelection(); updateInput(); restore(saved, targetId);
     }
     function updateDeletionSelection() {
         deleteControls.hidden = deletingFrom === null;
@@ -461,22 +485,25 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     });
     feed.addEventListener('scroll', () => { remember(); updateReadingControls(); }, { passive: true });
     const resize = new ResizeObserver(() => { if (visible && !editor) { scheduleInputSizing(); restore(positions.get(chat?.id), undefined, true); } });
-    async function loadFavorites() {
+    async function loadFavorites(isCurrent = () => true) {
         const rows = await playground.listFavorites();
+        if (!isCurrent()) return;
         favorites = new Map(rows.filter(row => !row.source.type).map(row => [favoriteSourceKey(row.source), row]));
         chatFavorite = rows.find(row => row.source.type === 'chat' && row.source.chatId === chat?.id);
     }
     async function open(id, targetId) {
         remember(); saveDirectory(); closeVersions(); queryId++; directoryId++; const request = ++openId; loading = true;
-        editor = null; deletingFrom = null; chat = null; content.replaceChildren(element('p', '正在读取聊天…'));
+        editor = null; deletingFrom = null; chat = null; messageViews.clear(); content.replaceChildren(element('p', '正在读取聊天…'));
         deleteControls.hidden = true; menu.open = false;
         route = 'chat'; branchPage.hidden = false; directory.hidden = true; input.value = drafts.get(id) ?? '';
         try {
             const next = await playground.getChat(id);
             if (request !== openId) return;
-            await refreshCharacters(false);
+            if (!await refreshCharacters(false, () => request === openId && route === 'chat')) return;
             chat = next; selected = characters.find(character => character.id === chat.characterId); picker.render();
-            await playground.display?.ensure(owner()); await loadFavorites();
+            await playground.display?.ensure(owner());
+            if (request !== openId || route !== 'chat') return;
+            await loadFavorites(() => request === openId && route === 'chat');
             if (request !== openId) return;
             if (targetId === 'initial-user' || targetId === 'initial-assistant') {
                 targetId = chat.messages.find(message => chat.startMessageIds.includes(message.id)
@@ -499,7 +526,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const id = chat.id, request = openId, refresh = ++reloadId, saved = positions.get(id);
         const next = await playground.getChat(id);
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
-        chat = next; await loadFavorites();
+        chat = next; await loadFavorites(() => request === openId && refresh === reloadId && chat?.id === id);
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
         end = saved?.bottom ? chat.messages.length : Math.min(Math.max(end, start + 24), chat.messages.length);
         start = Math.min(start, Math.max(0, end - 1));
@@ -567,6 +594,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const session = { messageId: message.id };
         const finish = () => {
             session.editor.dispose(); editingSessions.delete(id);
+            const view = messageViews.get(message.id);
+            if (view) { view.userText = undefined; view.output.signature = undefined; }
             if (chat?.id === id) { editor = null; renderChat(positions.get(id)); }
         };
         session.editor = createPlayEditor({ text, label: message.role === 'user' ? '用户消息原文' : '回复原文', onCancel: finish,
@@ -690,10 +719,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     return {
         page, browser: picker.node, chooseButton, open, get route() { return route; }, get selected() { return selected; }, get chatId() { return chat?.id; },
         async showDirectory(character, sort = true) {
-            remember(); route = 'history'; branchPage.hidden = true; directory.hidden = false; editor = null; menu.open = false; deletingFrom = null;
+            remember(); openId++; loading = false; route = 'history'; branchPage.hidden = true; directory.hidden = false; editor = null; menu.open = false; deletingFrom = null;
             deleteControls.hidden = true;
             if (character) selected = character;
-            const saved = directories.get(selected?.id);
+            const saved = directories.get(playCharacterKey(selected));
             search.value = saved?.query ?? ''; searchOpen = saved?.searchOpen ?? false; limit = saved?.limit ?? 24;
             if (saved?.rows) rows = saved.rows;
             await refreshDirectory(sort); list.scrollTop = saved?.scroll ?? 0; picker.render();
@@ -702,7 +731,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             panel = container; visible = true; setBrowsing(browsing); updateSearch(); picker.render();
             if (route === 'chat') { resize.observe(content); resize.observe(feed); resize.observe(branchPage); scheduleInputSizing(); restore(positions.get(chat?.id)); }
         },
-        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false; cancelAnimationFrame(inputFrame); inputFrame = 0; resize.disconnect(); picker.suspend(); },
+        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false;
+            cancelAnimationFrame(inputFrame); inputFrame = 0; cancelAnimationFrame(renderFrame); renderFrame = 0; resize.disconnect(); picker.suspend(); },
         async refresh() {
             if (route === 'history') await refreshDirectory(false);
             else {

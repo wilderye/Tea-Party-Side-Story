@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { memoryFiles, characterA, contextA, time } from './play-fixture.js';
-import { PLAY_HISTORY_INDEX, playRoundFile, playChatTitle, readPlayRound } from '../play-history.js';
+import { PLAY_HISTORY_INDEX, playRoundFile, playBodyFile, playChatTitle, readPlayRound } from '../play-history.js';
 import { createPlayground } from '../playground.js';
 import { createPlayChatFavorites } from '../play-chat-favorites.js';
 import { deferred } from './play-fixture.js';
@@ -147,7 +147,8 @@ test('迁移和编辑提交失败保留旧指向；另一窗口的变化不会�
     assert.equal((await f.store.getRound(round.id)).results[0].text, '原文');
     f.io.beforeWrite = null;
     const chat = await f.store.getChat(round.id);
-    const current = await f.createStore().renameChat(chat.id, '另一窗口', chat.revision);
+    await f.createStore().renameChat(chat.id, '另一窗口', chat.revision);
+    const current = await f.store.getChat(chat.id);
     await assert.rejects(f.store.truncateChat(chat.id, chat.messages[0].id, chat.revision), { code: 'chat_conflict' });
     f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
     await assert.rejects(f.store.editMessage(chat.id, chat.messages[0].id, { text: '没保存的修改', expectedText: chat.messages[0].text }), /模拟保存失败/);
@@ -192,22 +193,22 @@ test('分支请求追加当前历史、同分支锁定、不同分支并发和�
     assert.equal((await f.store.getChat(branch.id)).messages.at(-1).results[0].text, 'B完整回复接续');
 });
 
-test('整条收藏只在读取时补缺少的内容；版本复用、编辑单条和删除来源冻结', async () => {
+test('整条收藏明确同步缺少的内容；版本复用、编辑单条和删除来源冻结', async () => {
     const f = memoryFiles(), chat = await seed(f), processed = [];
     let rule = '旧规则';
     const coordinator = createPlayChatFavorites(f.store, { ensure: async () => {}, process: text => { processed.push(text); return rule + text; } });
     const favorite = await coordinator.add(chat.id);
     assert.equal(processed.length, 2);
     rule = '新规则';
-    let read = await coordinator.read(favorite.id);
+    let read = await coordinator.sync(favorite.id);
     assert.equal(processed.length, 2); assert.equal(read.messages[1].text, '旧规则开头一');
     await f.store.setMessageVersion(chat.id, chat.messages[1].id, chat.messages[1].results[1].id);
-    read = await coordinator.read(favorite.id);
+    read = await coordinator.sync(favorite.id);
     assert.equal(processed.length, 3); assert.equal(read.messages[1].text, '新规则开头二');
     await f.store.setMessageVersion(chat.id, chat.messages[1].id, chat.messages[1].results[0].id);
-    await coordinator.read(favorite.id); assert.equal(processed.length, 3);
+    await coordinator.sync(favorite.id); assert.equal(processed.length, 3);
     let current = await f.store.editMessage(chat.id, chat.messages[0].id, { text: '改过的提示词', expectedText: chat.messages[0].text });
-    read = await coordinator.read(favorite.id); assert.equal(processed.length, 4);
+    read = await coordinator.sync(favorite.id); assert.equal(processed.length, 4);
     assert.equal(read.messages[0].text, '新规则改过的提示词'); assert.equal(read.messages[1].text, '旧规则开头一');
     current = (await append(f, current, '还没阅读的新消息', '还没阅读的新回复')).chat;
     assert.equal(processed.length, 4, '游玩期间不更新整条收藏');
@@ -217,9 +218,9 @@ test('整条收藏只在读取时补缺少的内容；版本复用、编辑单�
     f.io.beforeWrite = null;
     await coordinator.removeChat(chat.id, current.revision);
     await assert.rejects(f.store.getChat(chat.id), { code: 'chat_missing' });
-    read = await coordinator.read(favorite.id); assert.equal(read.frozen, true); assert.equal(read.messages.length, 4);
+    read = await coordinator.sync(favorite.id); assert.equal(read.frozen, true); assert.equal(read.messages.length, 4);
     assert.equal(read.messages[1].text, '旧规则开头一');
-    const count = processed.length; await coordinator.read(favorite.id); assert.equal(processed.length, count);
+    const count = processed.length; await coordinator.sync(favorite.id); assert.equal(processed.length, count);
 });
 
 test('历史预览只读末层选中正文，全文搜索只读各层选中版本；迟到检查点不改其它正文', async () => {
@@ -283,7 +284,7 @@ test('删除消息跟随整条收藏，取消整条不动单条，删除来源�
     const single = await f.store.addFavorite({ roundId: chat.id, messageId: chat.messages[1].id, resultId: first.id,
         startedAt: first.startedAt, expectedText: first.text, text: first.text, firstLine: first.text });
     await f.store.removeMessage(chat.id, chat.messages[1].id);
-    const read = await coordinator.read(whole.id);
+    const read = await coordinator.sync(whole.id);
     assert.equal(read.messages.length, 3);
     assert.equal(read.messages.some(message => message.messageId === chat.messages[1].id), false);
     assert.equal((await f.store.getFavorite(single.id)).text, first.text);
@@ -291,4 +292,77 @@ test('删除消息跟随整条收藏，取消整条不动单条，删除来源�
     assert.equal((await f.store.listFavorites()).length, 1);
     await coordinator.removeChat(chat.id);
     assert.deepEqual((await f.store.getChat(branch.id)).messages.map(message => message.role), ['user', 'assistant']);
+});
+
+test('分支重新生成只替换选中版本；停止后其他版本仍可读取', async () => {
+    const f = memoryFiles(), source = await seed(f);
+    const branch = await f.store.createBranch(source.id, source.messages[1].id);
+    const assistant = branch.messages[1], previous = structuredClone(assistant.results);
+    const resultId = randomUUID();
+    const started = await f.store.begin({ roundId: branch.id, chatMode: true, operation: 'regenerate',
+        messageId: assistant.id, replaceResultId: assistant.selectedResultId, resultId,
+        character: characterA, context: contextA, startedAt: time(10), expectedRevision: branch.revision });
+    assert.equal(started.messages[1].results.length, 2);
+    assert.equal(started.messages[1].results[0].id, resultId);
+    assert.deepEqual(started.messages[1].results[1], previous[1]);
+    await f.store.saveResult(branch.id, resultId, { text: '', status: 'stopped', finishedAt: time(11) });
+    const saved = await f.createStore().getChat(branch.id);
+    assert.deepEqual(saved.messages[1].results[1], previous[1]);
+    assert.equal((await f.store.getChat(source.id)).messages[1].results.length, 2);
+});
+
+test('修改聊天名称只读元数据；缺失正文不影响改名，也不删除正文引用', async () => {
+    const f = memoryFiles(), initial = await seed(f), { chat } = await append(f, initial, '第二条消息');
+    const missing = chat.messages.at(-1).results[0];
+    f.files.delete(playBodyFile(missing.id, missing.bodyRevision));
+    const before = JSON.parse(f.files.get(playRoundFile(chat.id, chat.revision))), reads = [], writes = f.writes.length;
+    f.io.beforeRead = name => reads.push(name);
+    const renamed = await f.createStore().renameChat(chat.id, '修改后的名称', chat.revision);
+    assert.equal(renamed.name, '修改后的名称');
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 0);
+    assert.equal(f.writes.slice(writes).filter(name => name.startsWith('teahouse-play-body-')).length, 0);
+    const after = JSON.parse(f.files.get(playRoundFile(chat.id, renamed.revision)));
+    assert.deepEqual(after.messages, before.messages);
+    assert.equal((await f.store.listChats(chat.characterId))[0].name, '修改后的名称');
+});
+
+test('清空聊天名称只读取用于标题的首条用户消息，恢复最新提示词节选', async () => {
+    const f = memoryFiles(), round = await f.begin({ origin: null });
+    await f.store.saveResult(round.id, round.results[0].id, { text: '开头回复', status: 'complete', finishedAt: time(1) });
+    let chat = await f.store.getChat(round.id);
+    chat = await f.store.editMessage(chat.id, chat.messages[0].id, { text: '新的开头提示词', expectedText: chat.messages[0].text });
+    chat = (await append(f, chat, '后续用户')).chat;
+    const named = await f.store.renameChat(chat.id, '手动名称', chat.revision), reads = [];
+    f.io.beforeRead = name => reads.push(name);
+    await f.createStore().renameChat(chat.id, '', named.revision);
+    assert.equal((await f.store.listChats(chat.characterId))[0].name, '新的开头提示词');
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 1);
+});
+
+test('从早期回复创建分支不读取被截掉的后续正文', async () => {
+    const f = memoryFiles(), initial = await seed(f), { chat } = await append(f, initial, '后续用户');
+    const tail = chat.messages.at(-1).results[0];
+    f.files.delete(playBodyFile(tail.id, tail.bodyRevision));
+    const reads = []; f.io.beforeRead = name => reads.push(name);
+    const branch = await f.createStore().createBranch(chat.id, chat.messages[1].id, chat.revision);
+    assert.equal(branch.messages.length, 2);
+    assert.deepEqual(branch.messages[1].results.map(result => result.text), ['开头一', '开头二']);
+    assert.equal(reads.includes(playBodyFile(tail.id, tail.bodyRevision)), false);
+    assert.deepEqual(branch.source, { chatId: chat.id, messageId: chat.messages[1].id });
+});
+
+test('读取已保存收藏不读取来源或上传；同步失败后仍可读取并重试更新', async () => {
+    const f = memoryFiles(), chat = await seed(f);
+    const coordinator = createPlayChatFavorites(f.store, { ensure: async () => {}, process: text => text });
+    const favorite = await coordinator.add(chat.id);
+    await f.store.editMessage(chat.id, chat.messages[0].id, { text: '更新的用户消息', expectedText: chat.messages[0].text });
+    const reads = [], writes = f.writes.length; f.io.beforeRead = name => reads.push(name);
+    assert.equal((await coordinator.read(favorite.id)).messages[0].text, chat.messages[0].text);
+    assert.equal(f.writes.length, writes);
+    assert.equal(reads.some(name => name.startsWith('teahouse-play-round-')), false);
+    f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟上传失败'); };
+    await assert.rejects(coordinator.sync(favorite.id), /模拟上传失败/);
+    assert.equal((await coordinator.read(favorite.id)).messages[0].text, chat.messages[0].text);
+    f.io.beforeWrite = null;
+    assert.equal((await coordinator.sync(favorite.id)).messages[0].text, '更新的用户消息');
 });

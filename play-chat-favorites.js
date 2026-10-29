@@ -27,10 +27,11 @@ export function createPlayChatFavorites(history, display) {
             const entries = await prepare(chat);
             return history.addChatFavorite({ chatId, expectedRevision: chat.revision, entries });
         },
-        async read(id) {
-            const favorite = await history.getFavorite(id);
-            if (favorite.format !== 2 || favorite.frozen) return favorite;
+        read: id => history.getFavorite(id),
+        async sync(id) {
             for (let attempt = 0; attempt < 3; attempt++) {
+                const favorite = await history.getFavorite(id);
+                if (favorite.format !== 2 || favorite.frozen) return favorite;
                 let chat;
                 try { chat = await history.getChat(favorite.source.chatId); }
                 catch (error) {

@@ -3,7 +3,7 @@ import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
-import { createPlayCharacterPicker } from './play-character-picker.js';
+import { createPlayCharacterPicker, mergePlayCharacters } from './play-character-picker.js';
 import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText } from './play-message-ui.js';
 
 const pad = value => String(value).padStart(2, '0');
@@ -1062,13 +1062,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (id !== refreshId) return;
             const savedCharacters = await playground.listCharacters(); if (id !== refreshId) return;
             const previous = selected, previousKey = characterKey(previous);
-            // SillyTavern already holds the character catalog. Merge its light
-            // identity fields with history metadata, without reading every role's records.
-            const available = new Map((ctx().characters ?? []).filter(item => item?.avatar && item.name)
-                .map(item => [item.avatar, { avatar: item.avatar, name: item.name }]));
-            characters = savedCharacters.map(item => ({ ...item, name: available.get(item.avatar)?.name ?? item.name }));
-            const savedAvatars = new Set(savedCharacters.map(item => item.avatar));
-            for (const character of available.values()) if (!savedAvatars.has(character.avatar)) characters.push(character);
+            characters = mergePlayCharacters(savedCharacters, ctx().characters);
             const currentRow = current && (characters.find(item => item.avatar === current.avatar) ?? { ...current, lastPlayedAt: null });
             if (currentRow) characters = [currentRow, ...characters.filter(item => item !== currentRow)];
             selected = !selected ? currentRow ?? (mobile.matches ? null : characters[0]) ?? null

@@ -45,6 +45,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         })();
     }); goToBranch.className = 'tea-text-button play-go-branch';
     const sourceNotice = element('p', '', 'play-favorite-source-notice');
+    const syncNotice = element('div', undefined, 'play-favorite-source-notice'); syncNotice.hidden = true;
     const edit = iconButton('edit', '编辑演出记录收藏', beginEdit);
     const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt?.(value?.source.resultId));
     prompt.classList.add('play-sent-prompt-action');
@@ -56,7 +57,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         finally { removing = false; remove.disabled = false; edit.disabled = false; updateNavigation(); }
     });
     remove.classList.add('tea-star'); remove.setAttribute('aria-pressed', 'true');
-    heading.append(title, character); head.append(heading, tools); article.append(head, goToBranch, sourceNotice, body); node.append(navigation, article);
+    heading.append(title, character); head.append(heading, tools); article.append(head, goToBranch, sourceNotice, syncNotice, body); node.append(navigation, article);
     let value, editor, signature, loadingId = 0, requestedRevision, removing = false, renderedMessages = 0;
     const moreMessages = textButton('显示更多聊天内容', () => appendMessages());
     let canPrevious = false, canNext = false;
@@ -177,6 +178,18 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
             if (id !== loadingId) return;
             if (value?.id !== next.id) renderedMessages = 0;
             value = next; requestedRevision = next.revision; render();
+            if (next.format === 2 && !next.frozen && playground.syncFavorite) {
+                syncNotice.replaceChildren(element('span', '正在更新聊天收藏…')); syncNotice.hidden = false;
+                try {
+                    const updated = await playground.syncFavorite(row.id);
+                    if (id !== loadingId) return;
+                    value = updated; requestedRevision = updated.revision; render(); syncNotice.hidden = true;
+                } catch (error) {
+                    if (id !== loadingId) return;
+                    syncNotice.replaceChildren(element('p', `聊天收藏更新失败，正在显示已保存的内容：${error.message}`),
+                        textButton('重试更新收藏', () => void load(row, true)));
+                }
+            } else syncNotice.hidden = true;
         } catch (error) {
             if (id !== loadingId) return;
             requestedRevision = null; signature = null;

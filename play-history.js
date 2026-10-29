@@ -198,6 +198,12 @@ function readResult(value, bodyStored = false) {
     return result;
 }
 
+function replaceResult(results, resultId, replacement) {
+    const index = results.findIndex(result => result.id === resultId);
+    if (index < 0) throw new PlayHistoryError('result_missing', '这份结果已在其他窗口替换，请重新打开记录后再试。');
+    results[index] = replacement;
+}
+
 export function readPlayRound(value) {
     assert(value?.format === 1 && isId(value.id) && isId(value.characterId)
         && (value.prompt === null || isText(value.prompt)) && isDate(value.createdAt) && Array.isArray(value.results)
@@ -354,19 +360,25 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         assert(round.id === row.id && round.characterId === row.characterId && round.createdAt === row.createdAt);
         return round;
     }
-    async function readChatFromRow(row, retry = true) {
+    async function readChatFromRow(row, retry = true, { bodyStored = false, throughMessageId } = {}) {
         if (!row) throw new PlayHistoryError('chat_missing', '来源聊天已删除');
         const text = await readFile(playRoundFile(row.id, row.revision));
         try {
             if (text === null) throw new PlayHistoryError('body_missing', '聊天文件缺失，未覆盖原文件');
             const value = JSON.parse(text);
-            const chat = value.format === 2 ? await expandChat(value) : convertRound(readPlayRound(value));
+            let chat = value.format === 2 ? readPlayChat(value, { bodyStored: true }) : convertRound(readPlayRound(value));
+            if (throughMessageId !== undefined) {
+                const position = chat.messages.findIndex(message => message.id === throughMessageId && message.role === 'assistant');
+                if (position < 0) throw new PlayHistoryError('message_missing', '这条 AI 消息已删除，请重新打开聊天。');
+                chat.messages = chat.messages.slice(0, position + 1);
+            }
+            if (value.format === 2 && !bodyStored) chat = await expandChat(chat);
             assert(chat.id === row.id && chat.characterId === row.characterId && chat.createdAt === row.createdAt);
             return { ...chat, revision: row.revision };
         } catch (cause) {
             if (retry && (text === null || cause.code === 'body_missing')) {
                 const current = (await index()).rounds.find(item => item.id === row.id);
-                if (current && current.revision !== row.revision) return readChatFromRow(current, false);
+                if (current && current.revision !== row.revision) return readChatFromRow(current, false, { bodyStored, throughMessageId });
             }
             if (cause instanceof PlayHistoryError) throw cause;
             throw new PlayHistoryError('invalid_history', '聊天文件无法解析，未覆盖原文件', { cause });
@@ -584,9 +596,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 document.messages.push({ ...message, results });
             }
         }
+        const titleMessage = chat.messages.find(message => message.role === 'user');
         const row = await commitDocument(directory, directory.rounds, document, playRoundFile,
             { id: chat.id, characterId: chat.characterId, createdAt: chat.createdAt, kind: 'chat',
-                name: chat.messages.some(message => message.role === 'user' && message.text === undefined)
+                name: titleMessage && titleMessage.text === undefined
                     && !chat.name && !chat.origin?.title ? previous?.name ?? playChatTitle(chat) : playChatTitle(chat), branched: !!chat.source,
                 hasStartPair: chat.messages.some(message => chat.startMessageIds.includes(message.id)),
                 lastPlayedAt: playedAt && Date.parse(playedAt) > Date.parse(previous?.lastPlayedAt ?? '')
@@ -608,19 +621,19 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             throw new PlayHistoryError('chat_busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
         }
     }
-    async function changeChat(id, expectedRevision, run, { playSelection = false } = {}) {
+    async function changeChat(id, expectedRevision, run, { playSelection = false, bodyStored = false } = {}) {
         assert(isId(id));
         return serialize(async () => {
             const directory = await index();
-            const chat = await readChatFromRow(directory.rounds.find(row => row.id === id));
+            const chat = await readChatFromRow(directory.rounds.find(row => row.id === id), true, { bodyStored });
             assertChatRevision(chat, expectedRevision);
             if (!playSelection) assertChatIdle(chat);
             else if (!chat.startMessageIds.includes(chat.messages.at(-1)?.id)) {
                 throw new PlayHistoryError('message_not_last', '这层已有后续对话，请先创建分支再切换版本。');
             }
-            const before = JSON.stringify(readPlayChat(chat));
+            const before = JSON.stringify(readPlayChat(chat, { bodyStored }));
             await run(chat);
-            if (JSON.stringify(readPlayChat(chat)) === before) return chat;
+            if (JSON.stringify(readPlayChat(chat, { bodyStored })) === before) return chat;
             return commitChat(directory, chat);
         });
     }
@@ -663,7 +676,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     Object.assign(target, { status: 'unfinished', finishedAt: null, context: result.context });
                     delete target.error;
                 } else {
-                    if (input.operation === 'regenerate') assistant.results = [result];
+                    if (input.operation === 'regenerate') replaceResult(assistant.results, input.replaceResultId, result);
                     else { assert(input.operation === 'another'); assistant.results.push(result); }
                     assistant.selectedResultId = result.id;
                 }
@@ -698,11 +711,9 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             assert(isId(id) && isId(messageId));
             return serialize(async () => {
                 const directory = await index();
-                const source = await readChatFromRow(directory.rounds.find(row => row.id === id));
+                const source = await readChatFromRow(directory.rounds.find(row => row.id === id), true, { throughMessageId: messageId });
                 assertChatRevision(source, expectedRevision);
-                const position = source.messages.findIndex(message => message.id === messageId && message.role === 'assistant');
-                if (position < 0) throw new PlayHistoryError('message_missing', '这条 AI 消息已删除，请重新打开聊天。');
-                const messages = clone(source.messages.slice(0, position + 1));
+                const messages = clone(source.messages);
                 if (messages.some(message => message.results?.some(result => result.status === 'unfinished'))) {
                     throw new PlayHistoryError('chat_busy', '请在这层回复结束并保存后创建分支。');
                 }
@@ -744,7 +755,11 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         },
         renameChat(id, name, expectedRevision) {
             assert(typeof name === 'string' && name.trim().length <= 100, '聊天名称不能超过 100 个字。');
-            return changeChat(id, expectedRevision, chat => { chat.name = name.trim(); });
+            return changeChat(id, expectedRevision, async chat => {
+                chat.name = name.trim();
+                const user = chat.messages.find(message => message.role === 'user');
+                if (!chat.name && !chat.origin?.title && user && user.text === undefined) user.text = await readBody(user.id, user.bodyRevision);
+            }, { bodyStored: true });
         },
         editMessage(id, messageId, { text, resultId, expectedText }) {
             assert(isId(messageId) && isText(text) && typeof expectedText === 'string', '消息正文不能为空。');
@@ -980,11 +995,9 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 const result = { id: input.resultId, startedAt: input.startedAt, finishedAt: null,
                     status: 'unfinished', text: '', context: input.context };
                 if (input.replaceResultId) {
-                    const target = round.results.findIndex(item => item.id === input.replaceResultId);
-                    if (target < 0) throw new PlayHistoryError('result_missing', '这份结果已在其他窗口替换，请重新打开记录后再试。');
                     // Replacement keeps the slot but uses a fresh generation ID,
                     // so a late save from the old request cannot overwrite it.
-                    round.results[target] = result;
+                    replaceResult(round.results, input.replaceResultId, result);
                 } else round.results.push(result);
                 return commitRound(directory, round);
             }, signal);

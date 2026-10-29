@@ -121,6 +121,10 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         getChatPreview: (id, options) => playground.getChatPreview(id, legacySelection(id, options)),
         getChatSearch: (id, options) => playground.getChatSearch(id, legacySelection(id, options)),
         getFavorite: id => chatFavorites.read(id),
+        async syncFavorite(id) {
+            try { return await chatFavorites.sync(id); }
+            catch (error) { diagnostics?.error('更新聊天收藏', error); throw error; }
+        },
         favoriteChat: id => chatFavorites.add(id),
         deleteChat: (id, revision) => {
             if (!playground.availability({ chatId: id }).available) throw new PlaygroundError('busy', '请结束并保存这条聊天后再删除。');
