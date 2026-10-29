@@ -1,4 +1,5 @@
 import { PlaygroundError } from './playground.js';
+import { sentPromptCapture } from './play-sent-prompt.js';
 
 function hasUpstream429(detail) {
     if (!detail || typeof detail !== 'object') return false;
@@ -46,11 +47,14 @@ function isStreamComplete(data) {
 }
 
 /** Read errors before native text extraction, whose error parser swallows them. */
-async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}, body = JSON.stringify(payload)) {
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache',
+async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}, body = JSON.stringify(payload), trace) {
+    const pending = fetch('/api/backends/chat-completions/generate', {
+        method: 'POST', headers: { ...context.getRequestHeaders(), ...trace?.headers }, cache: 'no-cache',
         body, signal,
     });
+    // This is the same immutable string passed to fetch, after all processing.
+    trace?.sent(body);
+    const response = await pending;
     if (!response.ok || !payload.stream || /\bjson\b/i.test(response.headers.get('content-type') ?? '')) {
         const data = await readJsonResponse(response);
         if (payload.stream) throw new PlaygroundError('invalid_response', '接口没有返回流式回复。');
@@ -137,7 +141,7 @@ export async function fetchCustomApiModels(context, api, signal) {
  */
 export function createPreparedPlayRequest(context, data, { prefix = '', continueExtra,
     continuationReasoning = '', reasoning, streaming,
-    showThoughts = true, processReasoning = text => text } = {}) {
+    showThoughts = true, processReasoning = text => text, promptCapture = sentPromptCapture } = {}) {
     if (!Array.isArray(data?.messages) || !data.messages.length
         || typeof data.chat_completion_source !== 'string' || !data.chat_completion_source
         || typeof data.model !== 'string' || !data.model) {
@@ -157,7 +161,7 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
     return {
         context: { model: payload.model, source: payload.chat_completion_source, stream: !!payload.stream,
             ...(payload.custom_url ? { endpoint: payload.custom_url } : {}) },
-        async send({ signal, onText = () => {}, onReasoning = () => {} }) {
+        async send({ signal, resultId, onText = () => {}, onReasoning = () => {} }) {
             signal?.throwIfAborted();
             if (sending) throw new PlaygroundError('request_already_sending', '这份请求正在发送，请等待本次请求结束。');
             sending = true;
@@ -168,7 +172,9 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
             try {
                 // Store the original model text without evaluating JSON schema
                 // output or invoking Tavern's main-chat reply handlers.
-                const result = await sendCompletionRequest(context, payload, controller.signal, streaming, body);
+                const trace = await promptCapture?.begin(context, controller.signal, resultId);
+                controller.signal.throwIfAborted();
+                const result = await sendCompletionRequest(context, payload, controller.signal, streaming, body, trace);
                 controller.signal.throwIfAborted();
                 if (!payload.stream) {
                     const text = extract(result, 'openai') ?? '';

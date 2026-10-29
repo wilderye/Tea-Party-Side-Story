@@ -43,6 +43,8 @@ tests/*
 !tests/play-concurrency.browser.cjs
 !tests/diagnostics.test.js
 !tests/play-request.test.js
+!tests/play-sent-prompt.test.js
+!tests/play-sent-prompt.browser.cjs
 !tests/play-retry.test.js
 !tests/play-retry.browser.cjs
 !tests/play-runtime.test.js

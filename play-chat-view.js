@@ -18,7 +18,7 @@ export function playRecentTime(value) {
 
 /** Directory owns its list; only one branch transcript is mounted at a time. */
 export function createPlayChatView(ctx, settings, playground, promptFavorites, {
-    notify, onOpen, onBranch, onCharacter, onDelete, getReadingInset = () => 0, onProgrammaticScroll = () => {},
+    notify, onOpen, onBranch, onCharacter, onDelete, onInspectPrompt, getReadingInset = () => 0, onProgrammaticScroll = () => {},
 }) {
     const mobile = matchMedia('(max-width: 760px)');
     const page = element('div', undefined, 'play-page play-history-page');
@@ -316,10 +316,12 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         favorite.setAttribute('aria-pressed', String(!!starred)); favorite.disabled = busy() || !(result?.text ?? message.text)?.trim() || settings.enabled === false;
         tools.append(favorite, edit, remove); head.append(tools); node.append(head, body);
         if (message.role === 'assistant') {
+            const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt?.(currentResult(message).id));
+            prompt.classList.add('play-sent-prompt-action'); prompt.hidden = !onInspectPrompt;
             const branch = iconButton('branch', '创建分支', () => void branchAt(message));
             branch.classList.add('play-branch-action');
             branch.disabled = branchDisabled(message);
-            tools.prepend(branch);
+            tools.prepend(branch); tools.append(prompt);
             const index = message.results.indexOf(result), atEnd = index === message.results.length - 1;
             const { actions: footer, swipes, prev, count, next, again, continueBtn, stop, assistantTop } = createPlayReplyActions({
                 onPrevious: () => void selectVersion(message, index - 1), onChoose: () => void showVersions(message),
@@ -587,7 +589,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             }
             for (const button of content.querySelectorAll('.play-header-actions button')) {
                 const message = chat.messages.find(message => message.id === button.closest('[data-message-id]').dataset.messageId);
-                button.disabled = button.classList.contains('play-branch-action')
+                button.disabled = button.classList.contains('play-sent-prompt-action') ? false : button.classList.contains('play-branch-action')
                     ? branchDisabled(message)
                     : busy() || settings.enabled === false;
             }

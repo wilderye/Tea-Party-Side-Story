@@ -255,7 +255,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 notify(job);
                 let receivedBody = false, attemptActive = true, attemptError;
                 try {
-                    const result = await abortable(() => request.send({ signal: job.controller.signal,
+                    const result = await abortable(() => request.send({ signal: job.controller.signal, resultId: job.resultId,
                         onReasoning(extra) {
                             if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                             job.extra = readPlayReasoning(extra);

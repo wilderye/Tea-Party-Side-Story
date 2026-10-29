@@ -3,6 +3,7 @@ import { renderMarkdown } from './markdown.js';
 import { createAppearance } from './appearance.js';
 import { element, textButton, glyph, iconButton, copyText, createPageJump } from './ui.js';
 import { renderDiagnostics } from './diagnostics-view.js';
+import { showSentPromptViewer } from './play-sent-prompt-view.js';
 import { createPlayView } from './play-view.js';
 import { createPlayChatView } from './play-chat-view.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
@@ -162,7 +163,7 @@ export function createTheatrePanel(ctx, state, actions) {
     let chatView, chatCatalog, chatWorkspace, playRoute = 'play', branchReturn, chatActive = false;
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
-    let favoriteComposer;
+    let favoriteComposer, sentPromptViewer;
     const favoriteReaders = new Map();
     const catalogs = new Map();
     let catalog = catalogFor(scope);
@@ -185,8 +186,9 @@ export function createTheatrePanel(ctx, state, actions) {
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
         { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
-            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id) });
+            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt });
     const getChatView = () => chatView ??= createPlayChatView(ctx, state.settings, actions.playground, actions.promptFavorites, {
+        onInspectPrompt: inspectPrompt,
         notify: showMessage, onOpen: (id, messageId) => void enterBranch(id, messageId),
         getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
         onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area),
@@ -519,6 +521,9 @@ export function createTheatrePanel(ctx, state, actions) {
         box.append(settingsButton(), iconButton('close', '关闭面板', close));
         return box;
     }
+    function inspectPrompt(resultId) {
+        sentPromptViewer?.dispose(); sentPromptViewer = showSentPromptViewer(panel, resultId);
+    }
     function settingsButton() {
         const button = iconButton('settings', '设置', toggleSettings);
         button.classList.add('tea-settings-toggle'); button.setAttribute('aria-pressed', String(mode === 'settings'));
@@ -607,7 +612,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (show) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
-                reader = createPlayFavoriteReader(actions.playground, { notify: showMessage,
+                reader = createPlayFavoriteReader(actions.playground, { notify: showMessage, onInspectPrompt: inspectPrompt,
                     onGoToBranch: (id, messageId) => void enterBranch(id, messageId),
                     onNavigate: direction => void openRecordFavorite(item.id, direction),
                     onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
@@ -634,6 +639,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panel || searchComposing) return;
+        sentPromptViewer?.dispose(); sentPromptViewer = null;
         if (mode !== 'favorite-editor') disposeFavoriteComposer();
         if (resetPosition) resetCatalogPosition(); else captureCatalogPosition();
         restoringCatalog = scope !== 'play';
@@ -1177,6 +1183,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 await popup.show();
                 actions.diagnostics?.info('关闭剧场面板');
             } finally {
+                sentPromptViewer?.dispose(); sentPromptViewer = null;
                 disposeFavoriteComposer();
                 apiSettings?.cancel();
                 diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;

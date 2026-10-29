@@ -27,7 +27,7 @@ function recentTime(value) {
 
 /** A persistent conversation view. History and generation stay in playground. */
 export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites,
-    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch } = {}) {
+    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch, onInspectPrompt } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
@@ -761,7 +761,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const favorite = iconButton('star', '收藏演出记录', () => void toggleFavorite(round.id)); favorite.classList.add('tea-star');
         const removeReply = iconButton('trash', '删除 AI 消息', () => void removeMessage(round.id, 'assistant')); removeReply.classList.add('play-delete');
         const branch = iconButton('branch', '创建分支', () => void branchFromRound(round.id));
-        const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(branch, favorite, editReply, removeReply); aiHead.head.append(replyTools);
+        const prompt = iconButton('prompt', '查看实际提示词', () => {
+            const currentRound = records.get(round.id)?.round;
+            const result = currentRound && selectedResult(currentRound);
+            if (result) onInspectPrompt?.(result.id);
+        });
+        prompt.classList.add('play-sent-prompt-action'); prompt.hidden = !onInspectPrompt;
+        const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(branch, favorite, editReply, removeReply, prompt); aiHead.head.append(replyTools);
         const results = element('div', undefined, 'play-results');
         const error = element('p', undefined, 'play-result-error'); error.hidden = true;
         const { actions, again, continueBtn, assistantTop, stop, swipes, prev, count, next } = createPlayReplyActions({
@@ -776,7 +782,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         });
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
+            userTools, replyTools, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) {
         const editingId = [...(views.get(round.id)?.outputs ?? [])].find(([, output]) => output.editor)?.[0];
@@ -830,7 +836,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
-        const tools = output.editor ? [output.editor.actions] : [view.branch, view.favorite, view.editReply, view.removeReply];
+        const tools = output.editor ? [output.editor.actions] : [view.branch, view.favorite, view.editReply, view.removeReply, view.prompt];
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id);
         const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);

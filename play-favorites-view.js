@@ -18,7 +18,7 @@ export function favoriteSourceKey({ roundId, resultId, startedAt }) {
 }
 
 /** A reader owns its inline draft; saved content stays in the history service. */
-export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, onGoToBranch, notify }) {
+export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, onGoToBranch, onInspectPrompt, notify }) {
     const node = element('article', undefined, 'play-favorite-reading tea-scroll');
     const navigation = element('nav', undefined, 'play-favorite-navigation');
     navigation.setAttribute('aria-label', '演出记录收藏切换');
@@ -46,6 +46,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     }); goToBranch.className = 'tea-text-button play-go-branch';
     const sourceNotice = element('p', '', 'play-favorite-source-notice');
     const edit = iconButton('edit', '编辑演出记录收藏', beginEdit);
+    const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt?.(value?.source.resultId));
+    prompt.classList.add('play-sent-prompt-action');
     const remove = iconButton('star', '取消收藏', async () => {
         if (!value || removing || editor) return;
         removing = true; remove.disabled = true; edit.disabled = true; updateNavigation();
@@ -100,7 +102,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         if (!value || editor) return;
         title.textContent = value.title; title.hidden = !value.title.trim();
         character.textContent = value.characterName;
-        heading.replaceChildren(title, character); tools.replaceChildren(remove, ...(value.format === 2 ? [] : [edit]));
+        heading.replaceChildren(title, character); tools.replaceChildren(remove, ...(value.format === 2 ? [] : [edit, prompt]));
+        prompt.hidden = !onInspectPrompt;
         goToBranch.hidden = !onGoToBranch || value.source.type === 'manual'; goToBranch.disabled = !!value.frozen;
         sourceNotice.textContent = value.frozen ? '来源聊天已删除' : ''; sourceNotice.hidden = !value.frozen;
         if (value.format === 2) {
@@ -130,6 +133,11 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
             const date = new Date(message.createdAt);
             speaker.append(element('time', `${date.getMonth() + 1}/${date.getDate()} · ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`, 'play-message-time'));
             head.append(speaker);
+            if (!user && onInspectPrompt) {
+                const tools = element('div', undefined, 'play-header-actions');
+                const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt(message.resultId));
+                prompt.classList.add('play-sent-prompt-action'); tools.append(prompt); head.append(tools);
+            }
             const content = element('div', undefined, user ? 'play-user-text' : 'play-results');
             renderPlayText(content, message.text, `favorite/${value.id}/${message.messageId}`, !user, true);
             floor.append(head, content); fragment.append(floor); renderedMessages++;

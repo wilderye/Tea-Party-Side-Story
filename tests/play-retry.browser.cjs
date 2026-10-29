@@ -28,6 +28,7 @@ const server = http.createServer(async (request, response) => {
         const name = new URL(request.url, 'http://test').pathname.slice(1);
         if (!name) { response.setHeader('Content-Type', 'text/html; charset=utf-8'); return response.end(harness); }
         if (name === 'favicon.ico') { response.statusCode = 204; return response.end(); }
+        if (name === 'api/plugins/tea-prompt-capture/stream') { response.statusCode = 204; return response.end(); }
         const file = path.resolve(root, name);
         if (!file.startsWith(root + path.sep) || !/\.(js|css|svg|woff2)$/.test(file)) { response.statusCode = 404; return response.end(); }
         response.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.woff2') ? 'font/woff2' : 'text/javascript');

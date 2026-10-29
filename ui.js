@@ -74,6 +74,7 @@ export async function copyText(text) {
 }
 
 const paths = {
+    prompt: '<path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h6"/>',
     branch: '<path d="M6 4v11a5 5 0 0 0 5 5h7M6 9h5a5 5 0 0 0 5-5"/><circle cx="6" cy="3" r="2"/><circle cx="16" cy="3" r="2"/><circle cx="19" cy="20" r="2"/>',
     history: '<path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/>',
     menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
