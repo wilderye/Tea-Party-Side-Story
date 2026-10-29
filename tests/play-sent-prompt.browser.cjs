@@ -1,14 +1,10 @@
 // Browser plugin not available. Use Playwright/Edge and synthetic data only.
-// Flow: each AI message's top-right button -> only its actual prompts -> copy/clear -> refresh/restart.
+// Flow: each AI message's top-right button -> its current version's actual prompt -> copy -> switch versions.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const { harness: originalHarness } = require('./play-processing.browser.cjs');
-const { createRequire } = require('node:module');
-const { pathToFileURL } = require('node:url');
 const http = require('node:http'), fs = require('node:fs/promises'), path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
-const hostRequire = createRequire(path.join(process.env.TEA_TEST_MODULE_ROOT || path.resolve(root, '../酒馆测试环境/SillyTavern-1.19.0'), 'package.json'));
-const express = hostRequire('express');
 const harness = originalHarness.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">')
     .replace("import {createTheatrePanel} from '/panel.js';", `import {createTheatrePanel} from '/panel.js';
 import {createPreparedPlayRequest} from '/play-request.js';
@@ -25,50 +21,24 @@ prepareRequest:async request=>{
 assert.ok(harness.includes('return createPreparedPlayRequest'));
 
 (async () => {
-    const { installPromptCapture } = await import(pathToFileURL(path.join(root, 'tea-prompt-capture-server.mjs')).href);
-    const { default: nativeFetch } = await import(pathToFileURL(hostRequire.resolve('node-fetch')).href);
-    let nativeRouter;
-    if (process.env.TEA_CAPTURE_NATIVE_ROOT) {
-        const nativeRoot = path.resolve(process.env.TEA_CAPTURE_NATIVE_ROOT);
-        const { setConfigFilePath } = await import(pathToFileURL(path.join(nativeRoot, 'src/util.js')).href);
-        setConfigFilePath(path.join(nativeRoot, 'default/config.yaml'));
-        ({ router: nativeRouter } = await import(pathToFileURL(path.join(nativeRoot, 'src/endpoints/backends/chat-completions.js')).href));
-    }
-    const actualBodies = [];
-    const upstream = http.createServer(async (request, response) => {
-        let body = ''; for await (const chunk of request) body += chunk;
-        actualBodies.push(body); response.setHeader('Content-Type', 'application/json'); response.end('{"text":"合成回复正文"}');
-    });
-    await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
-    const app = express(), generateRouter = nativeRouter || express.Router(), streamRouter = express.Router();
-    app.use(express.json()); app.use((request, _response, next) => {
-        request.user = { profile: { handle: 'synthetic-test-user' }, directories: { root: path.join(process.env.TEMP, 'tea-capture-nonexistent-profile') } };
-        if (nativeRouter && request.path === '/api/backends/chat-completions/generate') {
-            request.body.custom_url = `http://127.0.0.1:${upstream.address().port}`;
-            request.body.custom_prompt_post_processing = '';
-            request.body.custom_include_body = JSON.stringify({ messages: [
-                { role: 'system', content: '服务器合并后的实际系统' },
-                { role: 'user', content: request.body.messages.at(-1).content + '\n服务器后续处理标记' },
-            ] });
+    const actualBodies = [], actualHeaders = [], requests = [];
+    const server = http.createServer(async (request, response) => {
+        const pathname = new URL(request.url, 'http://localhost').pathname;
+        requests.push(pathname);
+        if (pathname === '/api/backends/chat-completions/generate') {
+            let body = ''; for await (const chunk of request) body += chunk;
+            actualBodies.push(body); actualHeaders.push(request.headers);
+            response.setHeader('Content-Type', 'application/json'); response.end('{"text":"合成回复正文"}'); return;
         }
-        next();
+        if (pathname.startsWith('/api/plugins/tea-prompt-capture')) { response.writeHead(403); response.end('Forbidden'); return; }
+        if (pathname === '/favicon.ico') { response.writeHead(204); response.end(); return; }
+        try {
+            const content = pathname === '/' ? harness : await fs.readFile(path.join(root, pathname));
+            response.setHeader('Content-Type', pathname === '/' ? 'text/html; charset=utf-8' : pathname.endsWith('.css') ? 'text/css' : pathname.endsWith('.js') ? 'text/javascript' : 'application/octet-stream');
+            response.end(content);
+        } catch { response.writeHead(404); response.end(); }
     });
-    if (!nativeRouter) generateRouter.post('/generate', async (request, response) => {
-        const messages = [{ role: 'system', content: '服务器合并后的实际系统' },
-            { role: 'user', content: request.body.messages.at(-1).content + '\n服务器后续处理标记' }];
-        const result = await nativeFetch(`http://127.0.0.1:${upstream.address().port}/chat/completions`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer synthetic-secret' },
-            body: JSON.stringify({ messages, model: 'synthetic-model' }),
-        });
-        response.json(await result.json());
-    });
-    let cleanup = installPromptCapture(generateRouter, streamRouter);
-    app.use('/api/backends/chat-completions', generateRouter);
-    app.use('/api/plugins/tea-prompt-capture', streamRouter);
-    app.get('/', (_request, response) => response.type('html').send(harness));
-    app.get('/favicon.ico', (_request, response) => response.sendStatus(204));
-    app.use(express.static(root, { dotfiles: 'deny', index: false }));
-    const server = app.listen(0, '127.0.0.1');
+    server.listen(0, '127.0.0.1');
     await new Promise(resolve => server.on('listening', resolve));
     const url = `http://127.0.0.1:${server.address().port}/`, browser = await chromium.launch({ channel: 'msedge', headless: true });
     try {
@@ -90,7 +60,6 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             const send = async text => {
                 await panel.getByRole('textbox', { name: '小剧场提示词', exact: true }).fill(text);
                 await button('发送小剧场').click();
-                await page.waitForFunction(() => window.promptCapture.read().records.at(-1)?.server.length > 0);
                 await page.waitForFunction(() => window.runtime.getStates().length === 0);
             };
             await page.goto(url); await open();
@@ -101,7 +70,11 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             await button('剧场演出').click();
             const text = '正文 JSON：{"保留":true}\n\n  {{char}} <content>原样标签</content>\n' + 'continuous'.repeat(65);
             await send(text);
-            const browserBody = await page.evaluate(() => promptCapture.read().records.at(-1).browser);
+            const resultId = await ai().evaluate(node => runtime.getRound(node.closest('.play-record').dataset.record)
+                .then(round => round.results.at(-1).id));
+            assert.deepEqual(await page.evaluate(resultId => promptCapture.read(resultId), resultId),
+                { messages: JSON.parse(actualBodies.at(-1)).messages }, '与酒馆收到的实际正文一致');
+            assert.ok(actualHeaders.every(headers => !Object.keys(headers).some(key => key.startsWith('x-tea-prompt-'))));
             if (process.env.TEA_QA_DIR) {
                 await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
                 await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `sent-prompt-button-${viewport.width}.png`) });
@@ -114,12 +87,9 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             assert.ok((await viewer.locator('pre').textContent()).includes(text));
             assert.ok((await viewer.locator('pre').textContent()).includes('实际系统\n\n  缩进保持'));
             assert.doesNotMatch(await viewer.innerText(), /synthetic-secret|"messages"\s*:|服务器后续处理标记/);
-            await viewer.getByRole('button', { name: '酒馆发给模型', exact: true }).click();
-            assert.ok((await viewer.locator('pre').textContent()).includes('服务器合并后的实际系统'));
-            assert.ok((await viewer.locator('pre').textContent()).includes('服务器后续处理标记'));
-            assert.deepEqual(await page.evaluate(() => promptCapture.read().records.at(-1).server[0].prompt.messages),
-                JSON.parse(actualBodies.at(-1)).messages, '与实际模型接口收到的请求逐项相同');
-            assert.notDeepEqual(browserBody.messages, JSON.parse(actualBodies.at(-1)).messages);
+            assert.equal(await viewer.getByRole('combobox').count(), 0);
+            assert.equal(await viewer.getByRole('button').count(), 2);
+            assert.doesNotMatch(await viewer.innerText(), /小剧场发给酒馆|酒馆发给模型|清空记录|刷新|重启|第 \d+ 次发送/);
             await viewer.getByRole('button', { name: '复制提示词', exact: true }).click();
             assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'),
                 await viewer.locator('pre').textContent(), 'Windows 剪贴板只转换换行符，正文不变');
@@ -135,8 +105,6 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             await inspect(firstMessage).click();
             assert.ok((await viewer.locator('pre').textContent()).includes(text));
             assert.doesNotMatch(await viewer.locator('pre').textContent(), /另一条回复的独立提示词/);
-            await viewer.getByRole('button', { name: '清空记录', exact: true }).click();
-            assert.equal(await page.evaluate(() => promptCapture.read().records.length), 1, '只清空当前回复的记录');
             await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
             await inspect(ai()).click();
             assert.ok((await viewer.locator('pre').textContent()).includes('另一条回复的独立提示词'));
@@ -168,11 +136,16 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             assert.ok((await viewer.locator('pre').textContent()).includes('重新生成的专属提示词'));
             assert.doesNotMatch(await viewer.locator('pre').textContent(), /新版本专属提示词/);
             await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
+            await page.evaluate(async roundId => {
+                const round = await runtime.getRound(roundId);
+                await runtime.editPrompt(roundId, '续写的专属提示词', round.prompt);
+            }, roundId);
             await ai().getByRole('button', { name: '续写', exact: true }).click();
             await page.waitForFunction(() => runtime.getStates().length === 0);
             await inspect(ai()).click();
-            assert.equal(await viewer.getByRole('combobox', { name: '选择发送记录' }).locator('option').count(), 2,
-                '同一回复的生成和续写记录归在一起');
+            assert.equal(await viewer.getByRole('combobox').count(), 0);
+            assert.ok((await viewer.locator('pre').textContent()).includes('续写的专属提示词'));
+            assert.doesNotMatch(await viewer.locator('pre').textContent(), /重新生成的专属提示词/);
             await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
             await ai().getByRole('button', { name: '创建分支', exact: true }).click();
             const branch = panel.locator('.play-branch-page:visible');
@@ -195,22 +168,20 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             await button('历史记录').click();
             await send('刷新清空的合成测试');
             await page.reload(); await open();
-            assert.deepEqual(await page.evaluate(() => promptCapture.read().records), []);
+            assert.equal(await page.evaluate(resultId => promptCapture.read(resultId), resultId), null);
             await inspect(ai()).click();
-            await viewer.getByText('这条回复没有可查看的发送记录，或记录已清空。', { exact: true }).waitFor();
+            await viewer.getByText('这条回复没有可查看的提示词。', { exact: true }).waitFor();
             await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
-            await send('重启清空的合成测试');
-            cleanup();
-            await page.waitForFunction(() => promptCapture.read().records.length === 0);
-            streamRouter.stack.length = 0;
-            cleanup = installPromptCapture(generateRouter, streamRouter);
+            assert.equal(requests.filter(pathname => pathname.startsWith('/api/plugins/tea-prompt-capture')).length, 0,
+                '不请求已取消的服务器记录接口，因此不会由该接口产生 403');
             assert.doesNotMatch(await page.evaluate(() => JSON.stringify(Object.entries(localStorage))), /服务器后续处理标记|synthetic-secret|实际系统/);
             assert.deepEqual(errors, []);
-            console.log(JSON.stringify({ viewport, checks: 'per-AI-message button, correct reply association, actual HTTP body, two distinct stages, text preservation, copy, per-reply clear, refresh, server restart, no horizontal overflow', errors }));
+            console.log(JSON.stringify({ viewport, checks: 'per-AI-message button, correct version association, actual HTTP body, unchanged request headers, no server capture requests, text preservation, copy, regeneration, continuation, branch, refresh, no horizontal overflow', errors }));
             await context.close();
         }
+
     } finally {
-        await browser.close(); cleanup(); server.closeAllConnections(); upstream.closeAllConnections();
-        await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => upstream.close(resolve))]);
+        await browser.close(); server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });

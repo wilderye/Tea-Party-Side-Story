@@ -84,19 +84,14 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-sent-prompt-overlay { position:absolute; inset:0; z-index:10; display:flex; flex-direction:column; gap:14px; padding:24px 32px; background:var(--tea-paper); color:var(--tea-ink); min-width:0; min-height:0; }
 #teahouse-panel .play-sent-prompt-head { display:flex; align-items:center; justify-content:space-between; flex:none; gap:16px; }
 #teahouse-panel .play-sent-prompt-head h2 { font:700 22px/32px var(--tea-display); }
-#teahouse-panel :is(.play-sent-prompt-note,.play-sent-prompt-status) { font:13px/22px var(--tea-ui); color:var(--tea-muted); flex:none; }
-#teahouse-panel .play-sent-prompt-tabs { display:flex; flex:none; gap:24px; border-bottom:1px solid var(--tea-line); }
-#teahouse-panel .play-sent-prompt-tabs button { min-height:40px; padding:6px 0; }
-#teahouse-panel .play-sent-prompt-tabs button[aria-pressed=true] { color:var(--tea-heading,var(--tea-forest))!important; border-bottom:2px solid currentColor!important; }
+#teahouse-panel .play-sent-prompt-status { font:13px/22px var(--tea-ui); color:var(--tea-muted); flex:none; }
 #teahouse-panel .play-sent-prompt-controls { display:flex; align-items:center; flex:none; flex-wrap:wrap; gap:8px 20px; }
-#teahouse-panel .play-sent-prompt-controls select { flex:1; min-width:160px; max-width:100%; margin:0; padding:8px; border:1px solid var(--tea-line)!important; border-radius:4px!important; background:var(--tea-field-paper,var(--tea-paper))!important; }
 #teahouse-panel .play-sent-prompt-controls button { min-height:36px; text-decoration:underline; text-underline-offset:4px; }
 #teahouse-panel .play-sent-prompt-body { display:block; flex:1; min-height:0; min-width:0; margin:0; padding:20px; overflow:auto; overscroll-behavior:contain; white-space:pre-wrap; overflow-wrap:anywhere; tab-size:4; user-select:text; font:14px/1.8 ui-monospace,Consolas,var(--tea-ui); border:1px solid var(--tea-line); border-radius:4px; background:var(--tea-field-paper,#ffffff80); color:inherit; box-shadow:none; }
 @media(max-width:760px) {
     #teahouse-panel .play-sent-prompt-overlay { padding:16px; gap:10px; }
     #teahouse-panel .play-sent-prompt-head h2 { font-size:20px; }
     #teahouse-panel .play-sent-prompt-body { padding:12px; font-size:13px; }
-    #teahouse-panel .play-sent-prompt-controls select { flex-basis:100%; }
 }
 #teahouse-panel .tea-catalog { background:var(--tea-sidebar-paper,var(--tea-forest)); color:var(--tea-sidebar-ink,#f9f4e5); display:flex; flex-direction:column; min-height:0; min-width:0; padding:32px 24px 24px; contain:layout style; }
 #teahouse-panel .tea-catalog .tea-icon:hover:not(:disabled) { background:var(--tea-sidebar-hover,#ffffff10)!important; }

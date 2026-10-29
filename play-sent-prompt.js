@@ -55,110 +55,21 @@ export function formatSentPrompt(prompt) {
     return sections.join('\n\n');
 }
 
-/** The server streams each outgoing prompt immediately; neither side writes it to disk. */
-export function createSentPromptCapture({ fetchRequest = (...args) => fetch(...args), uuid = () =>
-    crypto.randomUUID?.() ?? [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('') } = {}) {
-    const session = uuid(), records = [], listeners = new Set();
-    let connection, connecting, openingController, disposed = false, unavailable = false, serverStatus = '服务器记录组件尚未连接。';
-    const notify = () => { for (const listener of listeners) { try { listener(); } catch { /* Viewing must not interrupt a model request. */ } } };
-    const read = () => ({ records: structuredClone(records), serverStatus });
-    const receive = data => {
-        if (data.type !== 'prompt') return;
-        const record = records.find(record => record.id === data.id);
-        if (!record) return;
-        record.server.push({ prompt: readSentPrompt(data.prompt), sentAt: data.sentAt });
-        notify();
-    };
-    async function connect(context) {
-        if (connection || unavailable || disposed) return;
-        if (connecting) return connecting;
-        connecting = (async () => {
-            const controller = new AbortController();
-            openingController = controller;
-            const timer = setTimeout(() => controller.abort(), 2000);
-            let reader;
-            try {
-                const response = await fetchRequest('/api/plugins/tea-prompt-capture/stream', {
-                    method: 'POST', headers: { ...context.getRequestHeaders(), 'X-Tea-Prompt-Session': session },
-                    body: '{}', cache: 'no-store', signal: controller.signal,
-                });
-                if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-                    unavailable = true;
-                    serverStatus = '服务器记录组件未安装或未启用，无法取得酒馆发给模型的原文。';
-                    await response.body?.cancel(); return;
-                }
-                reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                const consume = chunk => {
-                    buffer += decoder.decode(chunk, { stream: true });
-                    const frames = buffer.split('\n\n'); buffer = frames.pop();
-                    let ready = false;
-                    for (const frame of frames) {
-                        const line = frame.split('\n').find(line => line.startsWith('data: '));
-                        if (!line) continue;
-                        const data = JSON.parse(line.slice(6));
-                        ready ||= data.type === 'ready'; receive(data);
-                    }
-                    return ready;
-                };
-                while (true) {
-                    const chunk = await reader.read();
-                    if (chunk.done) throw new Error('服务器记录连接已结束');
-                    if (consume(chunk.value)) break;
-                }
-                clearTimeout(timer);
-                connection = controller; serverStatus = '服务器记录组件已连接。'; notify();
-                // Keep reading while a model reply is streaming. Prompt snapshots
-                // are sent independently of the model response and never rebuilt.
-                void (async () => {
-                    try {
-                        while (true) {
-                            const chunk = await reader.read();
-                            if (chunk.done) break;
-                            consume(chunk.value);
-                        }
-                    } catch { /* A restart/disconnect is shown in the viewer. */ }
-                    finally {
-                        reader.releaseLock();
-                        if (connection === controller) {
-                            connection = null; records.length = 0;
-                            serverStatus = '服务器连接已断开，记录已清空；下次发送时会重新连接。'; notify();
-                        }
-                    }
-                })();
-            } catch {
-                controller.abort(); await reader?.cancel().catch(() => {}); reader?.releaseLock();
-                serverStatus = '服务器记录连接失败；本次仍正常生成，下次发送时会重新连接。';
-            } finally { clearTimeout(timer); openingController = null; notify(); }
-        })().finally(() => { connecting = null; });
-        return connecting;
-    }
+/** Keep only the latest actual send for each reply version, in this page's memory. */
+export function createSentPromptCapture() {
+    const prompts = new Map(), listeners = new Set();
+    let disposed = false;
     return {
-        read,
-        subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-        async begin(context, signal, resultId) {
-            await connect(context); signal?.throwIfAborted();
-            const id = uuid();
-            return {
-                headers: { 'X-Tea-Prompt-Session': session, 'X-Tea-Prompt-Request': id },
-                sent(body) {
-                    if (disposed) return;
-                    records.push({ id, resultId, sentAt: new Date().toISOString(), browser: readSentPrompt(body), server: [],
-                        serverExpected: !!connection, serverStatus });
-                    // Bound browser memory; no prompt is written to a storage API.
-                    if (records.length > 20) records.shift();
-                    notify();
-                },
-            };
-        },
-        clear(resultId) {
-            for (let index = records.length - 1; index >= 0; index--) {
-                if (resultId === undefined || records[index].resultId === resultId) records.splice(index, 1);
+        read(resultId) { return structuredClone(prompts.get(resultId) ?? null); },
+        record(resultId, body) {
+            if (disposed || !resultId) return;
+            prompts.set(resultId, readSentPrompt(body));
+            for (const listener of listeners) {
+                try { listener(); } catch { /* Viewing must not interrupt a model request. */ }
             }
-            notify();
         },
-        dispose() { disposed = true; openingController?.abort(); connection?.abort(); connection = null; records.length = 0; listeners.clear(); },
+        subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+        dispose() { disposed = true; prompts.clear(); listeners.clear(); },
     };
 }
 

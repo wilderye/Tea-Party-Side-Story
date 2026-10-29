@@ -47,13 +47,13 @@ function isStreamComplete(data) {
 }
 
 /** Read errors before native text extraction, whose error parser swallows them. */
-async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}, body = JSON.stringify(payload), trace) {
+async function sendCompletionRequest(context, payload, signal, { EventSourceStream, getStreamingReply } = {}, body = JSON.stringify(payload), onSent) {
     const pending = fetch('/api/backends/chat-completions/generate', {
-        method: 'POST', headers: { ...context.getRequestHeaders(), ...trace?.headers }, cache: 'no-cache',
+        method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache',
         body, signal,
     });
     // This is the same immutable string passed to fetch, after all processing.
-    trace?.sent(body);
+    onSent?.(body);
     const response = await pending;
     if (!response.ok || !payload.stream || /\bjson\b/i.test(response.headers.get('content-type') ?? '')) {
         const data = await readJsonResponse(response);
@@ -172,9 +172,8 @@ export function createPreparedPlayRequest(context, data, { prefix = '', continue
             try {
                 // Store the original model text without evaluating JSON schema
                 // output or invoking Tavern's main-chat reply handlers.
-                const trace = await promptCapture?.begin(context, controller.signal, resultId);
-                controller.signal.throwIfAborted();
-                const result = await sendCompletionRequest(context, payload, controller.signal, streaming, body, trace);
+                const result = await sendCompletionRequest(context, payload, controller.signal, streaming, body,
+                    sentBody => promptCapture?.record(resultId, sentBody));
                 controller.signal.throwIfAborted();
                 if (!payload.stream) {
                     const text = extract(result, 'openai') ?? '';
