@@ -287,9 +287,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         positions.set(chat.id, { bottom: true });
         renderChat({ bottom: true });
     }
-    function restore(saved, targetId) {
+    function restore(saved, targetId, immediate = false) {
         restoring = true;
-        requestAnimationFrame(() => {
+        const apply = () => {
             if (!visible || route !== 'chat') { restoring = false; return; }
             if (targetId) {
                 const target = content.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
@@ -302,7 +302,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 if (anchor) setFeedScroll(feed.scrollTop + anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top - getReadingInset() - saved.offset);
             }
             restoring = false; remember(); updateReadingControls();
-        });
+        };
+        // Opening a page waits for its layout; streaming and observed size
+        // changes already have a measurable layout and must restore before paint.
+        if (immediate) apply(); else requestAnimationFrame(apply);
     }
     function messageHeader(message, result) {
         const index = chat.messages.findIndex(item => item.id === message.id);
@@ -457,7 +460,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         }
     });
     feed.addEventListener('scroll', () => { remember(); updateReadingControls(); }, { passive: true });
-    const resize = new ResizeObserver(() => { if (visible && !editor) { scheduleInputSizing(); restore(positions.get(chat?.id)); } });
+    const resize = new ResizeObserver(() => { if (visible && !editor) { scheduleInputSizing(); restore(positions.get(chat?.id), undefined, true); } });
     async function loadFavorites() {
         const rows = await playground.listFavorites();
         favorites = new Map(rows.filter(row => !row.source.type).map(row => [favoriteSourceKey(row.source), row]));
@@ -680,7 +683,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                     : busy() || settings.enabled === false;
             }
             for (const button of menuItems.children) button.disabled = busy() || settings.enabled === false;
-            updateInput(); updateReadingControls(); if (saved?.bottom) restore(saved);
+            updateInput(); updateReadingControls(); if (saved?.bottom) restore(saved, undefined, true);
         });
     });
     window.addEventListener('pagehide', saveDrafts);

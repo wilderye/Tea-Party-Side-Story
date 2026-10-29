@@ -23,10 +23,26 @@ diagnostics,prepareRequest:async request=>{
     .replace('{...libraryActions,playground:runtime,promptFavorites}', '{...libraryActions,playground:runtime,promptFavorites,diagnostics}');
 assert.notEqual(harness, originalHarness);
 assert.ok(harness.includes('return createPreparedPlayRequest'));
+const streamingHarness = originalHarness.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">')
+    .replace('window.captured=[];window.capturedPrompts=[];', `settings.playRetry={rateLimit:true,empty:true,maxRetries:10,intervalSeconds:0.05};
+window.captured=[];window.capturedPrompts=[];window.requestAttempts=0;`)
+    .replace(/prepareRequest:async request=>\{window\.captured\.push\(request\.environment\);[\s\S]*?\}\}\}\);/, `prepareRequest:async request=>{
+    let attempts=0;window.captured.push(request.environment);window.streamBase=request.continueMessage||'';
+    return{send:({onText,signal})=>{
+        window.requestAttempts++;attempts++;
+        if(attempts===1)return Promise.resolve(window.streamBase);
+        return new Promise((resolve,reject)=>{window.emitGeneration=onText;window.finishGeneration=resolve;
+            signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+    }};
+}});`);
+assert.ok(streamingHarness.includes('window.requestAttempts++'));
 const server = http.createServer(async (request, response) => {
     try {
-        const name = new URL(request.url, 'http://test').pathname.slice(1);
-        if (!name) { response.setHeader('Content-Type', 'text/html; charset=utf-8'); return response.end(harness); }
+        const url = new URL(request.url, 'http://test'), name = url.pathname.slice(1);
+        if (!name) {
+            response.setHeader('Content-Type', 'text/html; charset=utf-8');
+            return response.end(url.searchParams.has('stream-ui') ? streamingHarness : harness);
+        }
         if (name === 'favicon.ico') { response.statusCode = 204; return response.end(); }
         if (name === 'api/plugins/tea-prompt-capture/stream') { response.statusCode = 204; return response.end(); }
         const file = path.resolve(root, name);
@@ -35,6 +51,85 @@ const server = http.createServer(async (request, response) => {
         response.end(await fs.readFile(file));
     } catch (error) { response.statusCode = 500; response.end(error.message); }
 });
+
+async function verifyStreaming(page, url, viewport) {
+    await page.goto(`${url}?stream-ui`); await page.waitForFunction(() => window.ready);
+    assert.equal(page.url(), `${url}?stream-ui`); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
+    await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+    const panel = page.locator('#teahouse-panel');
+    const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+    const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await button('剧场演出').click();
+    const retryText = '正在进行第 1/10 次自动重试。';
+    async function checkStream(surface, label) {
+        await surface.getByText(retryText, { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => runtime.getStates().length), 1);
+        assert.equal(await surface.locator('.play-stop').filter({ visible: true }).count(), 0);
+        await page.evaluate(() => emitGeneration(`${window.streamBase} \n`)); await settle();
+        assert.equal(await surface.getByText(retryText, { exact: true }).isVisible(), true, '空白和续写原文仍不算新正文');
+        await page.evaluate(() => emitGeneration(window.streamBase + Array.from({ length: 35 }, (_, index) => `模拟正文第${index + 1}段。`).join('\n\n')));
+        await surface.getByText('模拟正文第35段。', { exact: true }).last().waitFor(); await settle();
+        assert.equal(await surface.getByText(retryText, { exact: true }).isVisible(), false, '重试出字后立即隐藏提示');
+        assert.equal(await surface.locator('.play-stop').filter({ visible: true }).count(), 0);
+        const samples = await surface.evaluate(node => new Promise(resolve => {
+            const feed = node.querySelector('.play-feed'), ai = [...feed.querySelectorAll('.play-assistant-message')].at(-1);
+            const footer = ai.querySelector('.play-message-actions'), input = node.querySelector('.play-input-row'), samples = [];
+            const sample = () => {
+                const gap = input.getBoundingClientRect().top - footer.getBoundingClientRect().bottom;
+                samples.push({ gap, bottomDistance: feed.scrollHeight - feed.clientHeight - feed.scrollTop,
+                    marginBottom: getComputedStyle(ai).marginBottom });
+            };
+            sample(); emitGeneration(runtime.getState().text + '\n\n' + '本次新增正文。\n\n'.repeat(4));
+            requestAnimationFrame(() => { sample(); requestAnimationFrame(() => { sample(); resolve(samples); }); });
+        }));
+        assert.ok(samples.every(sample => Math.abs(sample.bottomDistance) < 1), `${label}正文更新的每一帧都跟随底部：${JSON.stringify(samples)}`);
+        assert.ok(samples.every(sample => Math.abs(sample.gap - samples[0].gap) < 1), `${label}新增文字不会占入底部空白：${JSON.stringify(samples)}`);
+        assert.equal(samples[0].marginBottom, '0px');
+        const branch = label !== 'original';
+        if (branch) {
+            const expectedGap = viewport.width > 1200 ? 42 : viewport.width > 760 ? 40 : 34;
+            assert.ok(Math.abs(samples[0].gap - expectedGap) < 1, `分支只保留正文容器和输入区留白：${samples[0].gap}`);
+            const feed = surface.locator('.play-feed');
+            await feed.evaluate(node => { node.scrollTop -= 200; }); await settle();
+            const anchor = await feed.evaluate(node => {
+                const top = node.getBoundingClientRect().top;
+                const paragraph = [...node.querySelectorAll('[data-read-anchor]')].find(item => item.getBoundingClientRect().bottom > top + 130);
+                return { id: paragraph.dataset.readAnchor, offset: paragraph.getBoundingClientRect().top - top };
+            });
+            await page.evaluate(() => emitGeneration(runtime.getState().text + '\n\n向上阅读时新增的正文。'));
+            await settle();
+            const after = await feed.evaluate((node, anchor) => node.querySelector(`[data-read-anchor="${anchor.id}"]`).getBoundingClientRect().top - node.getBoundingClientRect().top, anchor);
+            assert.ok(Math.abs(after - anchor.offset) < 1, '向上阅读时收到正文保持原段落位置');
+            await feed.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle();
+        }
+        if (process.env.TEA_QA_DIR) {
+            await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
+            await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `retry-stream-${label}-${viewport.width}.png`) });
+        }
+        if (label === 'branch') {
+            await surface.locator('.play-send').click(); await page.waitForFunction(() => runtime.getStates().length === 0);
+            await settle();
+            assert.equal(await surface.locator('.play-assistant-message').last().locator('.play-results').getAttribute('data-status'), 'stopped');
+        } else {
+            await page.evaluate(() => finishGeneration(runtime.getState().text));
+            await page.waitForFunction(() => runtime.getStates().length === 0);
+        }
+        await settle();
+        assert.equal(await surface.locator('.play-stop').filter({ visible: true }).count(), 0);
+        console.log(`PASS retry streaming ${label} ${viewport.width}: prompt cleared, single stop hidden, same-frame scrolling (${JSON.stringify(samples)})`);
+    }
+    const original = panel.locator('.play-page:not(.play-history-page):not(.play-branch-page)').filter({ visible: true }).first();
+    await panel.getByRole('textbox', { name: '小剧场提示词', exact: true }).fill('模拟重试出字');
+    await button('发送小剧场').click(); await checkStream(original, 'original');
+    await button('历史记录').click();
+    const seedId = await page.evaluate(() => seed.a);
+    await panel.locator(`.play-history-directory [data-chat-id="${seedId}"] .play-history-open`).click();
+    const branch = panel.locator('.play-branch-page').filter({ visible: true });
+    await branch.getByRole('textbox', { name: '分支聊天输入', exact: true }).fill('模拟分支重试出字');
+    await branch.locator('.play-send').click(); await checkStream(branch, 'branch');
+    await branch.locator('.play-assistant-message').last().getByRole('button', { name: '续写', exact: true }).click();
+    await checkStream(branch, 'continuation');
+}
 
 async function verify(page, url, viewport) {
     const calls = [];
@@ -116,7 +211,7 @@ async function verify(page, url, viewport) {
         { json: { text: '', thought: 'discarded thought' } }, { json: { text: '自动重试成功的正文' } }];
     await send('重试验证');
     await panel.getByText('遇到 429，2 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();
-    await button('停止这份回复').waitFor();
+    assert.equal(await panel.locator('.play-stop').filter({ visible: true }).count(), 0, '只有一条生成时不显示回复旁的停止按钮');
     assert.equal(await button('停止所有生成').isEnabled(), true);
     await screenshot('countdown');
     await panel.getByText('遇到 429，1 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();
@@ -131,7 +226,7 @@ async function verify(page, url, viewport) {
 
     await send('停止等待');
     await panel.getByText('遇到 429，2 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();
-    await button('停止这份回复').click(); await idle();
+    await button('停止所有生成').click(); await idle();
     await page.waitForTimeout(2100);
     assert.equal(calls.length, 4); assert.equal((await latest()).results[0].status, 'stopped');
     const timeline = await page.evaluate(() => diagnostics.export());
@@ -180,6 +275,14 @@ async function verify(page, url, viewport) {
                 assert.deepEqual(errors.filter(message => !/Failed to load resource: the server responded with a status of 429/.test(message)), []);
                 console.log(`PASS automatic retry ${viewport.width}x${viewport.height}: defaults, persistence, switches, shared limit, identical HTTP payload, countdown, stop and layout (${url})`);
             } finally { await context.close(); }
+            const streaming = await browser.newContext({ viewport, isMobile: viewport.width < 760, hasTouch: viewport.width < 760 });
+            const streamingPage = await streaming.newPage(), streamingErrors = [];
+            streamingPage.on('pageerror', error => streamingErrors.push(error.message));
+            streamingPage.on('console', message => { if (['error', 'warning'].includes(message.type())) streamingErrors.push(message.text()); });
+            try {
+                await verifyStreaming(streamingPage, url, viewport);
+                assert.deepEqual(streamingErrors, []);
+            } finally { await streaming.close(); }
         }
     } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

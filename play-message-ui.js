@@ -55,7 +55,7 @@ export function createPlayReplyActions({ onPrevious, onNext, onChoose, onAgain, 
 }
 
 export function showPlayReplyStop(job, multipleActive) {
-    return !!job && (multipleActive || !!job.retry) && activePhases.has(job.phase);
+    return !!job && multipleActive && activePhases.has(job.phase);
 }
 
 export function syncPlayReplyFooter(view, editing = false) {

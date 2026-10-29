@@ -536,6 +536,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-chat-version-choices { position:absolute; z-index:7; bottom:90px; left:20px; right:20px; max-height:50%; overflow:auto; display:flex; flex-direction:column; padding:12px; gap:4px; background:var(--tea-paper); border:1px solid var(--tea-line); box-shadow:0 8px 24px var(--tea-popup-shadow,#102f2826); }
 #teahouse-panel .play-chat-version-choices button { padding:12px; min-height:40px; text-align:left; font-size:14px; }
 #teahouse-panel .play-chat-feed .play-message { padding:0; margin-bottom:32px; }
+#teahouse-panel .play-chat-feed>.play-feed-content>.play-message:last-child { margin-bottom:0; }
 #teahouse-panel .play-chat-feed .play-message-actions>button:not(.tea-icon) { grid-column:1/-1; }
 #teahouse-panel .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); }
 #teahouse-panel .play-chat-feed .play-message:has(.play-delete-checkbox) { padding:12px 12px 12px 40px; cursor:pointer; }

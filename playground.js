@@ -239,6 +239,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                             if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                             if (typeof text !== 'string') throw new PlaygroundError('invalid_response', '模型返回的内容格式不正确');
                             receivedBody ||= !!text.slice(baseText.length).trim();
+                            if (receivedBody) job.retry = null;
                             if (diagnostic && text && text !== job.text) {
                                 const receivedAt = now(), first = !job.text;
                                 diagnostic?.update({ ...(first ? { firstContentAt: receivedAt } : {}),

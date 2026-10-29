@@ -141,6 +141,37 @@ test('续写空增量会重试；每次都从原正文续写，旧正文不算�
     assert.ok(f.calls.slice(1).every(call => call.body === f.calls[1].body));
 });
 
+test('重试提示在本次收到有效新增正文后结束，续写原文和空白不会提前结束提示', async t => {
+    for (const continuation of [false, true]) await t.test(continuation ? '续写' : '新回复', async () => {
+        const io = memoryFiles(), started = deferred(), release = deferred();
+        const environment = { character: characterA, context: contextA, retry: config() };
+        let attempts = 0, onText;
+        const service = createPlayground({ history: io.store, captureEnvironment: () => environment, isCurrent: () => true,
+            prepareRequest: async request => ({ send: async options => {
+                if (continuation && request.continueMessage === undefined) return '原正文';
+                attempts++;
+                if (attempts === 1) throw Object.assign(new Error('429'), { status: 429 });
+                onText = options.onText; started.resolve(); await release.promise;
+                return `${request.continueMessage ?? ''}新增正文`;
+            } }) });
+        const first = continuation && await service.send({ prompt: '原正文' });
+        const task = continuation ? service.continueResult(first.roundId, first.result.id) : service.send({ prompt: '重试出字' });
+        try {
+            await started.promise;
+            const base = continuation ? '原正文' : '';
+            assert.equal(service.getState().retry.attempt, 1);
+            onText(base); assert.equal(service.getState().retry.attempt, 1);
+            onText(`${base} \n`); assert.equal(service.getState().retry.attempt, 1);
+            onText(`${base}新增正文`);
+            assert.equal(service.getState().phase, 'generating');
+            assert.equal(service.getState().retry, null);
+            assert.equal(service.getState().text, `${base}新增正文`);
+        } finally { release.resolve(); }
+        assert.equal((await task).result.status, 'complete');
+        assert.equal(attempts, 2);
+    });
+});
+
 test('重新生成的自动重试只替换所选结果，生成新剧场的重试也只新增一个结果', async t => {
     const f = fixture(t, attempt => [2, 4].includes(attempt) ? apiError() : reply(`正文${attempt}`));
     const first = await f.service.send({ prompt: '测试版本' });
