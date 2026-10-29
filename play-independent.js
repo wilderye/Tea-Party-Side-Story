@@ -5,26 +5,7 @@ import { createPlayLocalEvents, createPlayTemplateContext } from './play-templat
 import { readPlayInitialVariables } from './play-variable-context.js';
 import { createPlayNoteContext } from './play-note-context.js';
 import { createPlayExampleFormatter } from './play-example-context.js';
-
-const personaQueues = new WeakMap();
-
-function selectPersonaForTask(context, modules, signal) {
-    return (personas, character) => {
-        const previous = personaQueues.get(context.eventSource) ?? Promise.resolve();
-        const task = previous.then(async () => {
-            signal.throwIfAborted();
-            const before = new Set(context.Popup.util.popups);
-            const selection = modules.personas.askForPersonaSelection('选择用户设定', `为「${character.name}」的本次小剧场选择用户设定。`, personas, { okButton: '取消' });
-            const popup = context.Popup.util.popups.find(item => !before.has(item));
-            const abort = () => { if (popup) void popup.complete(context.POPUP_RESULT.CANCELLED); };
-            signal.addEventListener('abort', abort, { once: true });
-            try { const result = await selection; signal.throwIfAborted(); return result; }
-            finally { signal.removeEventListener('abort', abort); }
-        });
-        personaQueues.set(context.eventSource, task.catch(() => {}));
-        return task;
-    };
-}
+import { getPlayPersonaSession } from './play-persona-session.js';
 
 async function buildPlayCore(context, modules, environment, resolved, events, prompt) {
     const localCore = { ...modules.core, chat: structuredClone(resolved.messages), chat_metadata: structuredClone(resolved.metadata),
@@ -76,9 +57,10 @@ export function canUseNativePlayScope(context, environment, resolved) {
 /** Native current-chat preparation remains available; other cards are independent. */
 export async function createIndependentPlayScope(context, modules, options) {
     const { environment, signal, prompt } = options;
+    const personas = options.personaSession ?? getPlayPersonaSession(() => context, () => modules.personas);
     const resolved = await resolvePlayCharacterContext(context, environment, signal, {
         timestamp: value => modules.utils.timestampToMoment(value).valueOf(),
-        choosePersona: selectPersonaForTask(context, modules, signal),
+        selectPersona: (power, character, metadata, current) => personas.select(power, character, metadata, current, signal),
         initializeVariables: async () => ({}),
     });
     environment.chatId = resolved.chatId;

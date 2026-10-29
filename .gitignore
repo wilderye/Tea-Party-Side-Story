@@ -38,6 +38,7 @@ tests/*
 !tests/playground.test.js
 !tests/play-concurrency.test.js
 !tests/play-character-context.test.js
+!tests/play-persona-session.test.js
 !tests/play-independent-modules.test.js
 !tests/play-optional-processing.test.js
 !tests/play-template-installed.browser.cjs

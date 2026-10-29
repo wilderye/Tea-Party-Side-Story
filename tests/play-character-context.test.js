@@ -63,7 +63,7 @@ test('没有聊天、没有首楼或聊天没有有效变量才回退初值，�
     await assert.rejects(readPlayCharacterChat(context, environment(), signal(), { fetchJson: async () => { throw Error('读取错误'); } }), /读取错误/);
 });
 
-test('多人设设置关时取第一个；开时选择仅用于本次任务，取消不回退别的人设', async () => {
+test('多人设设置关时取第一个；开时要求选择，取消不回退别的人设', async () => {
     const env = environment(true), power = env.tavern.power;
     power.persona_descriptions.chat.connections = [{ id: 'A.png' }];
     const original = structuredClone(power);

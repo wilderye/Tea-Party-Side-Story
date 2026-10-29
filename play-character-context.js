@@ -78,7 +78,7 @@ export async function selectPlayPersona(power, character, metadata, current, cho
 /** Resolve only this task's card/chat/persona. No host state is changed. */
 export async function resolvePlayCharacterContext(context, environment, signal, dependencies) {
     const chat = await readPlayCharacterChat(context, environment, signal, dependencies);
-    const persona = await selectPlayPersona(environment.tavern.power, environment.character, chat.metadata,
+    const persona = await (dependencies.selectPersona ?? selectPlayPersona)(environment.tavern.power, environment.character, chat.metadata,
         { avatar: environment.tavern.userAvatar, name: environment.tavern.name1 }, dependencies.choosePersona);
     signal.throwIfAborted();
     let saved = null;

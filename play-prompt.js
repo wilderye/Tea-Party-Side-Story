@@ -5,6 +5,7 @@ import { legacyPlayParameters } from './play-parameters.js';
 import { DEFAULT_PLAY_PROMPT_POSITION, readPlayContinuationSettings, playContinuationError } from './play-settings.js';
 import { loadPlayModuleSource } from './play-task-module.js';
 import { getPlayPreparationCoordinator } from './play-preparation.js';
+import { getPlayPersonaSession } from './play-persona-session.js';
 import { readPlayTemplateFeatures } from './play-template-context.js';
 import { readPlayHelperVariables } from './play-variable-context.js';
 import { processPlayPromptText, readTavernRegex } from './play-processing.js';
@@ -375,18 +376,20 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
 export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules, prepareMessages = preparePlayPreset,
     createScope = async (...args) => (await import('./play-independent.js')).createIndependentPlayScope(...args) } = {}) {
     let loading, modules, tokenCountOffset = 0;
+    const personaSession = getPlayPersonaSession(ctx, () => modules?.personas);
     let coordinator = typeof ctx().eventSource?.emit === 'function' ? getPlayPreparationCoordinator(ctx()) : null;
     const ready = () => loading ??= loadModules().then(async value => {
         // An empty full count measures ST's fixed accounting offset without
         // sending text or depending on a particular model/version's constants.
         tokenCountOffset = await value.tokenizers?.countTokensOpenAIAsync?.([], true) ?? 0;
         modules = value;
+        personaSession.refresh();
         coordinator ??= typeof ctx().eventSource?.emit === 'function' ? getPlayPreparationCoordinator(ctx(), modules.core) : null;
         return value;
     }).catch(error => { loading = null; throw error; });
     const prepare = async options => {
         options.signal.throwIfAborted(); await ready(); options.signal.throwIfAborted();
-        let scope = await createScope(ctx(), modules, options);
+        let scope = await createScope(ctx(), modules, { ...options, personaSession });
         try {
             if (scope.native) {
                 try {
@@ -398,7 +401,7 @@ export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules,
                     options.signal.throwIfAborted();
                     if (error instanceof PlaygroundError || error?.name === 'AbortError') throw error;
                     scope.dispose();
-                    scope = await createScope(ctx(), modules, { ...options, forceIndependent: true });
+                    scope = await createScope(ctx(), modules, { ...options, personaSession, forceIndependent: true });
                 }
             }
             const request = await prepareNativeRequest(() => scope.context, scope.modules, options, prepareMessages,
