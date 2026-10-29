@@ -101,6 +101,19 @@ test('同一聊天生成期间拒绝发送编辑删除；仍可从前面已保�
     await assert.rejects(f.store.createBranch(chat.id, chat.messages[3].id), { code: 'chat_busy' });
 });
 
+test('游玩起始对子生成多个版本时可切换查看；分支生成和已有后续的起始楼层仍不可切换', async () => {
+    const f = memoryFiles(), initial = await seed(f), ai = initial.messages[1];
+    const round = await f.store.begin({ roundId: initial.id, character: characterA, context: contextA,
+        resultId: randomUUID(), startedAt: time(8) });
+    await assert.rejects(f.store.setMessageVersion(initial.id, ai.id, ai.results[0].id), { code: 'chat_busy' });
+    const selected = await f.store.setMessageVersion(initial.id, ai.id, ai.results[0].id, undefined, { playSelection: true });
+    assert.equal(selected.messages[1].selectedResultId, ai.results[0].id);
+    await f.store.saveResult(round.id, round.results.at(-1).id, { text: '生成完成', status: 'complete', finishedAt: time(9) });
+    const next = await f.store.begin({ roundId: initial.id, chatMode: true, operation: 'send', prompt: '后续',
+        character: characterA, context: contextA, resultId: randomUUID(), startedAt: time(10) });
+    await assert.rejects(f.store.setMessageVersion(next.id, ai.id, ai.results[1].id, undefined, { playSelection: true }), { code: 'message_not_last' });
+});
+
 test('迁移和编辑提交失败保留旧指向；另一窗口的变化不会被过期范围删除覆盖', async () => {
     const f = memoryFiles(), round = await f.begin();
     const saved = await f.store.saveResult(round.id, round.results[0].id, { text: '原文', status: 'complete', finishedAt: time(1) });

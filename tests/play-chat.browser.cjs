@@ -27,6 +27,108 @@ async function screenshot(page, name) {
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
+async function verifyReadingControls(page, panel, branch, viewport) {
+    const feed = branch.locator('.play-chat-feed'), ai = branch.locator('.play-assistant-message').first();
+    const title = branch.locator('.play-chat-name');
+    const tabs = panel.locator('.play-chat-catalog .tea-mobile-tabs');
+    const offset = locator => locator.evaluate(node => -new DOMMatrixReadOnly(getComputedStyle(node).transform).m42 || 0);
+    const top = ai.getByRole('button', { name: '回到这条消息开头', exact: true });
+    const jump = branch.getByRole('button', { name: '跳到最新消息', exact: true });
+    const branchButton = ai.getByRole('button', { name: '创建分支', exact: true });
+    assert.equal(await branchButton.evaluate(node => !!node.closest('.play-message-meta')), true, '分支按钮在回复顶部');
+    assert.equal(await ai.locator('.play-message-actions').getByRole('button', { name: '创建分支', exact: true }).count(), 0);
+    await settle(page); await top.waitFor();
+    const buttons = await ai.evaluate(node => {
+        const top = node.querySelector('.play-message-top').getBoundingClientRect(), footer = node.querySelector('footer').getBoundingClientRect();
+        return { right: top.right, footerRight: footer.right };
+    });
+    assert.ok(Math.abs(buttons.right - buttons.footerRight) < 2, '回顶按钮在回复右下角');
+    await top.click(); await settle(page);
+    const visibleTop = await feed.evaluate(node => {
+        const heading = document.querySelector('.play-chat-name');
+        return Math.max(node.getBoundingClientRect().top, matchMedia('(max-width:760px)').matches ? heading.getBoundingClientRect().bottom : 0);
+    });
+    assert.ok(Math.abs((await ai.boundingBox()).y - visibleTop - 10) < 2, '回到回复开头且不被标题遮住');
+    await jump.waitFor(); await screenshot(page, `branch-controls-${viewport.width}.png`);
+    if (viewport.width <= 760) {
+        const before = await feed.boundingBox();
+        const touchScroll = async pixels => {
+            await feed.evaluate((node, pixels) => {
+                const point = new Touch({ identifier: 1, target: node, clientX: 180, clientY: 400 });
+                node.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [point] }));
+                node.scrollTop += pixels;
+                node.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] }));
+            }, pixels);
+            await settle(page); await feed.evaluate(node => node.dispatchEvent(new Event('scrollend')));
+        };
+        await touchScroll(22);
+        assert.equal(await offset(tabs), 22); assert.equal(await offset(title), 22, '标题和栏目按相同距离移动');
+        await touchScroll(120);
+        const height = await title.evaluate(node => node.offsetHeight);
+        assert.equal(await offset(title), 44 + height, '栏目及整个标题均收起');
+        assert.ok((await title.boundingBox()).y + (await title.boundingBox()).height <= before.y + 1);
+        const after = await feed.boundingBox();
+        assert.equal(after.y, before.y); assert.equal(after.height, before.height, '标题收起不改变正文滚动区域');
+        await screenshot(page, `branch-collapsed-${viewport.width}.png`);
+        await touchScroll(-22);
+        assert.equal(await offset(title), 22 + height, '反向滑动立即展开标题');
+        await touchScroll(-120);
+        assert.equal(await offset(title), 0); assert.equal(await offset(tabs), 0, '反向滑动完全展开');
+        await touchScroll(22);
+        const reading = await feed.evaluate(node => {
+            const top = document.querySelector('.play-chat-name').getBoundingClientRect().bottom;
+            const anchor = [...node.querySelectorAll('[data-read-anchor]')].find(item => item.getBoundingClientRect().bottom > top + 1);
+            return { id: anchor.dataset.readAnchor, offset: anchor.getBoundingClientRect().top - top };
+        });
+        await panel.getByRole('button', { name: '关闭面板', exact: true }).filter({ visible: true }).click();
+        await panel.waitFor({ state: 'detached' });
+        await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await settle(page);
+        const restored = await feed.evaluate((node, reading) => {
+            const top = document.querySelector('.play-chat-name').getBoundingClientRect().bottom;
+            return node.querySelector(`[data-read-anchor="${reading.id}"]`).getBoundingClientRect().top - top;
+        }, reading);
+        assert.ok(Math.abs(restored - reading.offset) < 2, `标题半收起时关闭再打开，按可见正文上边缘恢复阅读 ${reading.offset} → ${restored}`);
+    }
+    await jump.click(); await settle(page);
+    assert.ok(await feed.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop < 2), '回底到最新消息');
+    assert.equal(await jump.isVisible(), false, '回到底部后隐藏回底按钮');
+}
+async function verifyConcurrentControls(page, panel, branch) {
+    const input = branch.getByRole('textbox', { name: '分支聊天输入', exact: true });
+    const send = branch.locator('.play-send');
+    await input.fill('并发分支A'); await send.click();
+    await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
+    await page.evaluate(() => emitGeneration('并发A已收到正文\n\n'.repeat(45)));
+    const latest = branch.locator('.play-assistant-message').last();
+    await latest.getByText('并发A已收到正文', { exact: true }).first().waitFor();
+    assert.equal(await latest.locator('.play-stop').isVisible(), false, '仅一个任务没有额外楼层停止按钮');
+    await page.evaluate(async () => {
+        const a = runtime.getStates()[0], chat = await runtime.getChat(a.roundId), b = await runtime.createBranch(chat.id, chat.messages[1].id);
+        const character = ctx.characters.find(character => character.avatar === a.characterAvatar);
+        void runtime.sendChat(b.id, { character, characterId: b.characterId, prompt: '并发分支B' });
+    });
+    await page.waitForFunction(() => runtime.getStates().filter(job => job.phase === 'generating').length === 2);
+    await latest.locator('.play-stop').waitFor();
+    assert.equal(await latest.locator('footer .play-result-status').count(), 0);
+    const boxes = await latest.evaluate(node => {
+        const stop = node.querySelector('.play-stop').getBoundingClientRect(), top = node.querySelector('.play-message-top').getBoundingClientRect();
+        return { stop: { left: stop.left, right: stop.right, top: stop.top, bottom: stop.bottom },
+            top: { left: top.left, right: top.right, top: top.top, bottom: top.bottom } };
+    });
+    assert.ok(boxes.stop.bottom <= boxes.top.top || boxes.stop.right <= boxes.top.left || boxes.top.right <= boxes.stop.left,
+        '停止与回顶互不重叠；分支按钮在页头');
+    await input.fill('尚未发送');
+    await latest.getByRole('button', { name: '停止这份回复', exact: true }).click();
+    await page.waitForFunction(() => runtime.getStates().length === 1);
+    await latest.getByText('并发A已收到正文', { exact: true }).first().waitFor();
+    assert.equal(await latest.locator('.play-stop').isVisible(), false);
+    assert.equal(await latest.locator('footer').innerText().then(text => /已停止|正在生成|正在重试/.test(text)), false);
+    assert.equal(await send.getAttribute('data-icon'), 'send', '另一分支生成时当前分支可发送');
+    await screenshot(page, `branch-stopped-${await page.evaluate(() => innerWidth)}.png`);
+    await page.evaluate(() => runtime.stopAll()); await page.waitForFunction(() => runtime.getStates().length === 0);
+    await input.fill(''); await settle(page);
+    assert.equal(await input.evaluate(node => node.clientHeight), 44);
+}
 async function verify(page, url, viewport) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -50,10 +152,19 @@ async function verify(page, url, viewport) {
     const branchId = await page.evaluate(async () => (await runtime.listChats((await runtime.listCharacters()).find(c => c.avatar === 'A.png').id)).find(row => row.branched).id);
     assert.notEqual(branchId, seedId);
     assert.equal(await branch.locator('[data-message-id]').count(), 2);
+    await verifyReadingControls(page, panel, branch, viewport);
     const input = branch.getByRole('textbox', { name: '分支聊天输入', exact: true });
-    await input.fill('给这段剧情接上下一幕');
+    await input.fill('多行待发送内容\n第二行\n第三行'); await settle(page);
+    assert.ok(await input.evaluate(node => node.clientHeight > 44), '分支输入使用游玩记录的增高规则');
+    await input.fill('给这段剧情接上下一幕'); await settle(page);
+    assert.equal(await input.evaluate(node => node.clientHeight), 44, '删到一行后缩回');
     await button('发送消息').click();
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
+    await settle(page);
+    assert.equal(await input.inputValue(), '');
+    assert.equal(await input.evaluate(node => node.clientHeight), 44, '发送清空后输入框恢复一行');
+    assert.equal(await branch.locator('footer .play-result-status').count(), 0, '不在按钮下另加生成状态');
+    assert.equal(await branch.locator('.play-assistant-message').last().locator('.play-stop').isVisible(), false, '单个生成沿用游玩记录的底部停止入口');
     await input.fill('下一轮尚未发送的草稿');
     assert.equal(await branch.getByRole('button', { name: '停止这份回复', exact: true }).count() >= 1, true);
     assert.equal(await button('发送消息').count(), 0, '本分支生成时仍是停止按钮');
@@ -77,7 +188,7 @@ async function verify(page, url, viewport) {
     await branch.locator('[data-message-id]').nth(3).waitFor();
     assert.equal(await input.inputValue(), '下一轮尚未发送的草稿');
     const oldAi = branch.locator('.play-assistant-message').first();
-    assert.equal(await oldAi.locator('.play-count').count(), 0);
+    assert.equal(await oldAi.locator('.play-count').isVisible(), false);
     assert.equal(await oldAi.getByRole('button', { name: '重新生成', exact: true }).count(), 0);
     await branch.getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
@@ -85,6 +196,7 @@ async function verify(page, url, viewport) {
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '取消收藏该聊天', exact: true }).waitFor();
     await screenshot(page, `branch-chat-${viewport.width}.png`);
+    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await button('我的收藏').click();
     await button('演出记录').click();
     if (viewport.width <= 760) await panel.locator('.tea-story').filter({ visible: true }).first().click();
@@ -111,7 +223,7 @@ async function verify(page, url, viewport) {
     await page.evaluate(() => { emitGeneration('新版本二'); finishGeneration('新版本二'); });
     await page.waitForFunction(() => runtime.getStates().length === 0);
     await latest.getByText('新版本二', { exact: true }).waitFor();
-    assert.equal(await latest.locator('.play-count').innerText(), '2/2');
+    assert.equal(await latest.locator('.play-count').getAttribute('aria-label'), '第 2 / 2 个结果，选择历史结果');
     await latest.getByRole('button', { name: '上一个结果', exact: true }).click();
     await latest.getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     await latest.getByRole('button', { name: '收藏演出记录', exact: true }).click();
@@ -125,7 +237,7 @@ async function verify(page, url, viewport) {
     await panel.locator('.play-favorite-content').getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     await button('前往分支').click();
     await latest.getByText('新版本二', { exact: true }).waitFor();
-    assert.equal(await latest.locator('.play-count').innerText(), '2/2', '单条收藏跳转保留当前版本');
+    assert.equal(await latest.locator('.play-count').getAttribute('aria-label'), '第 2 / 2 个结果，选择历史结果', '单条收藏跳转保留当前版本');
     await latest.getByRole('button', { name: '续写', exact: true }).click();
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
     await page.evaluate(() => { emitGeneration('新版本二继续'); finishGeneration('新版本二继续'); });
@@ -136,7 +248,7 @@ async function verify(page, url, viewport) {
     await page.evaluate(() => { emitGeneration('重新生成的正文'); finishGeneration('重新生成的正文'); });
     await page.waitForFunction(() => runtime.getStates().length === 0);
     await latest.getByText('重新生成的正文', { exact: true }).waitFor();
-    assert.equal(await latest.locator('.play-count').innerText(), '1/1');
+    assert.equal(await latest.locator('.play-count').getAttribute('aria-label'), '第 1 / 1 个结果，选择历史结果');
     const firstUser = branch.locator('.play-user-message').first();
     await firstUser.getByRole('button', { name: '修改用户消息', exact: true }).click();
     await firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('较早的用户消息修改');
@@ -236,6 +348,10 @@ async function verify(page, url, viewport) {
     await branch.locator('[data-message-id]').first().waitFor();await settle(page);
     const anchor=await longFeed.evaluate((node,id)=>node.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-node.getBoundingClientRect().top,scroll.id);
     assert.ok(Math.abs(anchor-scroll.offset)<4,`恢复本次阅读位置 ${scroll.offset} → ${anchor}`);
+    await branch.getByRole('button',{name:'跳到最新消息',exact:true}).click();await settle(page);
+    await branch.getByText(/长对话AI27/).waitFor();
+    assert.ok(await branch.locator('[data-message-id]').count()<=24,'回底只建立最新24条消息');
+    assert.ok(await longFeed.evaluate(node=>node.scrollHeight-node.clientHeight-node.scrollTop<2),'从较早楼层直接回到未展开的最新消息');
     const firstFloor=branch.locator('.play-assistant-message').first(),firstFloorId=await firstFloor.getAttribute('data-message-id');
     await page.evaluate(async({id,messageId})=>{
         const chat=await runtime.getChat(id),message=chat.messages.find(message=>message.id===messageId);
@@ -288,6 +404,7 @@ async function verify(page, url, viewport) {
     await branch.getByRole('button',{name:'结束未完成回复',exact:true}).click();
     await branch.getByText('已保存中断片段',{exact:true}).waitFor();
     await branch.getByRole('button',{name:'结束未完成回复',exact:true}).waitFor({state:'detached'});
+    await verifyConcurrentControls(page, panel, branch);
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1), '无横向溢出');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ viewport, passed: true, checks: 'branch, followup, stop, history, search, favorite, return, reopen, responsive', errors }));
@@ -297,9 +414,15 @@ async function verify(page, url, viewport) {
     const url = `http://127.0.0.1:${server.address().port}/`;
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     try {
-        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }]) {
+        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
             const context = await browser.newContext({ viewport });
             await verify(await context.newPage(), url, viewport); await context.close();
         }
+        const viewport = { width: 390, height: 844 }, context = await browser.newContext({ viewport });
+        await context.addInitScript(() => {
+            const supports = CSS.supports.bind(CSS);
+            CSS.supports = (property, value) => property === 'field-sizing' ? false : supports(property, value);
+        });
+        await verify(await context.newPage(), url, viewport); await context.close();
     } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

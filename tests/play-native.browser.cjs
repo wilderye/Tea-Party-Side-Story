@@ -21,9 +21,15 @@ const root = path.resolve(__dirname, '..');
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/api/backends/chat-completions/generate', route => {
         const payload = route.request().postDataJSON(); outbound.push(payload);
+        const content = `模拟回复-${outbound.length}`;
         return payload.stream
-          ? route.fulfill({ contentType: 'text/event-stream', body: 'data: '+JSON.stringify({choices:[{delta:{content:'模拟回复'},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n' })
-          : route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content: '模拟回复' } }] }) });
+          ? route.fulfill({ contentType: 'text/event-stream', body: 'data: '+JSON.stringify({choices:[{delta:{content},finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n' })
+          : route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content } }] }) });
+      });
+      await page.route('**/api/settings/get', async route => {
+        const response = await route.fetch(), data = await response.json(), settings = JSON.parse(data.settings);
+        settings.firstRun = false; data.settings = JSON.stringify(settings);
+        await route.fulfill({ response, json: data });
       });
       await page.route('**/scripts/extensions/third-party/tea-review/**', async route => {
         const file = path.basename(new URL(route.request().url()).pathname);
@@ -302,35 +308,68 @@ const root = path.resolve(__dirname, '..');
         const script=(id,findRegex,replaceString,extra={})=>({id,scriptName:id,findRegex,replaceString,trimStrings:[],placement:[1,2],
           disabled:false,markdownOnly:false,promptOnly:false,runOnEdit:true,substituteRegex:0,minDepth:999,maxDepth:1000,...extra});
         await regex.saveScriptsByType([script('branch-normal','分支原文','分支替换'),script('branch-prompt','发送标记','发送替换',{promptOnly:true}),
-          script('branch-display','显示标记','不应发送替换',{markdownOnly:true})],regex.SCRIPT_TYPES.GLOBAL);
+          script('branch-display','显示标记','不应发送替换',{markdownOnly:true}),
+          script('erase-user','[\\s\\S]+','',{promptOnly:true,placement:[1],minDepth:7,maxDepth:null}),
+          script('erase-ai','[\\s\\S]+','',{promptOnly:true,placement:[2],minDepth:7,maxDepth:null}),
+          script('plugin-only','显示标记','显示标记插件启用',{disabled:true}),
+          script('disabled','分支','不得出现',{disabled:true})],regex.SCRIPT_TYPES.GLOBAL);
         await regex.saveScriptsByType([],regex.SCRIPT_TYPES.PRESET);await regex.saveScriptsByType([],regex.SCRIPT_TYPES.SCOPED);
         const files=new Map(),history=createPlayHistory({readFile:async name=>files.get(name)??null,writeFile:async(name,text)=>files.set(name,text),removeFile:async name=>files.delete(name)});
         const character={avatar,name:'Tea Branch Synthetic'},stamp=new Date().toISOString();
-        const round=await history.begin({character,prompt:'分支原文发送标记显示标记<隐藏>不发用户</隐藏>',resultId:ctx().uuidv4(),startedAt:stamp,
+        const round=await history.begin({character,prompt:'起始用户唯一内容分支原文发送标记显示标记<隐藏>不发用户</隐藏>',resultId:ctx().uuidv4(),startedAt:stamp,
           context:{chatId:'synthetic',apiMode:'tavern',characterName:character.name}});
-        await history.saveResult(round.id,round.results[0].id,{text:'分支原文发送标记显示标记<隐藏>不发AI</隐藏>',status:'complete',finishedAt:stamp});
+        await history.saveResult(round.id,round.results[0].id,{text:'起始AI唯一内容分支原文发送标记显示标记<隐藏>不发AI</隐藏>',status:'complete',finishedAt:stamp});
         const chat=await history.getChat(round.id),branch=await history.createBranch(chat.id,chat.messages[1].id);
-        const settings={enabled:true,playHiddenTags:'隐藏',playPrompt:'本轮合成要求',playPromptConfig:{position:'user-after'}};
+        const settings={enabled:true,playHiddenTags:'隐藏',playPrompt:'本轮合成要求',playPromptConfig:{position:'user-after'},
+          playRegexExclusions:[JSON.stringify(['GLOBAL','erase-user']),JSON.stringify(['GLOBAL','erase-ai'])],
+          playRegexOverrides:{[JSON.stringify(['GLOBAL','plugin-only'])]:true}};
         const runtime=createPlayRuntime(ctx,settings,history);await runtime.initialize();
-        const completed=await runtime.sendChat(branch.id,{character,characterId:branch.characterId,prompt:'本轮分支原文发送标记显示标记<隐藏>不发本轮</隐藏>'});
+        const target={character,characterId:branch.characterId};
+        const completed=await runtime.sendChat(branch.id,{...target,prompt:'本轮用户唯一内容分支原文发送标记显示标记<隐藏>不发本轮</隐藏>'});
+        let current=await runtime.getChat(branch.id),last=current.messages.at(-1);
+        const another=await runtime.generateChatVersion(branch.id,last.id,target);
+        current=await runtime.getChat(branch.id);last=current.messages.at(-1);
+        const regenerated=await runtime.regenerateChat(branch.id,last.id,last.selectedResultId,target);
+        current=await runtime.getChat(branch.id);last=current.messages.at(-1);
+        const continuation=await runtime.continueChat(branch.id,last.id,last.selectedResultId,target);
         settings.playNoChat=true;
         const noChat=await runtime.sendChat(branch.id,{character,characterId:branch.characterId,prompt:'不含酒馆续聊'});
-        const current=await runtime.getChat(branch.id),last=current.messages.at(-1);
-        const continuation=await runtime.continueChat(branch.id,last.id,last.selectedResultId,{character,characterId:branch.characterId});
-        return{statuses:[completed.result.status,noChat.result.status,continuation.result.status],
+        settings.playRegexEnabled=false;
+        const noRegex=await runtime.sendChat(branch.id,{...target,prompt:'关闭正则分支原文发送标记显示标记<隐藏>仍去掉隐藏</隐藏>'});
+        return{statuses:[completed.result.status,another.result.status,regenerated.result.status,continuation.result.status,noChat.result.status,noRegex.result.status],
+          replies:[completed.result.text,another.result.text,regenerated.result.text],
           unchanged:before===JSON.stringify(core.chat)&&beforeMetadata===JSON.stringify(core.chat_metadata),
           savedRaw:(await history.getChat(branch.id)).messages[0].text};
       });
-      assert.deepEqual(branches.statuses,['complete','complete','complete']);assert.equal(branches.unchanged,true);
+      assert.deepEqual(branches.statuses,['complete','complete','complete','complete','complete','complete']);assert.equal(branches.unchanged,true);
       assert.match(branches.savedRaw,/<隐藏>不发用户<\/隐藏>/);
-      const branchRequests=outbound.slice(branchStart);assert.equal(branchRequests.length,3);
+      const branchRequests=outbound.slice(branchStart);assert.equal(branchRequests.length,6);
       const first=JSON.stringify(branchRequests[0].messages);
       assert.match(first,/合成酒馆开头/);assert.match(first,/分支替换发送替换显示标记/);
       assert.doesNotMatch(first,/不发用户|不发AI|不发本轮|不应发送替换/);
       assert.equal(first.split('本轮合成要求').length,2);
-      const independent=JSON.stringify(branchRequests[1].messages);assert.doesNotMatch(independent,/合成酒馆开头/);
+      const expected=[['assistant','合成酒馆开头'],['user','起始用户唯一内容'],['assistant','起始AI唯一内容'],['user','本轮用户唯一内容']];
+      for(const [index,operation] of ['send','new version','regenerate','continue'].entries()){
+        const messages=branchRequests[index].messages,contents=messages.map(message=>typeof message.content==='string'?message.content:JSON.stringify(message.content));
+        let previous=-1;
+        for(const [role,marker] of expected){
+          const matches=messages.flatMap((message,i)=>contents[i].includes(marker)?[i]:[]);
+          assert.equal(matches.length,1,`${operation}: ${marker} 必须恰好出现一次`);
+          assert.ok(matches[0]>previous,`${operation}: 酒馆后面按顺序接分支对话`);
+          assert.equal(messages[matches[0]].role,role);previous=matches[0];
+        }
+        for(const reply of branches.replies.slice(0,2))assert.ok(!contents.some(content=>content.includes(reply)),`${operation}: 不发送被替换或未选中的最后层版本`);
+        assert.equal(contents.filter(content=>content.includes(branches.replies[2])).length,index===3?1:0,`${operation}: 续写发送当前正文一次`);
+        assert.equal(contents.join('\n').split('本轮合成要求').length,2,`${operation}: 自定义要求一次`);
+        assert.match(contents.join('\n'),/显示标记插件启用/,`${operation}: 酒馆关闭的规则在插件显式启用`);
+        assert.doesNotMatch(contents.join('\n'),/不得出现/);
+      }
+      const independent=JSON.stringify(branchRequests[4].messages);assert.doesNotMatch(independent,/合成酒馆开头/);
       assert.match(independent,/分支替换发送替换显示标记/);
-      assert.deepEqual(errors,[]);console.log(JSON.stringify({port,check:'native branch followup, regex, noChat, continuation, main-chat preservation',passed:true}));
+      const noRegex=JSON.stringify(branchRequests[5].messages);
+      assert.match(noRegex,/关闭正则分支原文发送标记显示标记/);
+      assert.doesNotMatch(noRegex,/分支替换|发送替换|插件启用|仍去掉隐藏/,'总开关同时控制发送，隐藏标签照常去掉');
+      assert.deepEqual(errors,[]);console.log(JSON.stringify({port,check:'native outbound send, new version, regenerate, continue: Tavern + selected branch transcript, unique content exactly once; noChat and main-chat preservation',passed:true}));
       await page.close();
     }
   } finally { await browser.close(); }

@@ -1,6 +1,7 @@
 import { element, iconButton, textButton } from './ui.js';
 import { readPlaySettings, readPlayPromptSettings, readPlayContinuationSettings, readPlayRetrySettings, playContinuationError } from './play-settings.js';
 import { fetchCustomApiModels } from './play-request.js';
+import { isPlayRegexSelected } from './play-processing.js';
 
 export function createPlayApiSettings(ctx, settings, saveSettings, diagnostics) {
     const api = settings.playApi ??= { mode: 'tavern' };
@@ -314,7 +315,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const config = readPlaySettings(settings);
     const section = element('section', undefined, 'play-processing-settings');
     const tags = textSetting(section, settings, saveSettings, 'playHiddenTags', '隐藏标签', config.hiddenTags,
-        '用中英文逗号或换行分隔；标签闭合后隐藏内容，原文保留。');
+        '用中英文逗号或换行分隔；标签闭合后从显示和分支发送中去掉内容，原文保留。');
     tags.classList.add('play-hidden-tags');
     tags.rows = 1;
     const nativeTagSizing = CSS.supports('field-sizing', 'content');
@@ -337,7 +338,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const status = element('p', '', 'tea-setting-description'); status.setAttribute('role', 'status');
     const list = element('div', undefined, 'play-regex-groups'); let loading = false, loaded = !!viewState?.loaded;
     const refresh = iconButton('refresh', '刷新列表', () => void load());
-    toolbar.append(element('p', '角色正则跟随小剧场选中的角色，预设正则使用当前预设。取消勾选即可停用，忽略楼层限制。', 'tea-setting-description'), refresh);
+    toolbar.append(element('p', '角色正则跟随小剧场选中的角色，预设正则使用当前预设。勾选同时控制小剧场显示和分支发送，各规则仍按原用途生效，忽略楼层限制。未单独选择时跟随酒馆；在这里修改不影响酒馆原聊天。', 'tea-setting-description'), refresh);
     details.append(toolbar, status, list);
     section.append(details); area.append(section);
 
@@ -349,7 +350,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     updateEnabled();
 
     function renderList() {
-        const excluded = new Set(readPlaySettings(settings).excludedRegex);
+        const config = readPlaySettings(settings);
         list.replaceChildren();
         for (const [source, title] of [['GLOBAL', '全局'], ['PRESET', '当前预设'], ['SCOPED', '当前角色']]) {
             const rules = (display?.rules ?? []).filter(rule => rule.source === source);
@@ -359,11 +360,11 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
             group.append(heading);
             for (const rule of rules) {
                 const label = element('label', undefined, 'play-regex-rule'), input = element('input');
-                input.type = 'checkbox'; input.checked = !excluded.has(rule.key);
+                input.type = 'checkbox'; input.checked = isPlayRegexSelected(rule, config);
                 input.addEventListener('change', () => {
-                    const next = new Set(readPlaySettings(settings).excludedRegex);
-                    if (input.checked) next.delete(rule.key); else next.add(rule.key);
-                    settings.playRegexExclusions = [...next]; saveSettings();
+                    settings.playRegexOverrides = { ...readPlaySettings(settings).regexOverrides, [rule.key]: input.checked };
+                    delete settings.playRegexExclusions;
+                    saveSettings();
                 });
                 label.append(input, element('span', rule.script.scriptName || '未命名正则')); group.append(label);
             }

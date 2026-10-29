@@ -4,12 +4,11 @@ import { renderPlayText, playTextPreview } from './play-render.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker } from './play-character-picker.js';
+import { createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText } from './play-message-ui.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
-const statusText = { preparing: '正在准备', generating: '正在生成', saving: '正在保存',
-    'retry-wait': '等待自动重试', stopped: '已停止', failed: '生成失败', unfinished: '未完成', 'save-failed': '尚未保存' };
 const historyPageSize = 10;
 
 function dateParts(value, now = new Date()) {
@@ -66,8 +65,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const contextLine = element('div', undefined, 'play-compose-context'); contextLine.hidden = true;
     const inputRow = element('div', undefined, 'play-input-row');
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.spellcheck = false;
-    const nativeInputSizing = CSS.supports('field-sizing', 'content');
-    input.classList.toggle('is-native-sized', nativeInputSizing);
+    const inputSizer = createPlayInputSizer({ input, compose, page, isVisible: () => visible && !inputRow.hidden,
+        isComposing: () => inputComposing, getContextHeight: () => contextLine.offsetHeight });
+    const nativeInputSizing = inputSizer.nativeSizing;
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
     const send = iconButton('send', '发送小剧场', () => {
         if (composerStopsGeneration()) playground.stopAll();
@@ -80,7 +80,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
     let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
     let browsing = null, lastMobile = mobile.matches;
-    let lastInputVal = null, lastInputClientWidth = 0, lastPageHeight = 0, inputSizingFrame, inputComposing = false;
+    let inputSizingFrame, inputComposing = false;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
@@ -388,33 +388,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         rememberPosition(true, true); updateJump();
     }
     function resizeInput(force = false) {
-        if (!visible || inputRow.hidden || !page.clientHeight) return;
-        const currentVal = nativeInputSizing ? null : input.value;
-        const currentWidth = input.clientWidth;
-        const currentPageHeight = page.clientHeight;
-        if (!nativeInputSizing && !force && currentVal === lastInputVal && currentWidth === lastInputClientWidth && currentPageHeight === lastPageHeight) {
-            return;
-        }
-        lastInputVal = currentVal;
-        lastInputClientWidth = currentWidth;
-        lastPageHeight = currentPageHeight;
-
-        const previousScroll = input.scrollTop, style = getComputedStyle(input);
-        const line = parseFloat(style.lineHeight) || 20, padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
-        const maxLines = matchMedia('(max-width: 760px)').matches ? 8 : 20;
-        const footerStyle = getComputedStyle(compose);
-        const available = page.clientHeight - contextLine.offsetHeight - (parseFloat(footerStyle.paddingTop) || 0) - (parseFloat(footerStyle.paddingBottom) || 0) - 32;
-        const maximum = Math.max(line + padding, Math.min(maxLines * line + padding, available));
-        const maximumHeight = `${maximum}px`;
-        if (input.style.maxHeight !== maximumHeight) input.style.maxHeight = maximumHeight;
-        if (input.dataset.maxLines !== String(maxLines)) input.dataset.maxLines = String(maxLines);
-        // Native sizing grows/shrinks with text during the browser's normal
-        // layout. Only the older-browser fallback measures after a height write.
-        if (nativeInputSizing || inputComposing) return;
-        input.style.height = 'auto';
-        const nextHeight = `${Math.max(line + padding, Math.min(input.scrollHeight, maximum))}px`;
-        if (input.style.height !== nextHeight) input.style.height = nextHeight;
-        input.scrollTop = previousScroll;
+        inputSizer.resize(force);
     }
     function scheduleInputSizing() {
         if (nativeInputSizing || inputComposing || inputSizingFrame) return;
@@ -546,7 +520,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = playground.getState(result?.id);
             const retry = round && pendingSaveFor(result, job);
-            view.stop.hidden = !(multipleActive || job.retry) || !result || !activePhases.has(job.phase);
+            view.stop.hidden = !result || !showPlayReplyStop(job, multipleActive);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id);
             view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting;
@@ -591,7 +565,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function syncMessageActions(id, view) {
         view.userActions.hidden = !!view.userEditor || (view.userTop.hidden && view.generate.hidden);
-        view.actions.hidden = isEditing(id) || [view.swipes, view.again, view.continueBtn, view.stop, view.assistantTop].every(node => node.hidden);
+        syncPlayReplyFooter(view, isEditing(id));
     }
     function replaceDraft(next) {
         const key = characterKey(selected), previous = draftFor();
@@ -788,29 +762,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const removeReply = iconButton('trash', '删除 AI 消息', () => void removeMessage(round.id, 'assistant')); removeReply.classList.add('play-delete');
         const branch = iconButton('branch', '创建分支', () => void branchFromRound(round.id));
         const replyTools = element('div', undefined, 'play-header-actions'); replyTools.append(branch, favorite, editReply, removeReply); aiHead.head.append(replyTools);
-        const results = element('div', undefined, 'play-results'), actions = element('footer', undefined, 'play-message-actions');
+        const results = element('div', undefined, 'play-results');
         const error = element('p', undefined, 'play-result-error'); error.hidden = true;
-        const swipes = element('div', undefined, 'play-swipes'); swipes.setAttribute('role', 'group'); swipes.setAttribute('aria-label', '切换这条回复的生成结果');
-        const prev = iconButton('left', '上一个结果', () => changeResult(round.id, -1));
-        const next = iconButton('right', '下一个结果', () => void advanceResult(round.id));
-        const count = textButton('', () => showResults(round.id)); count.className = 'play-count'; swipes.append(prev, count, next);
-        count.setAttribute('aria-haspopup', 'listbox'); count.setAttribute('aria-expanded', 'false');
-        const actionGroup = element('div', undefined, 'play-action-group');
-        const again = iconButton('refresh', '重新生成', () => {
-            const currentRound = records.get(round.id).round;
-            const result = selectedResult(currentRound);
-            if (pendingSaveFor(result)) void playground.retrySave(result.id).catch(error => notifyRequestError(error, result.id));
-            else void regenerate(currentRound);
-        }); again.classList.add('play-again');
-        const continueBtn = iconButton('forward', '续写', () => {
-            const currentRound = records.get(round.id).round;
-            void continueReply(currentRound);
-        }); continueBtn.classList.add('play-continue');
-        actionGroup.append(again, continueBtn);
-        const assistantTop = iconButton('top', '回到这条消息开头', () => jumpToMessage(round.id, 'assistant')); assistantTop.hidden = true;
-        const stop = iconButton('stop', '停止这份回复', () => playground.stop(stop.dataset.resultId)); stop.classList.add('play-stop'); stop.hidden = true;
-        const rightActions = element('div', undefined, 'play-right-actions'); rightActions.append(stop, assistantTop);
-        actions.append(actionGroup, swipes, rightActions);
+        const { actions, again, continueBtn, assistantTop, stop, swipes, prev, count, next } = createPlayReplyActions({
+            onPrevious: () => changeResult(round.id, -1), onNext: () => void advanceResult(round.id), onChoose: () => showResults(round.id),
+            onAgain: () => {
+                const currentRound = records.get(round.id).round, result = selectedResult(currentRound);
+                if (pendingSaveFor(result)) void playground.retrySave(result.id).catch(error => notifyRequestError(error, result.id));
+                else void regenerate(currentRound);
+            },
+            onContinue: () => void continueReply(records.get(round.id).round),
+            onStop: () => playground.stop(stop.dataset.resultId), onTop: () => jumpToMessage(round.id, 'assistant'),
+        });
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
             userTools, replyTools, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
@@ -864,56 +827,23 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const output = createOutput(round, result); view.outputs.set(result.id, output); view.results.append(output.box);
         }
         for (const [id, output] of view.outputs) output.box.hidden = id !== result.id;
-        const output = view.outputs.get(result.id), renderHtml = ['saving', 'complete', 'stopped', 'failed', 'save-failed'].includes(result.status);
+        const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
         const tools = output.editor ? [output.editor.actions] : [view.branch, view.favorite, view.editReply, view.removeReply];
         if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
-        const job = playground.getState(result.id), pendingSave = pendingSaveFor(result, job);
-        const retryingSave = pendingSave && job.phase === 'saving';
-        const retryMessage = job.retry && activePhases.has(job.phase)
-            ? job.phase === 'retry-wait'
-                ? `遇到${job.retry.reason === 'rateLimit' ? ' 429' : '空内容'}，${job.retry.remainingSeconds} 秒后进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
-                : `正在进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
-            : '';
-        const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
-            : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
+        const job = playground.getState(result.id);
         const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);
         if (output.sourceSignature !== sourceSignature) {
             output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
-        const signature = result.text ? `${renderHtml}:${output.displayText}` : `${result.status}:${!!errorMessage}:${!!retryMessage}`;
-        if (!output.editor && output.signature !== signature) {
-            if (result.text) {
-                if (output.displayText.trim()) renderPlayText(output.box, output.displayText, `${round.id}/assistant/${result.id}`, renderHtml, true);
-                else output.box.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
-            } else if (errorMessage || retryMessage) output.box.replaceChildren();
-            else {
-                const waiting = activePhases.has(result.status);
-                const message = waiting ? statusText[result.status] : result.status === 'failed' ? '这次没有收到回复。'
-                    : result.status === 'stopped' ? '这次生成已停止。' : result.status === 'unfinished' ? '这次生成未完成，没有已保存的正文。' : statusText[result.status] || '';
-                const text = element('p', message, waiting ? 'play-waiting' : 'play-result-empty');
-                text.setAttribute('role', 'status');
-                text.dataset.readAnchor = `${round.id}/assistant/${result.id}/0`; output.box.replaceChildren(text);
-            }
-            output.signature = signature;
-        }
-        output.box.dataset.status = result.status;
+        renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error,
+            anchor: `${round.id}/assistant/${result.id}`, editing: !!output.editor });
         view.swipes.hidden = false;
         updateResultNavigation(round, view);
         view.count.disabled = isEditing(round.id) || !!view.removing;
-        const countLabel = `第 ${index + 1} / ${round.results.length} 个结果，选择历史结果`;
-        if (view.count.getAttribute('aria-label') !== countLabel) {
-            view.count.replaceChildren(element('span', String(index + 1)), element('small', `/ ${round.results.length}`), glyph('down'));
-            view.count.setAttribute('aria-label', countLabel); view.count.title = '选择历史结果';
-        }
-        view.error.textContent = retryMessage || errorMessage;
-        view.error.hidden = !(retryMessage || errorMessage) || !!output.editor;
-        view.error.setAttribute('role', retryingSave || retryMessage ? 'status' : 'alert');
-        view.error.classList.toggle('is-saving', !!(retryingSave || retryMessage));
-        view.error.dataset.readAnchor = `${round.id}/assistant/${result.id}/error`;
-        output.box.append(view.error);
+        updatePlayReplyCount(view.count, index, round.results.length);
         syncMessageActions(round.id, view);
     }
     function historyRange(rows, key = characterKey(selected)) {
@@ -1032,7 +962,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const result = resultId ? round.results.find(item => item.id === resultId) : round.results[index + direction];
         if (!result) return;
         if (round.initialAssistantId) {
-            try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId); }
+            try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId, { playSelection: true }); }
             catch (error) { notify(error.message); return; }
             round.selectedResultId = result.id;
         }
@@ -1052,7 +982,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
             const copy = element('span', undefined, 'play-result-option-copy');
             const preview = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
-            copy.append(element('span', playTextPreview(preview) || statusText[result.status] || '内容已隐藏', 'play-result-opening'),
+            copy.append(element('span', playTextPreview(preview) || playResultStatusText[result.status] || '内容已隐藏', 'play-result-opening'),
                 element('time', messageTime(result.startedAt), 'play-result-time'));
             const check = glyph('check'); check.classList.add('play-result-check');
             option.append(element('span', pad(index + 1), 'play-result-number'), copy, check); menu.append(option);

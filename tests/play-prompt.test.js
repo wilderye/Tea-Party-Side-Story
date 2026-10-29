@@ -39,7 +39,7 @@ test('酒馆正则保留原深度，分支忽略深度并过滤隐藏标签；�
         { placement: [1, 2], findRegex: '显示', replaceString: '不发送替换', markdownOnly: true },
     ];
     f.modules.regex.getRegexedString = (text, placement, config) => { nativeCalls.push({ text, placement, config }); return text; };
-    f.modules.regex.getRegexScripts = () => scripts;
+    options.environment.tavern.regexRules = scripts.map((script, index) => ({ key: String(index), enabled: true, script }));
     f.modules.regex.runRegexScript = (script, text) => { calls.push({ script, text }); return text.replaceAll(script.findRegex, script.replaceString); };
     options.environment.branchMode = true; options.environment.playHiddenTags = '隐藏';
     options.environment.playPrompt = '本轮要求'; options.environment.playPromptPosition = 'user-after';
@@ -52,8 +52,8 @@ test('酒馆正则保留原深度，分支忽略深度并过滤隐藏标签；�
     const request = await f.prepare(options); await request.send({ signal: options.signal });
     const messages = f.requests[0].payload.messages;
     const historyCalls = nativeCalls.filter(call => call.config?.isPrompt);
-    assert.equal(historyCalls.length, original.length);
-    assert.deepEqual(historyCalls.map(call => call.config.depth), original.map((_, index) => original.length - index - 1));
+    assert.equal(historyCalls.length, 0, '原聊天也使用捕获的规则，仍遵守深度');
+    assert.equal(messages.find(message => message.content === original[0].mes)?.role, 'assistant');
     assert.deepEqual(messages.slice(-3).map(message => message.content), ['旧用户替换处理显示', '旧AI替换处理显示', '下一轮替换处理显示\n\n本轮要求']);
     assert.equal(calls.length, 6);
     assert.equal(messages.map(message => message.content).join('\n').split('本轮要求').length, 2);

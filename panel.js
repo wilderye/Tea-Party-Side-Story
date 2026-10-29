@@ -25,8 +25,9 @@ function createMobileNavigation(panel, media) {
     const listeners = new AbortController();
     const options = { passive: true, signal: listeners.signal };
     const scrollTops = new WeakMap();
-    let slot, nav, tools, scope, readingScroll, endTimer, paintFrame = 0;
-    let height = 44, offset = 0, paintedOffset = 0;
+    let slot, nav, tools, heading, scope, readingScroll, endTimer, paintFrame = 0;
+    let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0;
+    const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
     const isReading = () => media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
     function paint() {
         paintFrame = 0;
@@ -35,7 +36,8 @@ function createMobileNavigation(panel, media) {
         const transform = 'translateY(' + -offset + 'px)';
         nav.style.transform = transform;
         if (tools) tools.style.transform = transform;
-        const hidden = offset >= height;
+        if (heading) heading.style.transform = transform;
+        const hidden = offset >= tabsHeight;
         if (slot.inert !== hidden) slot.inert = hidden;
         const ariaHidden = String(hidden);
         if (slot.getAttribute('aria-hidden') !== ariaHidden) slot.setAttribute('aria-hidden', ariaHidden);
@@ -115,20 +117,29 @@ function createMobileNavigation(panel, media) {
         }
     }, { signal: listeners.signal });
     window.visualViewport?.addEventListener('resize', cancelScroll, options);
+    function sync(value, resetPosition = false) {
+        cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0;
+        slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
+        nav = slot?.firstElementChild;
+        tools = slot?.parentElement.querySelector('.tea-mobile-tools');
+        const nextHeading = media.matches && value === 'play' && panel.dataset.mode === 'list'
+            ? [...panel.querySelectorAll('.play-chat-name')].find(node => node.getClientRects().length) : null;
+        if (heading !== nextHeading) {
+            if (heading) heading.style.transform = '';
+            headingResize.disconnect(); heading = nextHeading;
+            if (heading) headingResize.observe(heading);
+        }
+        tabsHeight = nav && media.matches ? nav.offsetHeight || 44 : 44;
+        height = tabsHeight + (heading?.offsetHeight ?? 0);
+        if (heading) heading.parentElement.style.setProperty('--play-chat-heading-height', heading.offsetHeight + 'px');
+        const area = slot?.parentElement.querySelector('.tea-list');
+        const shortCatalog = media.matches && area && area.scrollHeight <= area.clientHeight + 1;
+        if (scope !== value || value === 'community' || resetPosition || !isReading() || shortCatalog) offset = 0;
+        else offset = Math.min(offset, height);
+        scope = value; paint();
+    }
     return {
-        sync(value, resetPosition = false) {
-            cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0;
-            slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
-            nav = slot?.firstElementChild;
-            tools = slot?.parentElement.querySelector('.tea-mobile-tools');
-            if (nav && media.matches) height = nav.offsetHeight || 44;
-            const area = slot?.parentElement.querySelector('.tea-list');
-            const shortCatalog = media.matches && area && area.scrollHeight <= area.clientHeight + 1;
-            if (scope !== value || value === 'community' || resetPosition || !isReading() || shortCatalog) offset = 0;
-            scope = value;
-            panel.classList.toggle('tea-mobile-navigation-collapsed', offset >= height);
-            paint();
-        },
+        sync,
         // The history view asks how much of its fixed viewport is covered.
         // It still owns paragraph capture/restoration and history persistence.
         getReadingInset() {
@@ -137,7 +148,7 @@ function createMobileNavigation(panel, media) {
         ignoreScroll(area) {
             scrollTops.set(area, scrollPosition(area));
         },
-        dispose() { listeners.abort(); cancelAnimationFrame(paintFrame); cancelScroll(); },
+        dispose() { listeners.abort(); headingResize.disconnect(); cancelAnimationFrame(paintFrame); cancelScroll(); },
     };
 }
 
@@ -177,6 +188,8 @@ export function createTheatrePanel(ctx, state, actions) {
             onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id) });
     const getChatView = () => chatView ??= createPlayChatView(ctx, state.settings, actions.playground, actions.promptFavorites, {
         notify: showMessage, onOpen: (id, messageId) => void enterBranch(id, messageId),
+        getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
+        onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area),
         onBranch: branch => void enterBranch(branch.id),
         onCharacter: () => { playRoute = 'history'; render(); },
         onDelete: () => void returnFromBranch(),
@@ -190,6 +203,7 @@ export function createTheatrePanel(ctx, state, actions) {
         playView?.prepareLayout();
         scope = 'play'; mode = 'list'; playRoute = 'chat'; render();
         await getChatView().open(id, messageId);
+        mobileNavigation?.sync(scope);
     }
     async function returnFromBranch() {
         if (!await canLeave()) return;
@@ -1030,7 +1044,7 @@ export function createTheatrePanel(ctx, state, actions) {
             generation.append(apiSettings.node);
             renderPlayChatSetting(generation, state.settings, actions.saveSettings);
             renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
-            const display = group('回复显示');
+            const display = group('正则与隐藏标签');
             display.classList.add('play-display-settings');
             display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
             processingSettings = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
@@ -1148,6 +1162,7 @@ export function createTheatrePanel(ctx, state, actions) {
                         captureCatalogPosition(); return true;
                     },
                     onOpen: () => {
+                        mobileNavigation?.sync(scope);
                         restoreCatalogPosition();
                         measureBodies();
                         const candidate = panel.querySelector('.tea-topbar button:not([disabled]), .tea-mobile-actions button:not([disabled]), .tea-brand button:not([disabled])');

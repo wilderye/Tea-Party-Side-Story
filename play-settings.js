@@ -70,7 +70,8 @@ export function readPlaySettings(settings) {
         promptPosition: prompts.position,
         hiddenTags: settings.playHiddenTags ?? DEFAULT_HIDDEN_TAGS,
         regexEnabled: settings.playRegexEnabled !== false,
-        excludedRegex: settings.playRegexExclusions ?? [],
+        regexOverrides: { ...Object.fromEntries((settings.playRegexExclusions ?? []).map(key => [key, false])),
+            ...settings.playRegexOverrides },
         noChat: settings.playNoChat === true,
     };
 }

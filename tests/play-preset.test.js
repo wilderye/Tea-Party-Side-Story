@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { preparePlayPreset } from '../play-preset.js';
 import { DEFAULT_CONTINUE_PROMPTS } from '../play-settings.js';
 
+test('分支请求在预设关闭聊天记录时明确拒绝，不发送缺少整段对话的请求', async () => {
+    const f = fixture(); f.environment.branchMode = true; f.prompts.collection = [];
+    await assert.rejects(f.prepare(), { code: 'branch_history_disabled' });
+});
+
 function fixture(settings = {}) {
     class MessageCollection {
         constructor(identifier) { this.identifier = identifier; this.messages = []; }
@@ -43,7 +48,7 @@ function fixture(settings = {}) {
         history: [{ name: 'User', is_user: true, mes: '提示词', extra: {} },
             { name: 'Character', is_user: false, mes: '原回复，', extra: {} }], messageExamples: [], toolsData: {},
     };
-    return { environment, options, async prepare() {
+    return { environment, options, prompts, async prepare() {
         return (await preparePlayPreset({ eventSource: { emit: async () => {} }, eventTypes: { CHAT_COMPLETION_PROMPT_READY: 'ready' } },
             modules, environment, options))[0];
     } };

@@ -4,6 +4,7 @@ import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText } from './play-render.js';
 import { playChatTitle } from './play-history.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
+import { createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer } from './play-message-ui.js';
 
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 const pad = value => String(value).padStart(2, '0');
@@ -14,11 +15,11 @@ export function playRecentTime(value) {
         : `${date.getFullYear() === now.getFullYear() ? '' : pad(date.getFullYear() % 100) + '/'}${pad(date.getMonth() + 1)}/${pad(date.getDate())}`;
     return { day, time: `${pad(date.getHours())}:${pad(date.getMinutes())}` };
 }
-const statuses = { preparing: '正在准备', generating: '正在生成', 'retry-wait': '等待自动重试',
-    saving: '正在保存', 'save-failed': '尚未保存', unfinished: '未完成', failed: '生成失败', stopped: '已停止' };
 
 /** Directory owns its list; only one branch transcript is mounted at a time. */
-export function createPlayChatView(ctx, settings, playground, promptFavorites, { notify, onOpen, onBranch, onCharacter, onDelete }) {
+export function createPlayChatView(ctx, settings, playground, promptFavorites, {
+    notify, onOpen, onBranch, onCharacter, onDelete, getReadingInset = () => 0, onProgrammaticScroll = () => {},
+}) {
     const mobile = matchMedia('(max-width: 760px)');
     const page = element('div', undefined, 'play-page play-history-page');
     const directory = element('div', undefined, 'play-history-directory');
@@ -35,7 +36,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const title = element('h2', '', 'play-chat-name');
     const readingArea = element('div', undefined, 'play-reading-area');
     const feed = element('div', undefined, 'tea-scroll play-feed play-chat-feed'); feed.setAttribute('aria-label', '分支对话');
-    const content = element('div', undefined, 'play-feed-content'); feed.append(content); readingArea.append(feed);
+    const content = element('div', undefined, 'play-feed-content'); feed.append(content);
+    const jump = iconButton('bottom', '跳到最新消息', jumpToLatest); jump.classList.add('play-jump-latest'); jump.hidden = true;
+    readingArea.append(feed, jump);
     const compose = element('div', undefined, 'play-compose'), inner = element('div', undefined, 'play-compose-inner');
     const menu = element('details', undefined, 'play-chat-menu');
     const summary = element('summary', undefined, 'tea-icon'); summary.append(glyph('menu')); summary.setAttribute('aria-label', '聊天操作'); summary.setAttribute('role', 'button');
@@ -47,10 +50,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     branchPage.append(title, readingArea, compose); page.append(directory, branchPage);
     let characters = [], selected, chat, visible = false, route = 'history', browsing = false;
     let searchOpen = false, queryTimer, queryId = 0, directoryId = 0, openId = 0, reloadId = 0, loading = false, mutating = false, panel;
-    let editor, deletingFrom = null, restoring = false, renderFrame, versionMenu;
+    let editor, deletingFrom = null, restoring = false, renderFrame, versionMenu, inputFrame, inputComposing = false;
+    const inputSizer = createPlayInputSizer({ input, compose, page: branchPage, isVisible: () => visible && route === 'chat' && !compose.hidden,
+        isComposing: () => inputComposing });
     let rows = [], limit = 24, start = 0, end = 0, favorites = new Map(), chatFavorite;
     const rowViews = new Map(), directoryRecords = new Map(), displayCache = new Map(), positions = new Map(), directories = new Map(), drafts = new Map();
     const pendingDrafts = new Map();
+    const replyViews = new WeakMap();
     const cacheWeight = new WeakMap();
     function cacheEntry(cache, key, value) {
         const weight = entry => entry?.messages ? entry.messages.reduce((size, message) => size + (message.text?.length ?? 0), 0)
@@ -88,6 +94,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const busy = () => !chat || mutating || loading || ownJobs().length > 0 || chat.messages.some(message => message.results?.some(result => result.status === 'unfinished'));
     const canWrite = () => settings.enabled !== false && !!ctx().characters?.some(character => character.avatar === owner()?.avatar);
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
+    function branchDisabled(message) {
+        const result = currentResult(message);
+        return mutating || result.status === 'unfinished' || ownJobs().some(job => job.resultId === result.id) || settings.enabled === false;
+    }
     function processed(message, result = currentResult(message)) {
         const text = result?.text ?? message.text;
         const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}`;
@@ -218,28 +228,59 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     search.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void renderDirectory(); } });
     function position() {
         const bottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 32;
-        const top = feed.getBoundingClientRect().top;
+        const top = feed.getBoundingClientRect().top + getReadingInset();
         const anchor = [...content.querySelectorAll('[data-read-anchor], [data-message-id]')].find(node => node.getBoundingClientRect().bottom > top + 1);
         return { bottom, anchor: anchor?.dataset.readAnchor ?? anchor?.dataset.messageId,
             messageId: anchor?.closest('[data-message-id]')?.dataset.messageId,
             offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
     }
     function remember() { if (chat && route === 'chat' && visible && feed.clientHeight && !restoring) positions.set(chat.id, position()); }
+    function setFeedScroll(value) {
+        feed.scrollTop = value; onProgrammaticScroll(feed);
+    }
+    function updateReadingControls() {
+        const height = feed.clientHeight - getReadingInset();
+        const hidden = !visible || route !== 'chat' || !chat || !!editor || deletingFrom !== null || height <= 0
+            || (end >= chat.messages.length && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= height);
+        const updates = [];
+        for (const node of content.querySelectorAll('.play-assistant-message')) {
+            const top = node.querySelector('.play-message-top');
+            if (!top) continue;
+            const hidden = !!editor || node.querySelector('.play-results').scrollHeight + node.querySelector('.play-message-meta').offsetHeight <= height;
+            if (top.hidden !== hidden) updates.push({ top, hidden });
+        }
+        if (jump.hidden !== hidden) jump.hidden = hidden;
+        for (const { top, hidden } of updates) top.hidden = hidden;
+        for (const node of content.querySelectorAll('.play-assistant-message')) {
+            const view = replyViews.get(node);
+            if (view && !view.actions.querySelector('button:not(.tea-icon):not(.play-count)')) syncPlayReplyFooter(view, !!editor);
+        }
+    }
+    function jumpToMessage(node) {
+        setFeedScroll(feed.scrollTop + node.getBoundingClientRect().top - feed.getBoundingClientRect().top - getReadingInset() - 10);
+        remember(); updateReadingControls();
+    }
+    function jumpToLatest() {
+        if (!chat) return;
+        start = Math.max(0, chat.messages.length - 24); end = chat.messages.length;
+        positions.set(chat.id, { bottom: true });
+        renderChat({ bottom: true });
+    }
     function restore(saved, targetId) {
         restoring = true;
         requestAnimationFrame(() => {
             if (!visible || route !== 'chat') { restoring = false; return; }
             if (targetId) {
                 const target = content.querySelector(`[data-message-id="${CSS.escape(targetId)}"]`);
-                if (target) feed.scrollTop += target.getBoundingClientRect().top - feed.getBoundingClientRect().top;
+                if (target) setFeedScroll(feed.scrollTop + target.getBoundingClientRect().top - feed.getBoundingClientRect().top - getReadingInset());
             }
-            else if (!saved || saved.bottom) feed.scrollTop = feed.scrollHeight;
+            else if (!saved || saved.bottom) setFeedScroll(feed.scrollHeight);
             else {
                 const anchor = [...content.querySelectorAll('[data-read-anchor], [data-message-id]')]
                     .find(node => node.dataset.readAnchor === saved.anchor || node.dataset.messageId === saved.anchor);
-                if (anchor) feed.scrollTop += anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top - saved.offset;
+                if (anchor) setFeedScroll(feed.scrollTop + anchor.getBoundingClientRect().top - feed.getBoundingClientRect().top - getReadingInset() - saved.offset);
             }
-            restoring = false; remember();
+            restoring = false; remember(); updateReadingControls();
         });
     }
     function messageHeader(message, result) {
@@ -258,8 +299,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         node.dataset.messageId = message.id;
         const head = messageHeader(message, result), tools = element('div', undefined, 'play-header-actions');
         const body = element('div', undefined, message.role === 'user' ? 'play-user-text' : 'play-results');
-        const renderHtml = message.role === 'assistant' && ['complete', 'stopped', 'failed', 'save-failed'].includes(result.status);
-        renderPlayText(body, processed(message, result), `${chat.id}/${message.id}`, renderHtml, true);
+        let output, error;
+        if (message.role === 'user') renderPlayText(body, processed(message), `${chat.id}/${message.id}`, false, true);
+        else {
+            error = element('p', undefined, 'play-result-error'); error.hidden = true; output = { box: body };
+            renderPlayReply(output, result, { displayText: processed(message, result), job: playground.getState(result.id),
+                error, anchor: `${chat.id}/${message.id}` });
+        }
         const edit = iconButton('edit', message.role === 'user' ? '修改用户消息' : '编辑回复原文', () => editMessage(message, body, tools));
         const remove = iconButton('trash', message.role === 'user' ? '删除用户消息' : '删除 AI 消息', () => void removeMessage(message));
         edit.disabled = remove.disabled = busy() || settings.enabled === false;
@@ -270,26 +316,30 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         favorite.setAttribute('aria-pressed', String(!!starred)); favorite.disabled = busy() || !(result?.text ?? message.text)?.trim() || settings.enabled === false;
         tools.append(favorite, edit, remove); head.append(tools); node.append(head, body);
         if (message.role === 'assistant') {
-            const footer = element('footer', undefined, 'play-message-actions');
             const branch = iconButton('branch', '创建分支', () => void branchAt(message));
-            branch.disabled = mutating || result.status === 'unfinished' || ownJobs().some(job => job.resultId === result.id) || settings.enabled === false;
-            footer.append(branch);
-            if (last) {
-                const swipes = element('div', undefined, 'play-swipes'), index = message.results.indexOf(result);
-                const prev = iconButton('left', '上一个结果', () => void selectVersion(message, index - 1)); prev.disabled = busy() || index === 0;
-                const count = textButton(`${index + 1}/${message.results.length}`, () => void showVersions(message)); count.className = 'play-count'; count.disabled = busy();
-                const next = iconButton('right', index === message.results.length - 1 ? '生成新版本' : '下一个结果', () => {
+            branch.classList.add('play-branch-action');
+            branch.disabled = branchDisabled(message);
+            tools.prepend(branch);
+            const index = message.results.indexOf(result), atEnd = index === message.results.length - 1;
+            const { actions: footer, swipes, prev, count, next, again, continueBtn, stop, assistantTop } = createPlayReplyActions({
+                onPrevious: () => void selectVersion(message, index - 1), onChoose: () => void showVersions(message),
+                onNext: () => {
                     if (index === message.results.length - 1) void generate('another', message); else void selectVersion(message, index + 1);
-                }); next.disabled = busy() || !canWrite(); swipes.append(prev, count, next); footer.append(swipes);
-                const actionGroup = element('div', undefined, 'play-action-group');
-                const again = iconButton('refresh', result.status === 'save-failed' ? '重试保存' : '重新生成', () => {
+                },
+                onAgain: () => {
                     if (result.status === 'save-failed') void run(() => playground.retrySave(result.id)); else void generate('regenerate', message);
-                }); again.disabled = mutating || (!canWrite() && result.status !== 'save-failed') || (busy() && result.status !== 'save-failed');
-                const continuation = iconButton('forward', '续写', () => void generate('continue', message)); continuation.disabled = busy() || !canWrite() || !result.text.trim();
-                actionGroup.append(again, continuation); footer.append(actionGroup);
-            }
+                },
+                onContinue: () => void generate('continue', message), onStop: () => playground.stop(result.id), onTop: () => jumpToMessage(node),
+            });
+            replyViews.set(node, { actions: footer, swipes, again, continueBtn, stop, assistantTop, output, error });
+            swipes.hidden = again.hidden = !last; continueBtn.hidden = !last || !result.text.trim();
+            prev.disabled = busy() || index === 0; updatePlayReplyCount(count, index, message.results.length); count.disabled = busy();
+            next.title = atEnd ? '生成新版本' : '下一个结果'; next.setAttribute('aria-label', next.title); next.disabled = busy() || !canWrite();
+            again.title = result.status === 'save-failed' ? '重试保存' : '重新生成'; again.setAttribute('aria-label', again.title);
+            again.disabled = mutating || (!canWrite() && result.status !== 'save-failed') || (busy() && result.status !== 'save-failed');
+            continueBtn.disabled = busy() || !canWrite() || !result.text.trim();
             const job = ownJobs().find(job => job.resultId === result.id);
-            if (job && activePhases.has(job.phase)) footer.append(iconButton('stop', '停止这份回复', () => playground.stop(job.resultId)));
+            stop.hidden = !showPlayReplyStop(job, playground.getStates().filter(job => activePhases.has(job.phase)).length > 1);
             if (result.status === 'unfinished' && !ownJobs().length) {
                 const finish = textButton('结束未完成回复', async () => {
                     const confirmed = await ctx().callGenericPopup(element('p', '保留已经保存的文字，并结束这条未完成回复？如果其他页面仍在生成这条回复，它后续生成的文字将不再保存。'),
@@ -298,8 +348,6 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 });
                 finish.disabled = mutating || settings.enabled === false; footer.append(finish);
             }
-            if (statuses[result.status]) footer.append(element('small', statuses[result.status], 'play-result-status'));
-            if (result.error) footer.append(element('p', result.error.message, 'play-result-error'));
             node.append(footer);
         }
         if (deletingFrom !== null) {
@@ -339,18 +387,29 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         send.disabled = stopping ? ownPending && !generating : busy() || !canWrite() || !input.value.trim() || !playground.availability({ chatId: chat?.id }).available;
         compose.hidden = !!editor || deletingFrom !== null;
         input.disabled = settings.enabled === false;
+        scheduleInputSizing();
+    }
+    function scheduleInputSizing() {
+        if (inputFrame || !visible || inputComposing) return;
+        inputFrame = requestAnimationFrame(() => {
+            inputFrame = 0;
+            if (!visible || inputComposing) return;
+            inputSizer.resize();
+        });
     }
     input.addEventListener('input', () => {
         if (!chat) return; drafts.set(chat.id, input.value); clearTimeout(draftTimer); draftTimer = setTimeout(saveDrafts, 300);
-        input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; updateInput();
+        updateInput();
     });
+    input.addEventListener('compositionstart', () => { inputComposing = true; cancelAnimationFrame(inputFrame); inputFrame = 0; });
+    input.addEventListener('compositionend', () => { inputComposing = false; scheduleInputSizing(); });
     input.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.isComposing && !event.shiftKey && ((event.ctrlKey || event.metaKey) || ctx().shouldSendOnEnter?.())) {
             event.preventDefault(); event.stopPropagation(); void sendDraft();
         }
     });
-    feed.addEventListener('scroll', remember, { passive: true });
-    const resize = new ResizeObserver(() => { if (visible && !editor) restore(positions.get(chat?.id)); });
+    feed.addEventListener('scroll', () => { remember(); updateReadingControls(); }, { passive: true });
+    const resize = new ResizeObserver(() => { if (visible && !editor) { scheduleInputSizing(); restore(positions.get(chat?.id)); } });
     async function loadFavorites() {
         const rows = await playground.listFavorites();
         favorites = new Map(rows.filter(row => !row.source.type).map(row => [favoriteSourceKey(row.source), row]));
@@ -377,7 +436,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             start = index < 0 ? Math.max(0, end - 24) : Math.max(0, index - 12);
             if (!targetId && saved?.bottom) start = Math.max(0, end - 24);
             loading = false; renderChat(saved, targetId);
-            if (visible) resize.observe(content);
+            if (visible) { resize.observe(content); resize.observe(feed); resize.observe(branchPage); }
             if (targetId && index < 0) notify('原回复已删除');
         } catch (error) { if (request === openId) showError(content, error, () => open(id, targetId)); }
         finally { if (request === openId) { loading = false; updateInput(); } }
@@ -454,7 +513,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 chat = await playground.editMessage(id, message.id, { text, expectedText: result?.text ?? message.text, resultId: result?.id });
                 finish();
             } });
-        tools.replaceChildren(editor.actions); body.replaceChildren(editor.body); compose.hidden = true; editor.body.focus({ preventScroll: true });
+        tools.replaceChildren(editor.actions); body.replaceChildren(editor.body); compose.hidden = true; updateReadingControls(); editor.body.focus({ preventScroll: true });
     }
     async function removeMessage(message) {
         if (busy()) return;
@@ -489,6 +548,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         try { await playground.deleteChat(id, chat.revision); drafts.delete(id); positions.delete(id); saveDrafts(); onDelete(id); }
         catch (error) { notify(error.message); }
     }
+    function updateReplyStops() {
+        const multiple = playground.getStates().filter(job => activePhases.has(job.phase)).length > 1;
+        for (const node of content.querySelectorAll('.play-assistant-message')) {
+            const message = chat?.messages.find(message => message.id === node.dataset.messageId);
+            const stop = node.querySelector('.play-stop');
+            if (message && stop) stop.hidden = !showPlayReplyStop(playground.getState(currentResult(message).id), multiple);
+        }
+    }
     playground.subscribe(job => {
         const pending = pendingDrafts.get(job.roundId);
         if (job.chatMode && job.operation === 'send' && job.phase === 'preparing' && job.roundId && pending !== undefined) {
@@ -496,7 +563,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             if (chat?.id === job.roundId && input.value === pending) input.value = '';
             pendingDrafts.delete(job.roundId); saveDrafts();
         }
-        if (route !== 'chat' || !chat || (job.roundId ?? job.requestedRoundId) !== chat.id) return;
+        if (route !== 'chat' || !chat) return;
+        if (visible) { updateReplyStops(); updateInput(); }
+        if ((job.roundId ?? job.requestedRoundId) !== chat.id) return;
         if (job.phase === 'idle' || job.phase === 'save-failed' || job.phase === 'preparing' && job.roundId) {
             void reload().catch(error => notify(error.message)); return;
         }
@@ -508,10 +577,22 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             renderFrame = 0; if (!visible || !chat) return;
             const saved = positions.get(chat.id), node = content.querySelector(`[data-message-id="${CSS.escape(message?.id ?? '')}"]`);
             const latest = chat.messages.find(item => item.id === message?.id);
-            if (node && latest) node.replaceWith(renderMessage(latest));
-            for (const button of content.querySelectorAll('.play-header-actions button')) button.disabled = busy() || settings.enabled === false;
+            const view = replyViews.get(node);
+            if (view && latest) {
+                const current = currentResult(latest);
+                renderPlayReply(view.output, current, { displayText: processed(latest, current), job: playground.getState(current.id),
+                    error: view.error, anchor: `${chat.id}/${latest.id}` });
+                view.continueBtn.hidden = chat.messages.at(-1)?.id !== latest.id || !current.text.trim();
+                view.continueBtn.disabled = busy() || !canWrite();
+            }
+            for (const button of content.querySelectorAll('.play-header-actions button')) {
+                const message = chat.messages.find(message => message.id === button.closest('[data-message-id]').dataset.messageId);
+                button.disabled = button.classList.contains('play-branch-action')
+                    ? branchDisabled(message)
+                    : busy() || settings.enabled === false;
+            }
             for (const button of menuItems.children) button.disabled = busy() || settings.enabled === false;
-            updateInput(); if (saved?.bottom) restore(saved);
+            updateInput(); updateReadingControls(); if (saved?.bottom) restore(saved);
         });
     });
     window.addEventListener('pagehide', saveDrafts);
@@ -527,9 +608,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         },
         activate(container) {
             panel = container; visible = true; setBrowsing(browsing); updateSearch(); picker.render();
-            if (route === 'chat') { resize.observe(content); restore(positions.get(chat?.id)); }
+            if (route === 'chat') { resize.observe(content); resize.observe(feed); resize.observe(branchPage); scheduleInputSizing(); restore(positions.get(chat?.id)); }
         },
-        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false; resize.disconnect(); picker.suspend(); },
+        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false; cancelAnimationFrame(inputFrame); inputFrame = 0; resize.disconnect(); picker.suspend(); },
         async refresh() {
             if (route === 'history') await refreshDirectory(false);
             else {

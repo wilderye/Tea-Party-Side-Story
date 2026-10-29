@@ -38,6 +38,14 @@ test('自动重试规则在开始生成时复制，等待期间修改设置只�
     assert.deepEqual(env.retry, { rateLimit: true, empty: true, maxRetries: 3, intervalSeconds: 2 });
     assert.deepEqual(capturePlayEnvironment(context(), settings).retry, settings.playRetry);
 });
+
+test('每次生成捕获小剧场正则选择，后续改设置不会改变已开始的任务', () => {
+    const settings = { playRegexExclusions: ['old'], playRegexOverrides: { local: true } };
+    const env = capturePlayEnvironment(context(), settings);
+    settings.playRegexEnabled = false; settings.playRegexOverrides.local = false; settings.playRegexExclusions.push('next');
+    assert.deepEqual(env.playRegex, { enabled: true, overrides: { old: false, local: true } });
+    assert.deepEqual(capturePlayEnvironment(context(), settings).playRegex, { enabled: false, overrides: { old: false, next: false, local: false } });
+});
 test('手动收藏按头像标识读取角色名称，不读取卡片内容或生成设置，不改主聊天', async () => {
     const f = memoryFiles(), ctx = context();
     ctx.characters.push({ avatar: 'B.png', name: ctx.characters[0].name });

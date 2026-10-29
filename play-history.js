@@ -608,12 +608,16 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             throw new PlayHistoryError('chat_busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
         }
     }
-    async function changeChat(id, expectedRevision, run) {
+    async function changeChat(id, expectedRevision, run, { playSelection = false } = {}) {
         assert(isId(id));
         return serialize(async () => {
             const directory = await index();
             const chat = await readChatFromRow(directory.rounds.find(row => row.id === id));
-            assertChatRevision(chat, expectedRevision); assertChatIdle(chat);
+            assertChatRevision(chat, expectedRevision);
+            if (!playSelection) assertChatIdle(chat);
+            else if (!chat.startMessageIds.includes(chat.messages.at(-1)?.id)) {
+                throw new PlayHistoryError('message_not_last', '这层已有后续对话，请先创建分支再切换版本。');
+            }
             const before = JSON.stringify(readPlayChat(chat));
             await run(chat);
             if (JSON.stringify(readPlayChat(chat)) === before) return chat;
@@ -719,7 +723,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     source: { chatId: id, messageId }, startMessageIds: source.startMessageIds.map(id => ids.get(id)).filter(Boolean), messages }, now);
             });
         },
-        setMessageVersion(id, messageId, resultId, expectedResultId) {
+        setMessageVersion(id, messageId, resultId, expectedResultId, { playSelection = false } = {}) {
             assert(isId(messageId) && isId(resultId));
             return changeChat(id, undefined, chat => {
                 const message = chat.messages.at(-1);
@@ -728,7 +732,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 if (message.selectedResultId === resultId) return;
                 if (expectedResultId !== undefined && message.selectedResultId !== expectedResultId) throw new PlayHistoryError('chat_conflict', '回复版本已在其他窗口改变，请重新读取。');
                 message.selectedResultId = resultId;
-            });
+            }, { playSelection });
         },
         renameChat(id, name, expectedRevision) {
             assert(typeof name === 'string' && name.trim().length <= 100, '聊天名称不能超过 100 个字。');

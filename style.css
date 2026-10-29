@@ -510,9 +510,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-chat-version-choices { position:absolute; z-index:7; bottom:90px; left:20px; right:20px; max-height:50%; overflow:auto; display:flex; flex-direction:column; padding:12px; gap:4px; background:var(--tea-paper); border:1px solid var(--tea-line); box-shadow:0 8px 24px var(--tea-popup-shadow,#102f2826); }
 #teahouse-panel .play-chat-version-choices button { padding:12px; min-height:40px; text-align:left; font-size:14px; }
 #teahouse-panel .play-chat-feed .play-message { padding:0; margin-bottom:32px; }
-#teahouse-panel .play-chat-feed .play-message-actions { display:flex; justify-content:flex-start; flex-wrap:wrap; }
-#teahouse-panel .play-chat-feed .play-swipes { margin-left:auto; }
-#teahouse-panel .play-chat-feed .play-action-group { margin-left:8px; }
+#teahouse-panel .play-chat-feed .play-message-actions>button:not(.tea-icon) { grid-column:1/-1; }
 #teahouse-panel .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); }
 #teahouse-panel .play-delete-select { display:block; width:100%; min-height:40px; text-align:left; color:var(--tea-accent)!important; }
 #teahouse-panel .play-delete-controls { position:sticky; bottom:0; display:flex; flex-wrap:wrap; gap:16px; padding:16px; background:var(--tea-paper); border:1px solid var(--tea-line); }
@@ -526,10 +524,10 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-history-row { padding:18px 0; gap:12px; }
     #teahouse-panel .play-history-row .play-person-time { display:flex; }
     #teahouse-panel .play-history-copy strong { font-size:17px; }
-    #teahouse-panel .play-chat-name { padding:54px 19px 10px; font-size:16px; }
-    #teahouse-panel .play-chat-feed .play-feed-content { padding-top:20px; }
+    #teahouse-panel .play-branch-page { overflow:hidden; }
+    #teahouse-panel .play-chat-name { position:absolute; z-index:3; top:44px; left:0; right:0; padding:10px 19px; font-size:16px; background:var(--tea-reading-paper,#fdfbf5); }
+    #teahouse-panel .play-chat-feed .play-feed-content { padding-top:calc(64px + var(--play-chat-heading-height,46px)); }
     #teahouse-panel .play-chat-catalog .play-character-browser.is-mobile-open { display:flex; }
-    #teahouse-panel .play-chat-feed .play-message-actions .tea-icon { width:34px; min-width:34px; }
 }
 #teahouse-panel .play-reading-area {
     --play-prose-font:var(--tea-ui); --play-prose-weight:400; --play-prose-ink:var(--tea-prose-ink,#334437);

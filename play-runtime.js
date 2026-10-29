@@ -44,6 +44,7 @@ export function capturePlayEnvironment(context, settings, requested = {}) {
             playPrompt: playSettings.prompt,
             playPromptPosition: playSettings.promptPosition,
             playHiddenTags: playSettings.hiddenTags,
+            playRegex: { enabled: playSettings.regexEnabled, overrides: playSettings.regexOverrides },
             continuation: readPlayContinuationSettings(settings),
             retry: readPlayRetrySettings(settings),
             tavern: {

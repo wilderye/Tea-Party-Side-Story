@@ -86,6 +86,9 @@ export async function preparePlayPreset(context, modules, environment, options) 
         return prepared;
     };
     const prompts = manager.getPromptCollection(options.type ?? 'normal');
+    if (environment.branchMode && !prompts.has('chatHistory')) {
+        throw new PlaygroundError('branch_history_disabled', '当前酒馆预设未启用“聊天记录（Chat History）”，本次分支对话没有发送。请在酒馆的聊天补全预设中启用该条目后重试。');
+    }
     const extensions = Object.fromEntries(Object.entries(options.extensionPrompts).map(([key, value]) => [key, { ...value }]));
     const wi = text => text && settings.wi_format?.trim() ? settings.wi_format.replace(/\{0\}/g, () => text) : text || '';
     const builtins = [
@@ -154,8 +157,8 @@ export async function preparePlayPreset(context, modules, environment, options) 
     }
     if (options.toolsData?.tools?.length) completion.reserveBudget(await messages.count({ role: 'user', content: JSON.stringify(options.toolsData) }));
 
-    // Newest first, as expected by ST's depth rule. Only the captured messages
-    // are formatted; plugin history is never appended to this conversation.
+    // Format the request's combined Tavern and branch history without changing
+    // the host conversation. Native depth injections use newest-first order.
     const history = options.history.filter(message => !message.extra?.[constants.IGNORE_SYMBOL]).map(message => {
         const narrator = message.extra?.type === 'narrator';
         const role = narrator ? 'system' : message.is_user ? 'user' : 'assistant';

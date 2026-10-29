@@ -381,9 +381,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             return historyAction('创建分支', () => history.createBranch(id, messageId, revision), true);
         },
-        setMessageVersion(id, messageId, resultId, expectedResultId) {
-            assertIdleChat(id);
-            return historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId));
+        setMessageVersion(id, messageId, resultId, expectedResultId, options = {}) {
+            if (options.playSelection) {
+                if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+            } else assertIdleChat(id);
+            return historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId, options));
         },
         renameChat(id, name, revision) {
             assertIdleChat(id);

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readPlaySettings, DEFAULT_PLAY_PROMPT, DEFAULT_HIDDEN_TAGS } from '../play-settings.js';
-import { hidePlayTags, readTavernRegex, processPlayText, createPlayDisplay, compileRegexGuard } from '../play-processing.js';
+import { hidePlayTags, readTavernRegex, processPlayText, processPlayPromptText, isPlayRegexSelected, createPlayDisplay, compileRegexGuard } from '../play-processing.js';
 import { renderMarkdown } from '../markdown.js';
 
 test('默认值实际生效，清空标签和提示词后不会恢复默认值', () => {
@@ -46,7 +46,7 @@ test('隐藏名单支持中英文逗号、换行和空行，旧名单仍按原�
 test('英文标签在正则之后由正文渲染隐藏，中文标签、正文和完整原文都保留', () => {
     const source = '<content>\n<regard>**正文**</regard>\n</content><中文>后续</中文>';
     const settings = readPlaySettings({ playHiddenTags: '' });
-    const rules = [{ key: 'body', script: {} }];
+    const rules = [{ key: 'body', script: { placement: [2] } }];
     let calls = 0;
     const shown = processPlayText(source, settings, rules, (_script, text) => {
         calls++; assert.equal(text, source); return text.replace('正文**', '替换后的正文**');
@@ -88,8 +88,8 @@ function fixture() {
     const engine = {
         SCRIPT_TYPES: { GLOBAL: 0, PRESET: 2, SCOPED: 1 }, regex_placement: { AI_OUTPUT: 2 },
         getCurrentPresetAPI: () => 'openai', getCurrentPresetName: () => '预设甲',
-        getScriptsByType(type, options) { assert.deepEqual(options, { allowedOnly: true }); return groups[type]; },
-        runRegexScript(script, text) { return text.replaceAll('标记', script.replaceString); },
+        getScriptsByType(type) { return groups[type]; },
+        runRegexScript(script, text) { return script.disabled ? text : text.replaceAll('标记', script.replaceString); },
     };
     return { ctx, engine, groups };
 }
@@ -119,7 +119,7 @@ test('显示和收藏前处理使用该回复保存的人设名字，查找和�
 
 test('三处规则都读取，普通回复先于显示规则执行，楼层限制不影响小剧场', () => {
     const f = fixture(), rules = readTavernRegex(f.engine, f.ctx), calls = [];
-    assert.deepEqual(rules.map(rule => rule.script.id), ['display', 'same', 'same', 'same', 'both']);
+    assert.deepEqual(rules.map(rule => rule.script.id), ['display', 'same', 'prompt', 'off', 'user', 'same', 'same', 'both']);
     const original = '<status>不应参与美化</status>正文';
     const result = processPlayText(original, readPlaySettings({}), rules, (script, text) => {
         calls.push(script.id); assert.doesNotMatch(text, /不应参与美化/); return text;
@@ -128,7 +128,9 @@ test('三处规则都读取，普通回复先于显示规则执行，楼层限�
     assert.deepEqual(calls, ['same', 'same', 'same', 'display', 'both']);
     assert.equal(original, '<status>不应参与美化</status>正文');
     f.ctx.extensionSettings.disabledExtensions = ['regex'];
-    assert.deepEqual(readTavernRegex(f.engine, f.ctx), []);
+    const disabled = readTavernRegex(f.engine, f.ctx);
+    assert.equal(disabled.length, rules.length, '酒馆关闭正则后，规则仍可在插件选择');
+    assert.ok(disabled.every(rule => !isPlayRegexSelected(rule, readPlaySettings({}))));
 });
 
 test('同标识的规则按来源和所属角色预设分开，排除一处不影响另外两处', () => {
@@ -142,6 +144,73 @@ test('同标识的规则按来源和所属角色预设分开，排除一处不�
     const next = readTavernRegex(f.engine, f.ctx);
     assert.notEqual(next.find(rule => rule.source === 'SCOPED').key, same[2].key);
     assert.equal(next.find(rule => rule.source === 'GLOBAL' && rule.script.id === 'same').key, same[0].key);
+});
+
+test('显示和发送共用选择，保留各自用途、消息角色和执行顺序，酒馆关闭的规则可单独启用', () => {
+    const f = fixture(), rules = readTavernRegex(f.engine, f.ctx);
+    const apply = (config, placement, purpose) => {
+        const calls = [];
+        const runRegexScript = (script, text) => { assert.ok(!script.disabled); calls.push(script.id); return text; };
+        if (purpose === 'display') processPlayText('正文', config, rules, runRegexScript, placement);
+        else processPlayPromptText('正文', config, rules, { runRegexScript }, placement);
+        return calls;
+    };
+    const defaults = readPlaySettings({});
+    assert.deepEqual(apply(defaults, 2, 'display'), ['same', 'same', 'same', 'display', 'both']);
+    assert.deepEqual(apply(defaults, 2, 'prompt'), ['same', 'same', 'same', 'prompt', 'both']);
+    assert.deepEqual(apply(defaults, 1, 'display'), ['user']);
+    assert.deepEqual(apply(defaults, 1, 'prompt'), ['user']);
+    const settings = readPlaySettings({ playRegexOverrides: Object.fromEntries(rules.map(rule => [rule.key, rule.script.id === 'off'])) });
+    assert.deepEqual(rules.filter(rule => isPlayRegexSelected(rule, settings)).map(rule => rule.script.id), ['off']);
+    assert.deepEqual(apply(settings, 2, 'display'), ['off']);
+    assert.deepEqual(apply(settings, 2, 'prompt'), ['off']);
+    assert.equal(f.groups[0].find(script => script.id === 'off').disabled, true, '启用副本不改酒馆');
+    assert.deepEqual(apply({ ...settings, regexEnabled: false }, 2, 'display'), []);
+    assert.deepEqual(apply({ ...settings, regexEnabled: false }, 2, 'prompt'), []);
+});
+
+test('未允许的预设和非当前角色规则仍列出，默认关闭，勾选后只处理目标角色', async () => {
+    const f = fixture();
+    f.ctx.characters[1].data = { extensions: { regex_scripts: [{ id: 'same', scriptName: '乙', placement: [1, 2], replaceString: '乙' }] } };
+    f.engine.getScriptsByType = (type, { allowedOnly }) => type === 2 && allowedOnly ? [] : f.groups[type];
+    const before = structuredClone({ context: f.ctx, groups: f.groups });
+    const settings = {}, display = createPlayDisplay(() => f.ctx, settings, async () => f.engine);
+    await display.refresh(f.ctx.characters[1]);
+    const preset = display.rules.find(rule => rule.source === 'PRESET'), scoped = display.rules.find(rule => rule.source === 'SCOPED');
+    assert.equal(preset.enabled, false); assert.equal(scoped.enabled, false);
+    assert.equal(scoped.key, JSON.stringify(['SCOPED', 'B.png', 'same']));
+    assert.equal(display.rules.some(rule => rule.key.includes('A.png')), false);
+    settings.playRegexOverrides = Object.fromEntries(display.rules.map(rule => [rule.key, rule === scoped]));
+    display.updateSettings();
+    assert.equal(display.process('标记', f.ctx.characters[1]), '乙');
+    assert.equal(display.process('标记', f.ctx.characters[1], undefined, 'user'), '乙');
+    const revision = display.revision;
+    f.ctx.extensionSettings.character_allowed_regex = ['B.png']; await display.refresh();
+    assert.ok(display.revision > revision, '酒馆权限变化刷新显示缓存');
+    delete f.ctx.extensionSettings.character_allowed_regex;
+    assert.deepEqual({ context: f.ctx, groups: f.groups }, before);
+});
+
+test('深度规则会清空分支，但旧取消勾选同时阻止发送；开关关闭仍去掉隐藏标签', () => {
+    const f = fixture();
+    f.groups[0] = [{ id: 'erase', placement: [1, 2], promptOnly: true, findRegex: '[\\s\\S]+', replaceString: '', minDepth: 7, maxDepth: null }];
+    f.groups[1] = []; f.groups[2] = [];
+    const rules = readTavernRegex(f.engine, f.ctx), source = '分支正文<status>隐藏</status>';
+    const engine = { runRegexScript: (script, text) => text.replace(new RegExp(script.findRegex), script.replaceString) };
+    for (const placement of [1, 2]) {
+        assert.equal(processPlayPromptText(source, readPlaySettings({}), rules, engine, placement), '');
+        for (const saved of [{ playRegexExclusions: [rules[0].key] }, { playRegexOverrides: { [rules[0].key]: false } }, { playRegexEnabled: false }]) {
+            const settings = readPlaySettings(saved);
+            assert.equal(processPlayPromptText(source, settings, rules, engine, placement), '分支正文');
+            assert.equal(processPlayText(source, settings, rules, engine.runRegexScript, placement), '分支正文');
+        }
+    }
+});
+
+test('旧取消勾选只在读取时兼容，新选择可覆盖旧排除而不改变源设置', () => {
+    const saved = { playRegexExclusions: ['a', 'b'], playRegexOverrides: { a: true, c: false } }, before = structuredClone(saved);
+    assert.deepEqual(readPlaySettings(saved).regexOverrides, { a: true, b: false, c: false });
+    assert.deepEqual(saved, before);
 });
 
 test('规则改名改内容仍排除；新规则默认生效，刷新前保留当前显示用规则', async () => {
@@ -220,7 +289,7 @@ test('无锚点贪婪匹配在缺失触发词时快速短路跳过，包含触�
     assert.equal(guard.canMatch('[Prompt Word:]正文'), true);
 
     // processPlayText 实际集成测试：短路跳过后不调用 runRegex，存在触发词时调用 runRegex
-    const rule = { key: 'danger', script: { findRegex: dangerousRegex, replaceString: '' } };
+    const rule = { key: 'danger', script: { placement: [2], findRegex: dangerousRegex, replaceString: '' } };
     let runCalls = 0;
     const settings = readPlaySettings({ playRegexEnabled: true });
 
@@ -253,7 +322,7 @@ test('预检查只排除确实不可能匹配的正文，分组选择、可选�
         assert.ok(!guard || guard.canMatch(text), `${pattern} 不得跳过实际能匹配的正文`);
     }
     const pattern = String.raw`[\s\S]*?(?:<content>|<正文>)([\s\S]*)`;
-    const rule = { key: 'extract', script: { findRegex: pattern, replaceString: '$1' } };
+    const rule = { key: 'extract', script: { placement: [2], findRegex: pattern, replaceString: '$1' } };
     const actual = processPlayText('前言<正文>真正的正文', readPlaySettings({ playHiddenTags: '' }), [rule],
         (script, text) => text.replace(new RegExp(script.findRegex), script.replaceString));
     assert.equal(actual, '真正的正文');

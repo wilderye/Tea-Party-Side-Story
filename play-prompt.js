@@ -7,7 +7,7 @@ import { loadPlayModuleSource } from './play-task-module.js';
 import { getPlayPreparationCoordinator } from './play-preparation.js';
 import { readPlayTemplateFeatures } from './play-template-context.js';
 import { readPlayHelperVariables } from './play-variable-context.js';
-import { processPlayPromptText } from './play-processing.js';
+import { processPlayPromptText, readTavernRegex } from './play-processing.js';
 
 async function loadTavernModules() {
     const paths = {
@@ -121,11 +121,15 @@ function addPersona(modules, settings) {
 async function formatHistory(modules, chat, environment, isContinue) {
     const { regex, chats } = modules;
     const canUseTools = environment.tavern.canUseTools ?? modules.tools.ToolManager.isToolCallingSupported();
+    const rules = environment.tavern.regexRules;
+    const settings = { hiddenTags: environment.playHiddenTags ?? '', regexEnabled: environment.playRegex?.enabled !== false,
+        regexOverrides: environment.playRegex?.overrides ?? {} };
     const regexText = (text, placement, depth, branch = false) => {
-        const scripts = environment.tavern.regexScripts;
-        if (branch) return processPlayPromptText(text, environment.playHiddenTags, regex, placement, scripts);
-        if (!scripts) return regex.getRegexedString(text, placement, { isPrompt: true, depth });
-        for (const script of scripts) {
+        if (branch) return processPlayPromptText(text, settings, rules ?? [], regex, placement);
+        if (!rules) return regex.getRegexedString(text, placement, { isPrompt: true, depth });
+        for (const rule of rules) {
+            if (!rule.enabled) continue;
+            const script = rule.script;
             if (script.disabled || !script.promptOnly || !script.placement?.includes(placement)) continue;
             if (script.minDepth !== null && Number.isFinite(Number(script.minDepth)) && script.minDepth >= -1 && depth < script.minDepth) continue;
             if (script.maxDepth !== null && Number.isFinite(Number(script.maxDepth)) && script.maxDepth >= 0 && depth > script.maxDepth) continue;
@@ -416,11 +420,7 @@ export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules,
             const saved = manager?.readPresetExtensionField({ path: 'tavern_helper' });
             presetHelper = { variables: readPlayHelperVariables(saved) };
         } catch { /* Optional helper data must not prevent native card processing. */ }
-        const targetScripts = extensionSettings.character_allowed_regex?.includes(character?.avatar) ? character?.data?.extensions?.regex_scripts ?? [] : [];
-        const regexScripts = extensionSettings.disabledExtensions?.includes('regex') ? [] : character
-            ? [...modules.regex.getScriptsByType(modules.regex.SCRIPT_TYPES.GLOBAL, { allowedOnly: true }),
-                ...modules.regex.getScriptsByType(modules.regex.SCRIPT_TYPES.PRESET, { allowedOnly: true }), ...targetScripts]
-            : modules.regex.getRegexScripts?.({ allowedOnly: true });
+        const regexRules = readTavernRegex(modules.regex, { ...ctx(), extensionSettings }, character);
         return {
             extensionSettings, presetHelper, presetApi: manager?.apiId,
             tagMap: character?.avatar ? { [character.avatar]: structuredClone(ctx().tagMap?.[character.avatar] ?? []) } : {},
@@ -436,7 +436,7 @@ export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules,
             imageInlining: modules.openai.isImageInliningSupported?.(),
             videoInlining: modules.openai.isVideoInliningSupported?.(),
             audioInlining: modules.openai.isAudioInliningSupported?.(),
-            regexScripts,
+            regexRules,
         };
     };
     return prepare;

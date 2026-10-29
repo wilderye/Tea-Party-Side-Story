@@ -51,9 +51,9 @@ export function hidePlayTags(source, names) {
     return parts.join('');
 }
 
-/** Keep the host's source order, with source identity attached for exclusions. */
-export function readTavernRegex(engine, context, character, placement = engine.regex_placement.AI_OUTPUT) {
-    if (context.extensionSettings?.disabledExtensions?.includes('regex')) return [];
+/** Read all rules in host order; source identity keeps plugin choices stable. */
+export function readTavernRegex(engine, context, character) {
+    const hostEnabled = !context.extensionSettings?.disabledExtensions?.includes('regex');
     const current = context.characters?.[context.characterId];
     const target = character?.avatar ? context.characters?.find(item => item.avatar === character.avatar) : current;
     const owner = {
@@ -61,13 +61,22 @@ export function readTavernRegex(engine, context, character, placement = engine.r
         PRESET: [engine.getCurrentPresetAPI(), engine.getCurrentPresetName()],
         SCOPED: [target?.avatar ?? ''],
     };
-    return Object.entries(engine.SCRIPT_TYPES).flatMap(([source, type]) =>
-        (source === 'SCOPED' && target?.avatar !== current?.avatar
-            ? (context.extensionSettings?.character_allowed_regex?.includes(target?.avatar) ? target?.data?.extensions?.regex_scripts ?? [] : [])
-            : engine.getScriptsByType(type, { allowedOnly: true }))
-            .filter(script => !script.disabled && script.placement?.includes(placement)
-                && (!script.promptOnly || script.markdownOnly))
-            .map(script => ({ source, key: JSON.stringify([source, ...owner[source], script.id]), script: structuredClone(script) })));
+    return Object.entries(engine.SCRIPT_TYPES).flatMap(([source, type]) => {
+        const otherCharacter = source === 'SCOPED' && target?.avatar !== current?.avatar;
+        const scripts = otherCharacter ? target?.data?.extensions?.regex_scripts ?? []
+            : engine.getScriptsByType(type, { allowedOnly: false });
+        const allowed = new Set((otherCharacter
+            ? (context.extensionSettings?.character_allowed_regex?.includes(target?.avatar) ? scripts : [])
+            : engine.getScriptsByType(type, { allowedOnly: true })).map(script => script.id));
+        return scripts.map(script => ({ source, key: JSON.stringify([source, ...owner[source], script.id]),
+            enabled: hostEnabled && allowed.has(script.id) && !script.disabled, script: structuredClone(script) }));
+    });
+}
+
+/** The list and both processing stages share this choice; host settings stay read-only. */
+export function isPlayRegexSelected(rule, settings) {
+    const override = settings.regexOverrides?.[rule.key];
+    return typeof override === 'boolean' ? override : rule.enabled !== false;
 }
 
 const WILDCARD_PREFIX = /^\s*(?:\((?:\?:)?(?:\[\\(?:s\\S|S\\s|d\\D|D\\d|w\\W|W\\w)\]|\.)[*+]\??\)|(?:\[\\(?:s\\S|S\\s|d\\D|D\\d|w\\W|W\\w)\]|\.)[*+]\??)/;
@@ -179,17 +188,21 @@ function getRuleGuard(rule) {
     return guard;
 }
 
-export function processPlayText(source, settings, rules, runRegex) {
+function processPlayRegex(source, settings, rules, runRegex, placement, purpose) {
     let text = hidePlayTags(source, settings.hiddenTags);
     if (settings.regexEnabled) {
-        const excluded = new Set(settings.excludedRegex);
-        // ST runs ordinary output substitutions before display-only substitutions.
-        for (const markdownOnly of [false, true]) {
+        // Branch originals have not passed Tavern's ordinary write-time stage.
+        // Both display and sending run ordinary substitutions before their own stage.
+        for (const only of [false, true]) {
             for (const rule of rules) {
-                if (excluded.has(rule.key) || !!rule.script.markdownOnly !== markdownOnly) continue;
+                const script = rule.script;
+                if (!isPlayRegexSelected(rule, settings) || !script.placement?.includes(placement)) continue;
+                if (only ? !script[purpose] : script.markdownOnly || script.promptOnly) continue;
                 const guard = getRuleGuard(rule);
                 if (guard && !guard.canMatch(text)) continue;
-                text = runRegex(rule.script, text);
+                // A plugin override may enable a script disabled in Tavern. Never
+                // change the host object; its engine checks disabled itself.
+                text = runRegex(script.disabled ? { ...script, disabled: false } : script, text);
             }
         }
     }
@@ -198,22 +211,13 @@ export function processPlayText(source, settings, rules, runRegex) {
     return text;
 }
 
-/** Branch originals have not passed Tavern's ordinary write-time regex stage. */
-export function processPlayPromptText(source, hiddenTags, engine, placement, scripts) {
-    let text = hidePlayTags(source, hiddenTags ?? '');
-    const rules = scripts ?? engine.getRegexScripts?.({ allowedOnly: true });
-    if (!rules) {
-        text = engine.getRegexedString(text, placement);
-        return engine.getRegexedString(text, placement, { isPrompt: true });
-    }
-    for (const promptOnly of [false, true]) for (const script of rules) {
-        if (script.disabled || !script.placement?.includes(placement)) continue;
-        if (promptOnly ? !script.promptOnly : script.promptOnly || script.markdownOnly) continue;
-        // runRegexScript performs Tavern's matching/substitution. Depth is
-        // intentionally not a condition for any plugin branch message.
-        text = engine.runRegexScript(script, text);
-    }
-    return text;
+export function processPlayText(source, settings, rules, runRegex, placement = 2) {
+    return processPlayRegex(source, settings, rules, runRegex, placement, 'markdownOnly');
+}
+
+export function processPlayPromptText(source, settings, rules, engine, placement) {
+    // Depth intentionally does not apply to plugin branch messages.
+    return processPlayRegex(source, settings, rules, (script, text) => engine.runRegexScript(script, text), placement, 'promptOnly');
 }
 
 const loadNativeRegex = () => import(new URL('../../../../scripts/extensions/regex/engine.js', import.meta.url).href);
@@ -222,8 +226,8 @@ function displaySnapshot(config, rules) {
     return JSON.stringify([
         config?.hiddenTags,
         config?.regexEnabled,
-        config?.excludedRegex,
-        rules?.map(rule => [rule.key, rule.script]),
+        config?.regexOverrides,
+        rules?.map(rule => [rule.key, rule.enabled, rule.script]),
     ]);
 }
 
@@ -299,7 +303,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             }
             const target = character ?? selectedCharacter;
             const targetEngine = roleEngines.get(target?.avatar) ?? engine;
-            if (targetEngine && role === 'user') targetRules = readTavernRegex(targetEngine, ctx(), target, targetEngine.regex_placement.USER_INPUT);
+            const placement = role === 'user' ? targetEngine?.regex_placement.USER_INPUT ?? 1 : targetEngine?.regex_placement.AI_OUTPUT ?? 2;
             return processPlayText(source, config, targetRules, (script, text) => {
                 // Resolve target names before the native engine consults the
                 // host's current character while substituting replacement text.
@@ -312,7 +316,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
                             : requestContext?.userName === undefined ? match : escapeRegex(requestContext.userName)) : script.findRegex;
                 return targetEngine.runRegexScript({ ...script, findRegex, replaceString: names(script.replaceString),
                     trimStrings: script.trimStrings?.map(names) }, text, { characterOverride: target?.name });
-            });
+            }, placement);
         },
     };
 }

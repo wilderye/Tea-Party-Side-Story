@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -493,7 +493,7 @@ if (require.main === module) (async()=>{
    };
    const closeSettings=async settingsPage=>{await settingsPage.getByRole('button',{name:viewport.width<=760?'返回剧场演出':'设置',exact:true}).click();};
    let dialog=await openSettings();
-   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','回复显示','阅读外观','自动重试','小剧场续写']);
+   assert.deepEqual(await dialog.locator('.tea-settings-group>h3').allTextContents(),['剧场库','小剧场生成','正则与隐藏标签','阅读外观','自动重试','小剧场续写']);
    assert.equal(await dialog.locator('.tea-settings-note').count(),0);
    const noChat=dialog.getByRole('switch',{name:'不发送角色聊天，仅读取预设/人设/世界书',exact:true});
    assert.equal(await noChat.isChecked(),false,'首次默认关闭不发送角色聊天');
@@ -556,6 +556,38 @@ if (require.main === module) (async()=>{
    assert.equal(await dialog.locator('.play-regex-list.is-paused').count(),1);
    await dialog.getByRole('switch',{name:'沿用酒馆正则'}).check();
    assert.equal(await dialog.getByRole('checkbox',{name:'状态栏美化',exact:true}).isChecked(),false);
+   // Browser plugin not available. Compare synthetic display/outbound processing
+   // directly with the checkboxes, including host-disabled and prompt-only rules.
+   await page.evaluate(()=>{
+    rules.globalRules.push({id:'off',scriptName:'酒馆已关闭的规则',placement:[1,2],findRegex:'选择测试',replaceString:'仅插件启用',disabled:true},
+      {id:'erase-user',scriptName:'发送时清空用户',placement:[1],findRegex:'[\\s\\S]+',replaceString:'',promptOnly:true,minDepth:7,maxDepth:null},
+      {id:'erase-ai',scriptName:'发送时清空回复',placement:[2],findRegex:'[\\s\\S]+',replaceString:'',promptOnly:true,minDepth:7,maxDepth:null});
+   });
+   await dialog.getByRole('button',{name:'刷新列表',exact:true}).click();
+   const off=dialog.getByRole('checkbox',{name:'酒馆已关闭的规则',exact:true});
+   await off.waitFor();assert.equal(await off.isChecked(),false);
+   const processed=()=>page.evaluate(async()=>{
+    const {readPlaySettings}=await import('/play-settings.js'),{processPlayText,processPlayPromptText}=await import('/play-processing.js');
+    const config=readPlaySettings(JSON.parse(localStorage.getItem('processingSettings'))),text='选择测试<status>隐藏</status>';
+    config.hiddenTags='status';
+    const runRegexScript=(script,text)=>script.disabled?text:text.replace(new RegExp(script.findRegex,'g'),script.replaceString);
+    return [1,2].map(placement=>[processPlayText(text,config,runtime.display.rules,runRegexScript,placement),
+      processPlayPromptText(text,config,runtime.display.rules,{runRegexScript},placement)]);
+   });
+   assert.deepEqual(await processed(),[['选择测试',''],['选择测试','']]);
+   await dialog.getByRole('checkbox',{name:'发送时清空用户',exact:true}).uncheck();
+   await dialog.getByRole('checkbox',{name:'发送时清空回复',exact:true}).uncheck();
+   assert.deepEqual(await processed(),[['选择测试','选择测试'],['选择测试','选择测试']]);
+   await off.check();
+   assert.deepEqual(await processed(),[['仅插件启用','仅插件启用'],['仅插件启用','仅插件启用']]);
+   assert.equal(await page.evaluate(()=>rules.globalRules.find(script=>script.id==='off').disabled),true);
+   await dialog.getByRole('button',{name:'刷新列表',exact:true}).click();
+   assert.equal(await off.isChecked(),true);assert.equal(await dialog.getByRole('checkbox',{name:'状态栏美化',exact:true}).isChecked(),false);
+   await dialog.getByRole('switch',{name:'沿用酒馆正则'}).uncheck();
+   assert.deepEqual(await processed(),[['选择测试','选择测试'],['选择测试','选择测试']]);
+   await dialog.getByRole('switch',{name:'沿用酒馆正则'}).check();
+   assert.deepEqual(await processed(),[['仅插件启用','仅插件启用'],['仅插件启用','仅插件启用']]);
+   await screenshot(page,`regex-selection-consistency-${viewport.width}.png`);
    await closeSettings(dialog);assert.equal(await a.locator('iframe').count(),0);
    assert.match(await a.locator('.play-result').innerText(),/默认隐藏状态/);
    assert.doesNotMatch(await a.locator('.play-result').innerText(),/<\/?status>/,'排除状态栏正则后，保留正文但仍隐藏英文标签');

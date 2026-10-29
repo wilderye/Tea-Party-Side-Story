@@ -41,7 +41,7 @@ async function verifySections(page, viewport) {
             inside: [...area.querySelectorAll('.tea-setting-row,.tea-update-setting,.play-api-fields')]
                 .filter(node => node.checkVisibility()).map(node => getComputedStyle(node).borderBottomWidth),
         }));
-        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '回复显示', '阅读外观', '自动重试', '插件日志', '小剧场续写']);
+        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '正则与隐藏标签', '阅读外观', '自动重试', '插件日志', '小剧场续写']);
         assert.deepEqual(metrics.groups.map(group => group.line), ['1px', '1px', '1px', '1px', '1px', '1px', '0px'], '相邻板块有线，末尾不再画线');
         assert.ok(metrics.inside.every(line => line === '0px'), '板块内部的设置之间没有分割线');
     };
@@ -151,7 +151,7 @@ async function verifyTags(page, viewport, fallback) {
                 await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
                 await page.locator('#teahouse-panel').getByRole('button', { name: '设置', exact: true }).filter({ visible: true }).click();
                 await settle(page);
-                assert.ok((await page.locator('.tea-settings').innerText()).includes('回复显示'));
+                assert.ok((await page.locator('.tea-settings').innerText()).includes('正则与隐藏标签'));
                 assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0);
                 if (!fallback) await verifySections(page, viewport);
                 await verifyTags(page, viewport, fallback);

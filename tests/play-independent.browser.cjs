@@ -57,6 +57,7 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
                 const { createNativePlayPreparer } = await import('/scripts/extensions/third-party/tea-independent/play-prompt.js');
                 const { capturePlayEnvironment } = await import('/scripts/extensions/third-party/tea-independent/play-runtime.js');
                 const { createIndependentPlayScope } = await import('/scripts/extensions/third-party/tea-independent/play-independent.js');
+                const { readTavernRegex } = await import('/scripts/extensions/third-party/tea-independent/play-processing.js');
                 const prepare = createNativePlayPreparer(() => SillyTavern.getContext()); await prepare.ready();
                 const before = JSON.stringify({ id: c.characterId, chat: c.chat, meta: c.chatMetadata });
                 const env = (index, noChat = true) => {
@@ -66,7 +67,10 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
                     Object.assign(value.tavern.power, { experimental_macro_engine: false, personas: { 'fixture-user.png': '测试用户' }, persona_descriptions: {},
                         default_persona: 'fixture-user.png', persona_description: '', persona_description_position: 0 });
                     value.tavern.extensionSettings = { regex: [], character_allowed_regex: ['0.png', '1.png'], preset_allowed_regex: {}, disabledExtensions: [], note: {}, variables: {} };
-                    value.tavern.regexScripts = value.characterCard.data.extensions.regex_scripts;
+                    value.tavern.regexRules = readTavernRegex({
+                        SCRIPT_TYPES: { SCOPED: 1 }, getCurrentPresetAPI: () => 'openai', getCurrentPresetName: () => '',
+                        getScriptsByType: () => value.characterCard.data.extensions.regex_scripts,
+                    }, { ...c, extensionSettings: value.tavern.extensionSettings }, value.characterCard);
                     value.tavern.presetFields = {}; value.tavern.presetHelper = {}; value.tavern.globalWorlds = [];
                     value.tavern.worldSettings.world_info = { charLore: [] }; value.tavern.templateFeatures = undefined;
                     return value;
@@ -240,6 +244,55 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
             assert.ok(outbound[13].some(message => typeof message.content === 'string' && message.content.includes('原入口正常处理')));
             for (const messages of outbound.slice(14)) assert.ok(messages.some(message => typeof message.content === 'string'
                 && message.content.includes('<%= nativeCurrent() %>') && message.content.includes('{{get_message_variable::missing}}')));
+            const branchStart = outbound.length;
+            const branchCheck = await page.evaluate(async () => {
+                const { env, prepare } = window.teaIndependentTest, modules = await prepare.ready();
+                const { createPlayground } = await import('/scripts/extensions/third-party/tea-independent/playground.js');
+                const { createPlayHistory } = await import('/scripts/extensions/third-party/tea-independent/play-history.js');
+                modules.core.setCharacterId(0); modules.core.setCharacterName(modules.core.characters[0].name);
+                const c = SillyTavern.getContext(), before = JSON.stringify({ id: c.characterId, chat: c.chat, meta: c.chatMetadata });
+                delete window.EjsTemplate;
+                const character = c.characters[1], files = new Map();
+                const history = createPlayHistory({ readFile: async name => files.get(name) ?? null,
+                    writeFile: async (name, text) => files.set(name, text), removeFile: async name => files.delete(name) });
+                const stamp = new Date().toISOString(), round = await history.begin({ character, prompt: '乙分支起始用户',
+                    resultId: crypto.randomUUID(), startedAt: stamp, context: { chatId: 'synthetic-other', characterName: character.name, apiMode: 'custom' } });
+                await history.saveResult(round.id, round.results[0].id, { text: '乙分支起始AI', status: 'complete', finishedAt: stamp });
+                const chat = await history.getChat(round.id);
+                const service = createPlayground({ history, isCurrent: () => true, prepareRequest: prepare,
+                    captureEnvironment: () => {
+                        const value = env(1, false); value.playPrompt = '';
+                        const key = JSON.stringify(['SCOPED', character.avatar, 'disabled-branch']);
+                        value.tavern.regexRules.push({ source: 'SCOPED', key, enabled: false,
+                            script: { id: 'disabled-branch', placement: [1, 2], disabled: true, promptOnly: true,
+                                findRegex: '/$/', replaceString: '仅分支启用', trimStrings: [], substituteRegex: 0 } });
+                        value.playRegex = { enabled: true, overrides: { [key]: true } };
+                        return value;
+                    } });
+                const target = { character, characterId: chat.characterId }, statuses = [];
+                statuses.push((await service.sendChat(chat.id, { ...target, prompt: '乙分支本轮用户' })).result.status);
+                let current = await history.getChat(chat.id), last = current.messages.at(-1);
+                statuses.push((await service.generateChatVersion(chat.id, last.id, target)).result.status);
+                current = await history.getChat(chat.id); last = current.messages.at(-1);
+                statuses.push((await service.regenerateChat(chat.id, last.id, last.selectedResultId, target)).result.status);
+                current = await history.getChat(chat.id); last = current.messages.at(-1);
+                statuses.push((await service.continueChat(chat.id, last.id, last.selectedResultId, target)).result.status);
+                return { statuses, unchanged: before === JSON.stringify({ id: c.characterId, chat: c.chat, meta: c.chatMetadata }) };
+            });
+            assert.deepEqual(branchCheck.statuses, ['complete', 'complete', 'complete', 'complete']); assert.equal(branchCheck.unchanged, true);
+            for (const messages of outbound.slice(branchStart)) {
+                const text = message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+                const native = messages.findIndex(message => text(message).includes('历史11'));
+                assert.ok(native >= 0, '另一个角色的分支读取该角色酒馆聊天');
+                let previous = native;
+                for (const [role, marker] of [['user', '乙分支起始用户'], ['assistant', '乙分支起始AI'], ['user', '乙分支本轮用户']]) {
+                    const matches = messages.flatMap((message, i) => text(message).includes(marker) ? [i] : []);
+                    assert.equal(matches.length, 1); assert.ok(matches[0] > previous); assert.equal(messages[matches[0]].role, role); previous = matches[0];
+                    assert.ok(text(messages[matches[0]]).endsWith('仅分支启用'), '非当前角色的插件勾选用于每一种分支发送');
+                }
+                assert.ok(!text(messages[native]).includes('仅分支启用'), '插件启用不影响角色原酒馆聊天');
+            }
+            console.log(JSON.stringify({ port: url.port, check: 'non-current character outbound send/version/regenerate/continue include Tavern then branch exactly once', ...branchCheck }));
             console.log(JSON.stringify({ port: url.port, nativeRequests: outbound.length, optionalModes: optional.states, ...result }));
             await context.close();
         }
