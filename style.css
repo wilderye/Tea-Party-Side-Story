@@ -533,8 +533,6 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-chat-menu summary { list-style:none; cursor:pointer; }
 #teahouse-panel .play-chat-menu summary::-webkit-details-marker { display:none; }
 #teahouse-panel .play-chat-menu .tea-sort-menu { top:auto; bottom:calc(100% + 8px); left:0; right:auto; z-index:6; }
-#teahouse-panel .play-chat-version-choices { position:absolute; z-index:7; bottom:90px; left:20px; right:20px; max-height:50%; overflow:auto; display:flex; flex-direction:column; padding:12px; gap:4px; background:var(--tea-paper); border:1px solid var(--tea-line); box-shadow:0 8px 24px var(--tea-popup-shadow,#102f2826); }
-#teahouse-panel .play-chat-version-choices button { padding:12px; min-height:40px; text-align:left; font-size:14px; }
 #teahouse-panel .play-chat-feed .play-message { padding:0; margin-bottom:32px; }
 #teahouse-panel .play-chat-feed>.play-feed-content>.play-message:last-child { margin-bottom:0; }
 #teahouse-panel .play-chat-feed .play-message-actions>button:not(.tea-icon) { grid-column:1/-1; }
@@ -580,7 +578,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-record>.play-message { --play-message-inset:0px; padding:0; margin:0 0 34px; }
 #teahouse-panel .play-record:nth-last-child(1 of .play-record:not([hidden]))>.play-message:nth-last-child(1 of .play-message:not([hidden])) { margin-bottom:0; }
 #teahouse-panel .play-message-meta { display:flex; align-items:center; gap:13px; margin-bottom:17px; min-height:46px; }
-#teahouse-panel .play-message-meta::after { content:''; flex:1; order:2; height:1px; min-width:12px; margin:0 9px; background:var(--tea-subtle-line,#e5e3d5); }
+#teahouse-panel .play-message-meta::after { content:''; flex:1; order:2; height:1px; min-height:1px; max-height:1px; min-width:12px; margin:0; padding:0; border:0; box-shadow:none; background:var(--tea-subtle-line,#e5e3d5); }
+#teahouse-panel[data-appearance=tavern] .play-message-meta::after { background:color-mix(in srgb,var(--tea-line) 25%,var(--tea-reading-paper,var(--tea-paper))); }
 #teahouse-panel .play-speaker { max-width:100%; font:700 22px/1.3 var(--play-prose-font,var(--tea-ui)); letter-spacing:.5px; color:var(--tea-heading,#234a3f); overflow-wrap:anywhere; }
 #teahouse-panel .play-message-time { font:11px/17px var(--tea-ui); color:var(--tea-secondary-ink,#8a8c77); font-variant-numeric:tabular-nums; white-space:nowrap; }
 #teahouse-panel .play-message-avatar { display:block; order:0; width:44px; height:44px; border:0; border-radius:50%; object-fit:cover; flex:none; background:var(--tea-avatar-paper,#fffdf5); box-shadow:0 0 0 3px var(--tea-avatar-ring,#eee9d9); }
@@ -626,7 +625,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-header-actions .tea-star[aria-pressed=true] { background:transparent!important; color:var(--tea-accent,#aa6a4a)!important; }
 #teahouse-panel .play-header-actions .tea-star[aria-pressed=true] svg { fill:var(--tea-accent-fill,#ce987b38); }
 /* Keep speaker details readable while the assistant's tools wrap independently. */
-#teahouse-panel .play-assistant-meta .play-message-identity { min-width:120px; max-width:40%; }
+#teahouse-panel .play-assistant-meta .play-message-identity { max-width:40%; }
 #teahouse-panel .play-assistant-meta .play-header-actions { flex:0 1 auto; min-width:30px; flex-wrap:wrap; justify-content:flex-end; gap:2px; }
 #teahouse-panel .play-assistant-meta .play-header-actions .tea-icon { width:30px; min-width:30px; height:36px; }
 #teahouse-panel .play-assistant-meta .play-header-actions .tea-glyph svg { width:16px; height:16px; }
@@ -742,8 +741,10 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-regex-rule span { min-width:0; overflow-wrap:anywhere; }
 #teahouse-panel .play-regex-list.is-paused .play-regex-rule { color:var(--tea-muted); }
 #teahouse-panel .play-regex-list.is-paused input { accent-color:var(--tea-muted); }
-#teahouse-panel .play-edit-form textarea { display:block; width:calc(100% + 2 * var(--play-message-inset)); min-width:0; max-width:none; min-height:calc(3.7em + 24px); height:auto; max-height:min(45dvh,420px); margin:0 calc(-1 * var(--play-message-inset))!important; padding:12px var(--play-message-inset)!important; border-radius:0!important; resize:vertical; overflow:auto; font:max(16px,var(--tea-body-size))/1.85 var(--tea-ui); white-space:pre-wrap; }
+#teahouse-panel .play-edit-form textarea { display:block; width:calc(100% + 2 * var(--play-message-inset)); min-width:0; max-width:none; min-height:calc(3.7em + 24px); height:auto; max-height:75vh; max-height:75dvh; margin:0 calc(-1 * var(--play-message-inset))!important; padding:12px var(--play-message-inset)!important; border-radius:0!important; resize:vertical; overflow:auto; font:max(16px,var(--tea-body-size))/1.85 var(--tea-ui); white-space:pre-wrap; }
+#teahouse-panel .play-edit-form.is-native-sized textarea { field-sizing:content; }
 #teahouse-panel .play-edit-actions { display:flex; align-items:center; gap:6px; }
+#teahouse-panel .play-reading-area .play-edit-form > .play-edit-actions { justify-content:flex-end; width:calc(100% + 2 * var(--play-message-inset)); min-height:48px; margin:0 calc(-1 * var(--play-message-inset)); padding:0 4px; background:var(--play-input-paper); }
 #teahouse-panel .play-edit-actions .play-edit-save { color:var(--tea-heading,var(--tea-forest))!important; }
 #teahouse-panel :is(.play-edit-save,.play-regex-toolbar button)[aria-busy=true] svg { animation:tea-update-spin 1s linear infinite; }
 #teahouse-panel .tea-icon.play-in-plugin { width:44px; height:44px; min-width:44px; }
@@ -872,36 +873,14 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-jump-latest::after { content:''; position:absolute; inset:-4px; border-radius:50%; }
     #teahouse-panel .play-input-row { gap:3px; }
     #teahouse-panel .play-compose-input { padding-right:7px!important; padding-left:8px!important; }
-    #teahouse-panel.tea-play-mode[data-mode=list]:not(.play-choosing-character):has(.play-page.is-message-editing) { container:play-edit / size; }
-    #teahouse-panel.tea-play-mode[data-mode=list]:not(.play-choosing-character):has(.play-page.is-message-editing)>.play-catalog { margin-bottom:44px; }
-    #teahouse-panel .play-page.is-message-editing .play-feed-content { padding-top:22px; }
-    #teahouse-panel .play-page.is-message-editing .play-feed { scroll-padding-top:0; }
-    #teahouse-panel .play-page.is-message-editing .play-reading-area { container-type:size; }
-    #teahouse-panel .play-page.is-message-editing .play-jump-latest { display:none; }
-    /* Let the centered header take its actual height, including wrapped names.
-       The editor fills the remaining visible space above the keyboard. */
-    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form) { display:flex; flex-direction:column; height:calc(100cqh - 22px - env(safe-area-inset-bottom)); }
-    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form)>.play-message-meta { flex:none; }
-    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form)>:is(.play-user-text,.play-results),
-    #teahouse-panel .play-page.is-message-editing .play-result:has(.play-edit-form) { display:flex; flex:1; flex-direction:column; min-height:0; }
-    #teahouse-panel .play-page.is-message-editing .play-edit-form { display:flex; flex:1; flex-direction:column; min-height:80px; }
-    #teahouse-panel .play-page.is-message-editing .play-edit-form textarea { flex:1; min-height:0; max-height:none; resize:none; }
-    #teahouse-panel .play-page.is-message-editing .play-edit-form>.play-result-error { flex:none; }
-    #teahouse-panel .play-message:has(.play-edit-form)>.play-message-meta { position:sticky; top:0; z-index:3; background:var(--tea-reading-paper,#fdfbf5); }
+    /* Both message pages derive navigation visibility from the mounted editor. */
+    #teahouse-panel.tea-play-mode[data-mode=list]:not(.play-choosing-character):has(.play-reading-area .play-edit-form:not([hidden] *)) .play-catalog .tea-mobile-tab-slot { display:none; }
+    #teahouse-panel .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed-content { padding-top:22px; }
+    #teahouse-panel .play-branch-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-chat-heading { top:0; }
+    #teahouse-panel .play-branch-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed-content { padding-top:calc(22px + var(--play-chat-heading-height,40px)); }
+    #teahouse-panel .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed { scroll-padding-top:0; }
+    #teahouse-panel .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-jump-latest { display:none; }
     #teahouse-panel .tea-settings .tea-field :is(input,textarea) { font-size:16px; }
-    @container play-edit (max-height:560px) {
-        #teahouse-panel.tea-play-mode[data-mode=list]>.play-catalog { display:none; }
-        #teahouse-panel .play-page.is-message-editing .play-reading-area { padding-top:env(safe-area-inset-top); }
-    }
-    @container play-edit (max-height:300px) {
-        #teahouse-panel .play-page.is-message-editing .play-message-meta { gap:2px; margin-bottom:6px; }
-        #teahouse-panel .play-page.is-message-editing .play-message-avatar { width:20px; height:20px; outline-offset:2px; }
-        #teahouse-panel .play-page.is-message-editing .play-message-identity { row-gap:0; }
-        #teahouse-panel .play-page.is-message-editing .play-speaker { font-size:16px; line-height:20px; }
-        #teahouse-panel .play-page.is-message-editing .play-message-time { font-size:10px; line-height:13px; }
-        #teahouse-panel .play-page.is-message-editing .play-header-actions { margin-top:0; min-height:24px; }
-        #teahouse-panel .play-page.is-message-editing .play-header-actions .tea-icon { width:24px; min-width:24px; height:24px; }
-    }
 }
 @media(max-width:355px) {
     #teahouse-panel .play-message-actions { gap:5px; }

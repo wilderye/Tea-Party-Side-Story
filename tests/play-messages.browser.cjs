@@ -43,6 +43,24 @@ async function screenshot(page, name) {
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
+async function verifyHeaderSpacing(record, viewport) {
+    const layouts = await record.locator('.play-message-meta').evaluateAll(headers => headers.map(header => {
+        const identity = header.querySelector('.play-message-identity'), bounds = identity.getBoundingClientRect();
+        const contents = [...identity.children].map(node => node.getBoundingClientRect());
+        const line = getComputedStyle(header, '::after');
+        return { slack: bounds.width - Math.max(...contents.map(rect => rect.width)),
+            height: line.height, minHeight: line.minHeight, maxHeight: line.maxHeight,
+            margins: [line.marginLeft, line.marginRight], borders: [line.borderTopWidth, line.borderBottomWidth],
+            padding: [line.paddingTop, line.paddingBottom], display: line.display };
+    }));
+    for (const layout of layouts) {
+        if (viewport.width <= 760) { assert.equal(layout.display, 'none', '手机头部不显示横线'); continue; }
+        assert.ok(layout.slack < 1, '名字和时间的区域按实际内容取宽，不为短名字保留大片空位');
+        assert.equal(layout.height, '1px'); assert.equal(layout.minHeight, '1px'); assert.equal(layout.maxHeight, '1px');
+        assert.deepEqual(layout.borders, ['0px', '0px']); assert.deepEqual(layout.padding, ['0px', '0px'], '横线没有额外厚度');
+        assert.deepEqual(layout.margins, ['0px', '0px'], '横线只使用头部间距，不再叠加边距');
+    }
+}
 
 async function verifyDeletion(page, url, viewport) {
     const panel = await openPlay(page, url);
@@ -56,6 +74,7 @@ async function verifyDeletion(page, url, viewport) {
         await ui.refresh(); return round.id;
     });
     const record = panel.locator(`[data-record="${id}"]`);
+    await verifyHeaderSpacing(record, viewport);
     const user = record.locator('.play-user-message'), reply = record.locator('.play-assistant-message');
     const removeUser = user.getByRole('button', { name: '删除用户消息', exact: true, includeHidden: true });
     const userMore = user.getByRole('button', { name: '更多消息操作', exact: true });
@@ -105,13 +124,15 @@ async function verifyDeletion(page, url, viewport) {
                 && box('.play-user-meta .play-header-actions').right < userIdentity.left
                 && Math.abs(box('.play-user-meta .play-speaker').right - box('.play-user-meta .play-message-time').right) < 1,
             sameRow: rects.every(rect => Math.abs(rect.top - rects[0].top) < 1),
-            identityReadable: replyIdentity.width >= 103 && replyTime.right <= replyIdentity.right + 1 && (replyTools.left >= replyIdentity.right || replyTools.top >= replyIdentity.bottom),
+            identityReadable: replyTime.right <= replyIdentity.right + 1 && replyTime.left >= replyIdentity.left - 1
+                && (replyTools.left >= replyIdentity.right || replyTools.top >= replyIdentity.bottom),
             inside: rects.every(rect => rect.left >= area.left - 1 && rect.right <= area.right + 1 && rect.top >= area.top - 1 && rect.bottom <= area.bottom + 1),
             bodyGap: box('.play-results').top - area.bottom,
             separate: rects.every((rect, index) => rects.slice(index + 1).every(other => rect.right <= other.left + 1
                 || other.right <= rect.left + 1 || rect.bottom <= other.top + 1 || other.bottom <= rect.top + 1)) };
     });
     assert.deepEqual(layout.labels, ['创建分支', '查看实际提示词', '删除 AI 消息', '取消收藏', '编辑回复原文']);
+    await verifyHeaderSpacing(record, viewport);
     if (viewport.width <= 760) {
         assert.equal(layout.centered && layout.stacked, true, '手机端头像、姓名和操作按钮分行居中');
         assert.ok(layout.bodyGap >= 8 && layout.bodyGap <= 12, '手机正文距离头部约十像素，仍为按钮留出点击空间');
@@ -216,18 +237,25 @@ async function verifyEditPosition(page, url, viewport) {
                 if (long && finish === '取消') await screenshot(page, `edit-${role}-after-${viewport.width}.png`);
                 if (viewport.width <= 760) {
                     const bounds = await feed.boundingBox(), editorBounds = await editor.boundingBox();
-                    assert.ok(during.head >= bounds.y && editorBounds.y + editorBounds.height <= bounds.y + bounds.height + 1,
-                        '手机进入编辑时让按钮和大编辑框完整显示');
+                    const saveBounds = await record.locator('.play-edit-form').getByRole('button', { name: '保存', exact: true }).boundingBox();
+                    assert.ok(during.head >= bounds.y && saveBounds.y + saveBounds.height <= bounds.y + bounds.height + 1,
+                        '手机进入编辑时露出消息头部及编辑框右上角的按钮');
+                    assert.ok(editorBounds.height <= viewport.height * .75 + 1, '长文编辑沿用酒馆高度上限，正文仍可滚动');
                 } else {
                     assert.ok(Math.abs(during.head - before.head) < 2 && Math.abs(during.body - before.body) < 2,
                         `${role} ${long ? '长' : '短'}消息进入编辑不跳动：${JSON.stringify({ before, during })}`);
                 }
                 assert.equal(await editor.evaluate(node => document.activeElement === node), true);
                 assert.equal(await composer.inputValue(), '编辑时保留的输入草稿');
-                if (finish === '保存') await editor.fill(text + '\n本次保存。');
-                await head.getByRole('button', { name: finish, exact: true }).click();
+                if (finish === '保存') {
+                    // Set the draft without Playwright scrolling a tall input into view.
+                    await editor.evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, text + '\n本次保存。');
+                    await settle();
+                }
+                await record.locator('.play-edit-form').getByRole('button', { name: finish, exact: true }).click();
                 await editor.waitFor({ state: 'detached' }); await settle();
-                assert.ok(Math.abs((await metrics(head)).head - before.head) < 2, `${role} ${finish}后消息标题仍在原位置`);
+                const afterFinish = await metrics(head);
+                assert.ok(Math.abs(afterFinish.head - before.head) < 2, `${viewport.width} ${role} ${long ? '长' : '短'}消息 ${finish}后消息标题仍在原位置：${JSON.stringify({ before, during, afterFinish })}`);
             }
         }
     }
@@ -246,14 +274,14 @@ async function verifyEditPosition(page, url, viewport) {
         if (viewport.width <= 760) {
             const bounds = await feed.boundingBox();
             for (const name of ['保存', '取消']) {
-                const action = await head.getByRole('button', { name, exact: true }).boundingBox();
+                const action = await last.locator('.play-edit-form').getByRole('button', { name, exact: true }).boundingBox();
                 assert.ok(action.y >= bounds.y && action.y + action.height <= bounds.y + bounds.height,
                     '手机在末尾编辑也露出保存和取消按钮');
             }
         } else {
             assert.ok(Math.abs(after.head - before.head) < 2, `停在末尾时编辑 ${role} 不自动回到消息顶部：${JSON.stringify({ before, after })}`);
         }
-        await head.getByRole('button', { name: '取消', exact: true }).click(); await settle();
+        await last.locator('.play-edit-form').getByRole('button', { name: '取消', exact: true }).click(); await settle();
         if (viewport.width <= 760) assert.ok(Math.abs((await metrics(head)).head - before.head) < 2, '手机退出编辑后回到原阅读位置');
     }
 }

@@ -1,3 +1,9 @@
+/** Protect the reply being generated or waiting for its save, wherever it is read. */
+export function playMessageIsPending(message, jobs = []) {
+    return !!message && (message.results?.some(result => ['unfinished', 'preparing', 'generating', 'retry-wait', 'saving', 'save-failed'].includes(result.status))
+        || jobs.some(job => job.messageId === message.id || message.results?.some(result => result.id === job.resultId || result.id === job.replaceResultId)));
+}
+
 /** Derived from the supplied transcript; hidden floors keep their floor numbers. */
 export function playMessageDepths(messages, { isContinue = false, include = message => !message.hidden } = {}) {
     const depths = new Map();

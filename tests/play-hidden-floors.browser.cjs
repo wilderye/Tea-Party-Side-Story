@@ -53,12 +53,15 @@ async function verifyFloorHeader(message, viewport) {
         const ghost = node.querySelector('.play-hidden-mark')?.getBoundingClientRect();
         const identity = box('.play-message-identity'), tools = box('.play-header-actions');
         const head = node.getBoundingClientRect();
+        const line = getComputedStyle(node, '::after');
+        const contentWidth = Math.max(name.width, node.querySelector('.play-message-detail-row').getBoundingClientRect().width);
         const center = rect => (rect.top + rect.bottom) / 2;
         return { belowName: floor.top >= name.bottom && time.top >= name.bottom && (!ghost || ghost.top >= name.bottom),
             sameRow: Math.abs(center(floor) - center(time)) < 1 && (!ghost || Math.abs(center(time) - center(ghost)) < 1),
             gap: time.left - floor.right, ghostGap: ghost ? ghost.left - time.right : null,
             leftAligned: Math.abs(floor.left - name.left) < 1, rightAligned: Math.abs((ghost ?? time).right - name.right) < 1,
             separate: tools.right <= identity.left || tools.left >= identity.right || tools.top >= identity.bottom,
+            slack: identity.width - contentWidth, lineHeight: line.height, lineMargin: line.marginLeft,
             inside: [name, floor, time, ghost, tools].filter(Boolean).every(rect => rect.left >= head.left - 1 && rect.right <= head.right + 1) };
     });
     assert.ok(layout.belowName && layout.sameRow, '楼层、时间和隐藏图标在名字下方的同一行');
@@ -66,8 +69,12 @@ async function verifyFloorHeader(message, viewport) {
     if (layout.ghostGap !== null) assert.equal(layout.ghostGap, 9, '楼层、时间和隐藏图标用相同间距');
     assert.ok(layout.separate, '名字与楼层信息不遮挡操作按钮');
     assert.ok(layout.inside, '长名字和楼层信息也不越出消息头部');
-    if (viewport.width > 760) assert.ok(await message.evaluate(node => node.classList.contains('play-user-message'))
-        ? layout.rightAligned : layout.leftAligned, '电脑版用户信息靠右，AI 信息靠左，符合版本 A');
+    if (viewport.width > 760) {
+        assert.ok(await message.evaluate(node => node.classList.contains('play-user-message'))
+            ? layout.rightAligned : layout.leftAligned, '电脑版用户信息靠右，AI 信息靠左，符合版本 A');
+        assert.ok(layout.slack < 1, '分支消息头部也不为短名字保留空位');
+        assert.equal(layout.lineHeight, '1px'); assert.equal(layout.lineMargin, '0px');
+    }
 }
 async function verify(page, url, viewport) {
     const errors = [];

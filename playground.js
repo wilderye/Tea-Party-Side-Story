@@ -1,6 +1,6 @@
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
-import { playRequestMessages } from './play-message-context.js';
+import { playRequestMessages, playMessageIsPending } from './play-message-context.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
@@ -109,6 +109,15 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function assertIdleChat(id) {
         if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
         if (hasRoundJob(id)) throw new PlaygroundError('busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
+    }
+    async function changeChatMessages(id, messageIds, operation, run) {
+        if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+        const ownJobs = [...jobs.values()].filter(job => (job.round?.id ?? job.requestedRoundId) === id)
+            .map(job => ({ messageId: job.messageId ?? job.round?.initialAssistantId, resultId: job.resultId, replaceResultId: job.replaceResultId }));
+        if (messageIds.some(messageId => playMessageIsPending({ id: messageId }, ownJobs))) {
+            throw new PlaygroundError('busy', '所选消息正在生成或尚未保存，请结束并保存后再操作。');
+        }
+        return withLiveChat(await historyAction(operation, run, true));
     }
     function notify(job) {
         for (const listener of listeners) {
@@ -356,20 +365,17 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             return historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId, options));
         },
         renameChat(id, name, revision) {
-            assertIdleChat(id);
+            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             return historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true);
         },
         setMessagesHidden(id, messageIds, hidden, revision) {
-            assertIdleChat(id);
-            return historyAction('修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, revision), true);
+            return changeChatMessages(id, messageIds, '修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, revision));
         },
         editMessage(id, messageId, update) {
-            assertIdleChat(id);
-            return historyAction('保存聊天消息修改', () => history.editMessage(id, messageId, update), true);
+            return changeChatMessages(id, [messageId], '保存聊天消息修改', () => history.editMessage(id, messageId, update));
         },
         removeMessage(id, messageId, revision) {
-            assertIdleChat(id);
-            return historyAction('删除聊天消息', () => history.removeMessage(id, messageId, revision), true);
+            return changeChatMessages(id, [messageId], '删除聊天消息', () => history.removeMessage(id, messageId, revision));
         },
         truncateChat(id, messageId, revision) {
             assertIdleChat(id);

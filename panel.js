@@ -31,6 +31,7 @@ function createMobileNavigation(panel, media) {
     let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0;
     const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
     const isReading = () => media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
+    const isEditingMessage = () => !!panel.querySelector('.play-reading-area .play-edit-form:not([hidden] *)');
     function paint() {
         paintFrame = 0;
         if (!slot) return;
@@ -53,7 +54,7 @@ function createMobileNavigation(panel, media) {
     }
     function readingArea(target) {
         if (!isReading() || !(target instanceof Element)) return null;
-        if (scope === 'play' && panel.querySelector('.play-page.is-message-editing')) return null;
+        if (scope === 'play' && isEditingMessage()) return null;
         if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form')) return null;
         const area = target.closest('.tea-list, .play-feed, .play-people');
         return area && panel.contains(area) && area.getClientRects().length
@@ -145,7 +146,8 @@ function createMobileNavigation(panel, media) {
         // The history view asks how much of its fixed viewport is covered.
         // It still owns paragraph capture/restoration and history persistence.
         getReadingInset() {
-            return isReading() && scope === 'play' ? height - paintedOffset : 0;
+            if (!isReading() || scope !== 'play') return 0;
+            return isEditingMessage() ? (heading?.offsetHeight ?? 0) : height - paintedOffset;
         },
         ignoreScroll(area) {
             scrollTops.set(area, scrollPosition(area));

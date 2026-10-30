@@ -6,7 +6,7 @@ import { playRoundDepth } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, mergePlayCharacters } from './play-character-picker.js';
-import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu } from './play-message-ui.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
@@ -80,7 +80,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
     const positions = new Map(), selections = new Map(), drafts = new Map();
     let characters = [], selected = null, current = null, currentError = '', root, visible = false, loaded = false, historyLoad = null;
-    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, resultMenu, startingRequest, latestRequest, pendingReveal, storageFailed = false;
+    let refreshId = 0, saveTimer, layoutFrame, streamFrame = 0, activationFrame, activationTimer, startingRequest, latestRequest, pendingReveal, storageFailed = false;
+    const resultMenu = createPlayResultMenu();
     let browsing = null, lastMobile = mobile.matches;
     let inputSizingFrame, inputComposing = false;
     let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
@@ -175,7 +176,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.userHead.querySelector('.play-message-avatar').replaceWith(avatar(identity, 'play-message-avatar', 'persona'));
             view.user.setAttribute('aria-label', `${identity.name} 发送的小剧场提示词`);
         }
-        const tools = view.userEditor ? [view.userEditor.actions] : [view.userFavorite, view.edit, view.removePrompt, view.userMore];
+        const tools = view.userEditor ? [] : [view.userFavorite, view.edit, view.removePrompt, view.userMore];
         if (view.userTools.lastChild !== tools.at(-1)) view.userTools.replaceChildren(...tools);
         if (round.prompt === null) {
             if (!view.userEditor) { view.userText.replaceChildren(); view.promptText = null; view.promptSourceSignature = null; }
@@ -457,10 +458,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 return;
             }
             restorePosition(positions.get(characterKey(selected)));
-            if (mobile.matches && hasActiveEditor()) {
-                const [id, view] = [...views].find(([, view]) => !view.item.hidden && (view.userEditor || [...view.outputs.values()].some(output => output.editor))) ?? [];
-                if (view) jumpToMessage(id, view.userEditor ? 'user' : 'assistant');
-            }
             restoringPosition = false;
             rememberPosition(true, false);
         });
@@ -483,9 +480,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (nativeInputSizing && cachedPosition?.key === characterKey(selected) && cachedPosition.feedHeight !== feed.clientHeight) return;
         const moved = cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2;
         if (moved && !programmatic && !restoringPosition) { pendingReveal = null; latestRequest = null; }
-        // A scroll event queued before opening the menu may arrive afterwards.
-        // Only dismiss it if the content has moved since the menu was positioned.
-        if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
         rememberPosition(true, false); updateJump();
         if (moved && !programmatic && !restoringPosition && feed.scrollHeight > feed.clientHeight) {
             if (feed.scrollTop < 120) void loadEarlierHistory();
@@ -537,7 +531,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function updateControls() {
         const editing = mobile.matches && hasActiveEditor();
         inputRow.hidden = editing || !canWrite(); compose.classList.toggle('is-readonly', inputRow.hidden);
-        page.classList.toggle('is-message-editing', editing);
         compose.hidden = editing || (inputRow.hidden && contextLine.hidden);
         updateSendControl();
         const multipleActive = playground.getStates().filter(job => activePhases.has(job.phase)).length > 1;
@@ -718,7 +711,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function hasActiveEditor() {
         return [...views].some(([id, view]) => !view.item.hidden && isEditing(id));
     }
-    const readingInset = () => page.classList.contains('is-message-editing') ? 0 : getReadingInset();
+    const readingInset = getReadingInset;
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
@@ -864,7 +857,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
-        const tools = output.editor ? [output.editor.actions] : [view.branch, view.prompt, view.removeReply, view.favorite, view.editReply, view.replyMore];
+        const tools = output.editor ? [] : [view.branch, view.prompt, view.removeReply, view.favorite, view.editReply, view.replyMore];
         if (view.replyTools.lastChild !== tools.at(-1)) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id);
         const depth = playRoundDepth(round);
@@ -1036,65 +1029,14 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function showResults(id) {
         const round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
-        if (resultMenu?.roundId === id) { closeResults(); return; }
-        closeResults(false);
-        const opener = views.get(id).count, menu = element('div', undefined, 'play-result-menu');
-        menu.id = 'play-result-menu'; menu.setAttribute('role', 'listbox'); menu.setAttribute('aria-label', '生成结果');
-        round.results.forEach((result, index) => {
-            const option = textButton('', () => changeResult(id, 0, result.id)); option.className = 'play-result-option';
-            const selected = selectedResult(round).id === result.id;
-            option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
-            const copy = element('span', undefined, 'play-result-option-copy');
-            const preview = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', playRoundDepth(round)) ?? result.text;
-            copy.append(element('span', playTextPreview(preview) || playResultStatusText[result.status] || '内容已隐藏', 'play-result-opening'),
-                element('time', messageTime(result.startedAt), 'play-result-time'));
-            const check = glyph('check'); check.classList.add('play-result-check');
-            option.append(element('span', pad(index + 1), 'play-result-number'), copy, check); menu.append(option);
-        });
-        const dismiss = event => { if (!menu.contains(event.target) && !opener.contains(event.target)) closeResults(false); };
-        const resize = () => closeResults(false);
-        resultMenu = { menu, opener, roundId: id, dismiss, resize, scrollTop: feed.scrollTop };
-        root.append(menu); root.addEventListener('pointerdown', dismiss); window.addEventListener('resize', resize);
-        opener.setAttribute('aria-controls', menu.id); opener.setAttribute('aria-expanded', 'true');
-        // Phones align both menu edges with the reply, rather than shifting a
-        // desktop-width popup from the page number until it fits the screen.
-        const bounds = root.getBoundingClientRect(), area = readingArea.getBoundingClientRect(), anchor = opener.getBoundingClientRect();
-        const inset = 12, gap = 8, alignment = mobile.matches ? views.get(id).results.getBoundingClientRect() : anchor;
-        if (mobile.matches) menu.style.width = `${Math.min(alignment.width, bounds.width - inset * 2)}px`;
-        const above = Math.max(0, anchor.top - area.top - gap - inset), below = Math.max(0, area.bottom - anchor.bottom - gap - inset);
-        const upwards = below < Math.min(menu.scrollHeight, 340) && above > below;
-        const room = Math.min(340, upwards ? above : below), rowHeight = menu.firstElementChild.getBoundingClientRect().height;
-        const style = getComputedStyle(menu), paddingTop = parseFloat(style.paddingTop), paddingBottom = parseFloat(style.paddingBottom);
-        // Start with complete rows, including equal padding at both ends.
-        const rows = Math.max(1, Math.floor((room - paddingTop - paddingBottom) / rowHeight));
-        menu.style.maxHeight = `${Math.min(room, rows * rowHeight + paddingTop + paddingBottom)}px`;
-        menu.style.left = `${Math.max(inset, Math.min(alignment.left - bounds.left, bounds.width - menu.offsetWidth - inset))}px`;
-        menu.style.top = `${upwards ? anchor.top - bounds.top - gap - menu.offsetHeight : anchor.bottom - bounds.top + gap}px`;
-        const options = [...menu.children], chosen = menu.querySelector('[aria-selected=true]');
-        const focusOption = option => {
-            for (const node of options) node.tabIndex = node === option ? 0 : -1;
-            option.focus({ preventScroll: true });
-            if (option.offsetTop - paddingTop < menu.scrollTop) menu.scrollTop = option.offsetTop - paddingTop;
-            else if (option.offsetTop + option.offsetHeight + paddingBottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = option.offsetTop + option.offsetHeight + paddingBottom - menu.clientHeight;
-        };
-        menu.addEventListener('keydown', event => {
-            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeResults(); }
-            else if (event.key === 'Tab') closeResults();
-            else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-                event.preventDefault();
-                const index = options.indexOf(document.activeElement), next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : index + (event.key === 'ArrowDown' ? 1 : -1);
-                focusOption(options[Math.max(0, Math.min(options.length - 1, next))]);
-            }
-        });
-        focusOption(chosen);
+        resultMenu.toggle({ key: id, root, readingArea, feed, opener: views.get(id).count, alignment: views.get(id).results,
+            selectedId: selectedResult(round).id,
+            entries: round.results.map(result => {
+                const preview = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', playRoundDepth(round)) ?? result.text;
+                return { id: result.id, text: playTextPreview(preview) || playResultStatusText[result.status] || '内容已隐藏', time: messageTime(result.startedAt) };
+            }), onSelect: resultId => changeResult(id, 0, resultId) });
     }
-    function closeResults(restore = true) {
-        if (!resultMenu) return;
-        const { menu, opener, dismiss, resize } = resultMenu; resultMenu = null;
-        menu.remove(); root.removeEventListener('pointerdown', dismiss); window.removeEventListener('resize', resize);
-        opener.setAttribute('aria-expanded', 'false'); opener.removeAttribute('aria-controls');
-        if (restore && opener.isConnected) opener.focus({ preventScroll: true });
-    }
+    function closeResults(restore = true) { resultMenu.close(restore); }
     function showReadError(message) {
         readError.replaceChildren(element('span', message), textButton('重新读取', () => void refresh())); readError.hidden = false;
     }

@@ -6,6 +6,8 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     body.setAttribute('role', 'group'); body.setAttribute('aria-label', title === undefined ? `编辑${label}` : '编辑收藏');
     const input = element('textarea'); input.value = text; input.spellcheck = false; input.rows = 2;
     input.setAttribute('aria-label', label);
+    const nativeSizing = autoGrow && CSS.supports('field-sizing', 'content');
+    body.classList.toggle('is-native-sized', nativeSizing);
     const titleInput = title === undefined ? null : element('input', undefined, 'play-edit-title');
     if (titleInput) {
         titleInput.type = 'text'; titleInput.value = title; titleInput.maxLength = 100;
@@ -20,11 +22,11 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
         input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`;
         input.scrollTop = scroll;
     }
-    const observer = autoGrow ? new ResizeObserver(() => {
+    const observer = autoGrow && !nativeSizing ? new ResizeObserver(() => {
         if (input.clientWidth && input.clientWidth !== width) { width = input.clientWidth; resize(); }
     }) : null;
     observer?.observe(body);
-    if (autoGrow) input.addEventListener('input', resize);
+    if (autoGrow && !nativeSizing) input.addEventListener('input', resize);
     const editor = { body, actions, input, titleInput, saving: false, dispose: () => observer?.disconnect() };
     const cancel = iconButton('close', '取消', onCancel);
     const save = iconButton('check', '保存', async () => {
@@ -40,6 +42,8 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
             save.setAttribute('aria-busy', 'false'); save.title = '保存'; save.replaceChildren(glyph('check'));
         }
     });
-    save.classList.add('play-edit-save'); actions.append(save, cancel); body.append(input, error);
+    save.classList.add('play-edit-save'); actions.append(save, cancel);
+    if (title === undefined) body.append(actions);
+    body.append(input, error);
     return editor;
 }

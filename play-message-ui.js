@@ -77,6 +77,75 @@ export function updatePlayReplyCount(count, index, total) {
     count.setAttribute('aria-label', label); count.title = '选择历史结果';
 }
 
+/** Shared result-list presentation, placement and keyboard interaction. */
+export function createPlayResultMenu() {
+    let current;
+    function close(restore = true) {
+        if (!current) return;
+        const { menu, opener, root, dismiss, resize, scroll } = current;
+        current = null; menu.remove(); root.removeEventListener('pointerdown', dismiss);
+        window.removeEventListener('resize', resize); scroll.feed.removeEventListener('scroll', scroll.dismiss);
+        opener.setAttribute('aria-expanded', 'false'); opener.removeAttribute('aria-controls');
+        if (restore && opener.isConnected) opener.focus({ preventScroll: true });
+    }
+    function toggle({ key, root, readingArea, feed, opener, alignment = opener, entries, selectedId, label = '生成结果', onSelect }) {
+        if (current?.key === key) { close(); return; }
+        close(false);
+        const menu = element('div', undefined, 'play-result-menu');
+        menu.id = 'play-result-menu'; menu.setAttribute('role', 'listbox'); menu.setAttribute('aria-label', label);
+        for (const [index, entry] of entries.entries()) {
+            const option = textButton('', () => { close(); onSelect(entry.id); }); option.className = 'play-result-option';
+            const selected = entry.id === selectedId;
+            option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
+            const copy = element('span', undefined, 'play-result-option-copy');
+            copy.append(element('span', entry.text || '无正文', 'play-result-opening'), element('time', entry.time, 'play-result-time'));
+            const check = glyph('check'); check.classList.add('play-result-check');
+            option.append(element('span', String(index + 1).padStart(2, '0'), 'play-result-number'), copy, check); menu.append(option);
+        }
+        if (!menu.children.length) return;
+        const dismiss = event => { if (!menu.contains(event.target) && !opener.contains(event.target)) close(false); };
+        const resize = () => close(false), scrollTop = feed.scrollTop;
+        const scroll = { feed, dismiss: () => { if (feed.scrollTop !== scrollTop) close(false); } };
+        current = { key, menu, opener, root, dismiss, resize, scroll };
+        root.append(menu); root.addEventListener('pointerdown', dismiss); window.addEventListener('resize', resize);
+        feed.addEventListener('scroll', scroll.dismiss, { passive: true });
+        opener.setAttribute('aria-controls', menu.id); opener.setAttribute('aria-expanded', 'true');
+        const mobile = matchMedia('(max-width: 760px)').matches;
+        const bounds = root.getBoundingClientRect(), area = readingArea.getBoundingClientRect(), anchor = opener.getBoundingClientRect();
+        const inset = 12, gap = 8, align = (mobile ? alignment : opener).getBoundingClientRect();
+        if (mobile) menu.style.width = `${Math.min(align.width, bounds.width - inset * 2)}px`;
+        const above = Math.max(0, anchor.top - area.top - gap - inset), below = Math.max(0, area.bottom - anchor.bottom - gap - inset);
+        const upwards = below < Math.min(menu.scrollHeight, 340) && above > below;
+        const room = Math.min(340, upwards ? above : below), rowHeight = menu.firstElementChild.getBoundingClientRect().height;
+        const style = getComputedStyle(menu), paddingTop = parseFloat(style.paddingTop), paddingBottom = parseFloat(style.paddingBottom);
+        const rows = Math.max(1, Math.floor((room - paddingTop - paddingBottom) / rowHeight));
+        menu.style.maxHeight = `${Math.min(room, rows * rowHeight + paddingTop + paddingBottom)}px`;
+        menu.style.left = `${Math.max(inset, Math.min(align.left - bounds.left, bounds.width - menu.offsetWidth - inset))}px`;
+        menu.style.top = `${upwards ? anchor.top - bounds.top - gap - menu.offsetHeight : anchor.bottom - bounds.top + gap}px`;
+        const options = [...menu.children];
+        const focusOption = option => {
+            for (const node of options) node.tabIndex = node === option ? 0 : -1;
+            option.focus({ preventScroll: true });
+            if (option.offsetTop - paddingTop < menu.scrollTop) menu.scrollTop = option.offsetTop - paddingTop;
+            else if (option.offsetTop + option.offsetHeight + paddingBottom > menu.scrollTop + menu.clientHeight) {
+                menu.scrollTop = option.offsetTop + option.offsetHeight + paddingBottom - menu.clientHeight;
+            }
+        };
+        menu.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+            else if (event.key === 'Tab') close();
+            else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+                event.preventDefault();
+                const index = options.indexOf(document.activeElement), next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+                    : index + (event.key === 'ArrowDown' ? 1 : -1);
+                focusOption(options[Math.max(0, Math.min(options.length - 1, next))]);
+            }
+        });
+        focusOption(menu.querySelector('[aria-selected=true]') ?? options[0]);
+    }
+    return { toggle, close };
+}
+
 /** Keep notices in the reply body, using the existing playground behavior. */
 export function renderPlayReply(output, result, { displayText, job, error, anchor, editing = false }) {
     const pendingSave = job?.resultId === result.id && (job.phase === 'save-failed' || job.unsaved && job.phase === 'saving');

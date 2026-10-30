@@ -187,16 +187,62 @@ test('版本选择只写元数据；编辑后只写改变的正文，消息删�
     assert.deepEqual(restarted.startMessageIds, restarted.messages.map(message => message.id));
 });
 
-test('同一聊天生成期间拒绝发送编辑删除；仍可从前面已保存层创建分支', async () => {
+test('同一聊天生成期间可修改旧消息；保护生成目标、批量删除和重复发送', async () => {
     const f = memoryFiles(), initial = await seed(f), resultId = randomUUID();
     const chat = await f.store.begin({ roundId: initial.id, chatMode: true, operation: 'send', prompt: '新消息',
         character: characterA, context: contextA, resultId, startedAt: time(10) });
-    await assert.rejects(f.store.editMessage(chat.id, chat.messages[0].id, { text: '禁止修改', expectedText: chat.messages[0].text }), { code: 'chat_busy' });
+    await f.store.editMessage(chat.id, chat.messages[0].id, { text: '旧用户消息已修改', expectedText: chat.messages[0].text });
+    await f.store.editMessage(chat.id, chat.messages[1].id, { text: '旧回复已修改', expectedText: '开头一', resultId: chat.messages[1].selectedResultId });
+    await f.store.setMessagesHidden(chat.id, [chat.messages[1].id], true);
+    await f.store.renameChat(chat.id, '生成时改名');
+    await assert.rejects(f.store.editMessage(chat.id, chat.messages[3].id, { text: '禁止修改', expectedText: '', resultId }), { code: 'chat_busy' });
+    await assert.rejects(f.store.removeMessage(chat.id, chat.messages[3].id), { code: 'chat_busy' });
+    await assert.rejects(f.store.setMessagesHidden(chat.id, [chat.messages[0].id, chat.messages[3].id], true), { code: 'chat_busy' });
     await assert.rejects(f.store.truncateChat(chat.id, chat.messages[0].id), { code: 'chat_busy' });
     await assert.rejects(f.store.begin({ roundId: chat.id, chatMode: true, operation: 'send', prompt: '重复发送',
         character: characterA, context: contextA, resultId: randomUUID(), startedAt: time(11) }), { code: 'chat_busy' });
     assert.equal((await f.store.createBranch(chat.id, chat.messages[1].id)).messages.length, 2);
     await assert.rejects(f.store.createBranch(chat.id, chat.messages[3].id), { code: 'chat_busy' });
+    await f.store.removeMessage(chat.id, chat.messages[2].id);
+    await f.store.saveResult(chat.id, resultId, { text: '生成完成', status: 'complete', finishedAt: time(12) });
+    const current = await f.store.getChat(chat.id);
+    assert.equal(current.messages[0].text, '旧用户消息已修改');
+    assert.equal(current.messages[1].results[0].text, '旧回复已修改');
+    assert.equal(current.messages[1].hidden, true);
+    assert.equal(current.messages.at(-1).results[0].text, '生成完成');
+    assert.equal(current.name, '生成时改名');
+    assert.equal(current.messages.length, 3);
+});
+
+test('生成服务允许旧消息编辑、显隐和单条删除；当前请求不变，下次请求读取修改', async () => {
+    const f = memoryFiles(), chat = await seed(f), sent = deferred(), done = deferred(), requests = [];
+    let stream;
+    const service = createPlayground({ history: f.store, isCurrent: () => true,
+        captureEnvironment: () => ({ character: characterA, context: contextA, independent: true }),
+        prepareRequest: async options => {
+            requests.push(options);
+            return { send: async ({ onText }) => { stream = onText; onText('正在生成'); sent.resolve(); return done.promise; } };
+        } });
+    const target = { character: characterA, characterId: chat.characterId };
+    const task = service.sendChat(chat.id, { ...target, prompt: '当前新消息' });
+    await sent.promise;
+    const current = await service.getChat(chat.id), latest = current.messages.at(-1);
+    await service.editMessage(chat.id, current.messages[0].id, { text: '改过的用户消息', expectedText: current.messages[0].text });
+    await service.editMessage(chat.id, current.messages[1].id, { text: '改过的旧回复', expectedText: '开头一', resultId: current.messages[1].selectedResultId });
+    await service.setMessagesHidden(chat.id, [current.messages[0].id], true);
+    await service.setMessagesHidden(chat.id, [current.messages[0].id], false);
+    await service.removeMessage(chat.id, current.messages[2].id);
+    stream('正在生成的后续文字');
+    assert.equal((await service.getChat(chat.id)).messages.at(-1).results[0].text, '正在生成的后续文字');
+    await assert.rejects(service.editMessage(chat.id, latest.id, { text: '禁止修改', expectedText: '正在生成', resultId: latest.selectedResultId }), { code: 'busy' });
+    await assert.rejects(service.removeMessage(chat.id, latest.id), { code: 'busy' });
+    await assert.rejects(service.setMessagesHidden(chat.id, [latest.id], true), { code: 'busy' });
+    assert.deepEqual(requests[0].environment.branchHistory.map(message => message.text), ['雨夜重逢的完整提示词', '开头一']);
+    done.resolve('生成最终文字'); await task;
+    const finished = await service.getChat(chat.id);
+    assert.deepEqual(finished.messages.map(message => message.text ?? message.results[0].text), ['改过的用户消息', '改过的旧回复', '生成最终文字']);
+    await service.sendChat(chat.id, { ...target, prompt: '下一轮' });
+    assert.deepEqual(requests[1].environment.branchHistory.map(message => message.text), ['改过的用户消息', '改过的旧回复', '生成最终文字']);
 });
 
 test('游玩起始对子生成多个版本时可切换查看；分支生成和已有后续的起始楼层仍不可切换', async () => {

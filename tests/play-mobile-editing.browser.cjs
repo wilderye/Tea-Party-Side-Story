@@ -45,24 +45,12 @@ async function setKeyboard(page, height = null) {
     await settle(page);
 }
 
-async function verifyGeometry(panel, editor, actions, mobile) {
-    const feed = await panel.locator('.play-feed').boundingBox(), box = await editor.boundingBox();
-    if (mobile) {
-        const tabs = panel.locator('.play-catalog:not([hidden]) .tea-mobile-tabs');
-        const tabBox = await tabs.isVisible() ? await tabs.boundingBox() : null;
-        const inset = tabBox ? Math.max(0, tabBox.y + tabBox.height - feed.y) : 0;
-        feed.y += inset; feed.height -= inset;
-    }
-    if (mobile) {
-        const header = await actions.boundingBox();
-        assert.ok(box.height >= Math.max(80, feed.height - header.height - 60), `手机编辑框使用居中头部下面的剩余空间：${JSON.stringify({ feed, box, header })}`);
-        assert.ok(box.y >= feed.y && box.y + box.height <= feed.y + feed.height + 1, '整个编辑框都在可见正文区域内，长文末尾不会藏到键盘后面');
-    } else {
-        assert.ok(box.height < 150, '桌面短文字保持原来的紧凑高度');
-    }
+async function verifyGeometry(panel, editor, actions) {
+    const feed = await panel.locator('.play-feed').boundingBox(), box = await editor.boundingBox(), form = await editor.locator('..').boundingBox();
+    assert.ok(box.height <= await editor.evaluate(node => parseFloat(getComputedStyle(node).maxHeight)) + 1, '编辑框遵循酒馆的高度上限');
     for (const name of ['保存', '取消']) {
         const action = await actions.getByRole('button', { name, exact: true }).boundingBox();
-        assert.ok(action.y >= feed.y && action.y + action.height <= box.y + 1 && action.y + action.height <= feed.y + feed.height, `${name}完整露在编辑框上方：${JSON.stringify({ feed, box, action })}`);
+        assert.ok(action.y >= form.y && action.y + action.height <= box.y + 1 && action.x >= box.x && action.x + action.width <= box.x + box.width, `${name}在编辑框右上角：${JSON.stringify({ feed, box, action })}`);
     }
 }
 
@@ -94,54 +82,68 @@ async function verifyEditing(page, url, viewport) {
     await composer.fill(draft);
     const mobile = viewport.width <= 760, keyboardHeight = Math.min(430, viewport.height - 180);
     for (const [role, button, label] of [['user', '修改提示词', '提示词原文'], ['assistant', '编辑回复原文', '回复原文']]) {
-        const actions = record.locator(`.play-${role}-meta`);
+        const actions = record.locator(`.play-${role}-message .play-edit-actions`);
         const originalText = role === 'user' ? original.round.prompt : original.round.results[0].text;
         await record.getByRole('button', { name: button, exact: true }).click(); await settle(page);
         const editor = record.getByRole('textbox', { name: label, exact: true });
         assert.equal(await editor.inputValue(), originalText);
         assert.equal(await panel.locator('.play-compose').isVisible(), !mobile, '手机编辑期间隐藏底部输入区域，桌面保持原布局');
         assert.equal(await composer.inputValue(), draft, '隐藏输入框保留原草稿');
-        // The reply contains long text; short content must still keep the mobile editor large.
+        // Both layouts follow Tavern: short messages keep a compact editor.
         await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
-        await verifyGeometry(panel, editor, actions, mobile);
+        assert.ok((await editor.boundingBox()).height < 150, '手机和桌面短文编辑框都保持紧凑');
+        await verifyGeometry(panel, editor, actions);
+        await screenshot(page, `message-edit-short-${role}-${viewport.width}.png`);
         const longText = Array.from({ length: 100 }, (_, index) => `第 ${index + 1} 段：窗外的雨声渐渐停下，茶壶里的水仍在轻轻沸腾。`).join('\n\n');
         await editor.fill(longText); await settle(page);
         assert.ok(await editor.evaluate(node => node.scrollHeight > node.clientHeight), '长文在编辑框内部滚动');
+        const transcript = panel.locator('.play-feed');
+        const scrollGeometry = await transcript.evaluate(node => ({ top: node.scrollTop, max: node.scrollHeight - node.clientHeight }));
+        const delta = scrollGeometry.top + 50 <= scrollGeometry.max ? 50 : -50;
+        const headBefore = await actions.boundingBox();
+        await transcript.evaluate((node, delta) => { node.scrollTop += delta; }, delta); await settle(page);
+        assert.ok(Math.abs(headBefore.y - (await actions.boundingBox()).y - delta) < 2, '正文滚动会带动整条消息头部，不把消息头部粘在原处');
+        const scrollBeforeInput = await transcript.evaluate(node => node.scrollTop);
+        // Dispatch input without Playwright scrolling the offscreen field into view.
+        await editor.evaluate(node => { node.value += '\n追加一段。'; node.dispatchEvent(new Event('input', { bubbles: true })); }); await settle(page);
+        assert.ok(Math.abs(await transcript.evaluate(node => node.scrollTop) - scrollBeforeInput) < 2, '修改文字不强行拉回正在编辑的消息开头');
         if (mobile) {
-            await verifyGeometry(panel, editor, actions, true);
+            await verifyGeometry(panel, editor, actions);
             const editorHeightBeforeKeyboard = (await editor.boundingBox()).height;
-            assert.equal(await panel.locator('.play-catalog').isVisible(), viewport.height > 560, '空间充足时保留导航，短屏编辑时让出导航占用的空间');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '编辑时隐藏导航');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-brand').isVisible(), true, '编辑时保留茶话会顶栏');
             await screenshot(page, `message-edit-${role}-${viewport.width}.png`);
             // iOS and modern Android can resize only visualViewport, including panning.
             await setKeyboard(page, keyboardHeight);
             assert.equal((await panel.boundingBox()).height, keyboardHeight, '模拟键盘后面板跟随可见屏幕缩小');
-            assert.equal(await panel.locator('.play-catalog').isVisible(), false, '键盘上方空间不足时暂时收起标题和页面标签');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '键盘出现后保持同一条隐藏导航规则');
+            assert.ok(Math.abs((await editor.boundingBox()).height - editorHeightBeforeKeyboard) <= 1, '仅 visualViewport 缩小时不根据面板剩余空间调整编辑框');
             await typeAtEnd(editor); await settle(page);
-            await verifyGeometry(panel, editor, actions, true);
+            await verifyGeometry(panel, editor, actions);
             await screenshot(page, `message-edit-keyboard-${role}-${viewport.width}.png`);
             await setKeyboard(page);
             assert.ok(Math.abs((await editor.boundingBox()).height - editorHeightBeforeKeyboard) <= 1, '收起键盘后恢复编辑框高度');
-            assert.equal(await panel.locator('.play-catalog').isVisible(), viewport.height > 560, '收起键盘后按可见空间恢复导航');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '收起键盘仍在编辑时继续隐藏导航');
             // Some Android browsers resize the layout viewport as well.
             await page.setViewportSize({ width: viewport.width, height: keyboardHeight }); await settle(page);
             await typeAtEnd(editor); await settle(page);
-            await verifyGeometry(panel, editor, actions, true);
+            await verifyGeometry(panel, editor, actions);
             await screenshot(page, `message-edit-resized-${role}-${viewport.width}.png`);
             await editor.evaluate(node => { node.scrollTop = node.scrollHeight; });
             await panel.locator('.play-feed').evaluate(node => { node.scrollTop += 50; }); await settle(page);
             const feed = await panel.locator('.play-feed').boundingBox();
             for (const name of ['保存', '取消']) {
                 const box = await actions.getByRole('button', { name, exact: true }).boundingBox();
-                assert.ok(box.y >= feed.y && box.y + box.height <= feed.y + feed.height, '滚动后保存和取消仍留在可见区域');
+                assert.ok(box.y >= (await editor.locator('..').boundingBox()).y && box.y + box.height <= (await editor.boundingBox()).y + 1, '滚动后保存和取消随整条消息移动，仍在编辑框右上角');
             }
             await page.setViewportSize(viewport); await settle(page);
         } else {
-            assert.ok((await editor.boundingBox()).height <= 420, '桌面长文仍使用原有高度上限');
+            assert.ok((await editor.boundingBox()).height <= viewport.height * .75 + 1, '桌面长文使用酒馆的 75dvh 高度上限');
         }
         if (mobile) await setKeyboard(page, keyboardHeight);
         await actions.getByRole('button', { name: '取消', exact: true }).click(); await settle(page);
         assert.equal(await panel.locator('.play-compose').isVisible(), true, '取消后恢复底部输入区域');
-        assert.equal(await panel.locator('.play-catalog').isVisible(), true, '取消后恢复标题和页面标签');
+        if (mobile) assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '取消后恢复导航');
         assert.equal(await composer.inputValue(), draft);
         assert.equal(await page.evaluate(async ({ id, role }) => {
             const round = await runtime.getRound(id);
@@ -159,14 +161,14 @@ async function verifyEditing(page, url, viewport) {
         assert.equal(await editor.inputValue(), savedText, '保存失败保留正在修改的文字');
         assert.equal(await panel.locator('.play-compose').isVisible(), !mobile, '保存失败继续保持编辑状态');
         if (mobile) {
-            const errorBox = await record.getByRole('alert').boundingBox(), feedBox = await panel.locator('.play-feed').boundingBox();
-            assert.ok(errorBox.y >= feedBox.y && errorBox.y + errorBox.height <= feedBox.y + feedBox.height + 1, '键盘出现时保存失败的原因也能完整看到');
+            const errorBox = await record.getByRole('alert').boundingBox();
+            assert.ok(errorBox.height > 0, '保存失败显示原因，正文可以滚动查看');
         }
         await page.evaluate(() => { window.failSave = false; });
         await actions.getByRole('button', { name: '保存', exact: true }).click();
         await editor.waitFor({ state: 'detached' }); await settle(page);
         assert.equal(await panel.locator('.play-compose').isVisible(), true, '保存后恢复底部输入区域');
-        assert.equal(await panel.locator('.play-catalog').isVisible(), true, '保存后恢复标题和页面标签');
+        if (mobile) assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '保存后恢复导航');
         assert.equal(await composer.inputValue(), draft, '保存后恢复同一份草稿');
         assert.equal(await page.evaluate(async ({ id, role }) => {
             const round = await runtime.getRound(id);
@@ -193,7 +195,7 @@ async function verifyEditing(page, url, viewport) {
                 const url = `http://127.0.0.1:${server.address().port}/`;
                 await verifyEditing(page, url, viewport);
                 assert.deepEqual(errors, [], '没有浏览器错误或警告');
-                console.log(JSON.stringify({ url, viewport, checks: '大编辑框、两种键盘缩屏与偏移、收起和恢复导航、长文末尾输入可见、固定保存/取消、草稿恢复、取消、保存失败重试、桌面高度保持', errors }));
+                console.log(JSON.stringify({ url, viewport, checks: '酒馆编辑框高度、两种键盘缩屏与偏移、隐藏和恢复导航、长文末尾输入、保存/取消随消息滚动、草稿恢复、取消、保存失败重试', errors }));
             } finally { await context.close(); }
         }
     } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

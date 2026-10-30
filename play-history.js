@@ -1,6 +1,6 @@
 // The directory is committed after a complete round file. A failed upload
 // therefore never replaces a readable round with half of a new version.
-import { playMessageDepths } from './play-message-context.js';
+import { playMessageDepths, playMessageIsPending } from './play-message-context.js';
 
 export const PLAY_HISTORY_INDEX = 'teahouse-play-index.json';
 const idPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -628,18 +628,21 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         if (revision !== undefined && chat.revision !== revision) throw new PlayHistoryError('chat_conflict', '这条聊天已在其他窗口改变，请保留草稿并重新读取。');
     }
     function assertChatIdle(chat) {
-        if (chat.messages.some(message => message.results?.some(result => result.status === 'unfinished'))) {
+        assertMessagesIdle(chat.messages);
+    }
+    function assertMessagesIdle(messages) {
+        if (messages.some(message => playMessageIsPending(message))) {
             throw new PlayHistoryError('chat_busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
         }
     }
-    async function changeChat(id, expectedRevision, run, { playSelection = false, bodyStored = false } = {}) {
+    async function changeChat(id, expectedRevision, run, { playSelection = false, bodyStored = false, allowPending = false } = {}) {
         assert(isId(id));
         return serialize(async () => {
             const directory = await index();
             const chat = await readChatFromRow(directory.rounds.find(row => row.id === id), true, { bodyStored });
             assertChatRevision(chat, expectedRevision);
-            if (!playSelection) assertChatIdle(chat);
-            else if (!chat.startMessageIds.includes(chat.messages.at(-1)?.id)) {
+            if (!playSelection && !allowPending) assertChatIdle(chat);
+            else if (playSelection && !chat.startMessageIds.includes(chat.messages.at(-1)?.id)) {
                 throw new PlayHistoryError('message_not_last', '这层已有后续对话，请先创建分支再切换版本。');
             }
             const before = JSON.stringify(readPlayChat(chat, { bodyStored }));
@@ -771,7 +774,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 chat.name = name.trim();
                 const user = chat.messages.find(message => message.role === 'user');
                 if (!chat.name && !chat.origin?.title && user && user.text === undefined) user.text = await readBody(user.id, user.bodyRevision);
-            }, { bodyStored: true });
+            }, { bodyStored: true, allowPending: true });
         },
         editMessage(id, messageId, { text, resultId, expectedText }) {
             assert(isId(messageId) && isText(text) && typeof expectedText === 'string', '消息正文不能为空。');
@@ -779,10 +782,11 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 const message = chat.messages.find(message => message.id === messageId);
                 const target = message?.role === 'user' ? message : message?.results.find(result => result.id === resultId);
                 if (!target) throw new PlayHistoryError('message_missing', '这条消息已删除，请保留草稿并重新读取。');
+                assertMessagesIdle([message]);
                 if (target.text === text) return;
                 if (target.text !== expectedText) throw new PlayHistoryError('edit_conflict', '这条消息已在其他窗口修改，请保留草稿并重新读取。');
                 target.text = text; target.bodyRevision = uuid();
-            });
+            }, { allowPending: true });
         },
         setMessagesHidden(id, messageIds, hidden, expectedRevision) {
             assert(Array.isArray(messageIds) && messageIds.length > 0 && messageIds.every(isId)
@@ -791,15 +795,19 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             return changeChat(id, expectedRevision, chat => {
                 const messages = chat.messages.filter(message => targets.has(message.id));
                 if (messages.length !== targets.size) throw new PlayHistoryError('message_missing', '所选楼层已删除，请重新读取后核对范围。');
+                assertMessagesIdle(messages);
                 for (const message of messages) {
                     if (hidden) message.hidden = true;
                     else delete message.hidden;
                 }
-            }, { bodyStored: true });
+            }, { bodyStored: true, allowPending: true });
         },
         removeMessage(id, messageId, expectedRevision) {
             assert(isId(messageId));
-            return changeChat(id, expectedRevision, chat => { chat.messages = chat.messages.filter(message => message.id !== messageId); });
+            return changeChat(id, expectedRevision, chat => {
+                assertMessagesIdle(chat.messages.filter(message => message.id === messageId));
+                chat.messages = chat.messages.filter(message => message.id !== messageId);
+            }, { allowPending: true });
         },
         truncateChat(id, messageId, expectedRevision) {
             assert(isId(messageId));
