@@ -321,15 +321,15 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const head = element('header', undefined, `play-message-meta play-${message.role === 'user' ? 'user' : 'assistant'}-meta`);
         head.append(createCharacterAvatar(ctx, identity ?? { name: '角色', avatar: null }, 'play-message-avatar', message.role === 'user' ? 'persona' : 'avatar'));
         const heading = element('div', undefined, 'play-message-identity');
-        const speaker = element('span', undefined, 'play-message-speaker-row');
-        speaker.append(element('small', `#${index}`, 'play-floor-number'), element('strong', identity?.name ?? '角色', 'play-speaker'));
+        const details = element('span', undefined, 'play-message-detail-row');
+        const recent = playRecentTime(message.createdAt);
+        details.append(element('small', `#${index}`, 'play-floor-number'), element('time', `${recent.day} · ${recent.time}`, 'play-message-time'));
         if (message.hidden) {
             const mark = createPlayFloorIcon('ghost'); mark.classList.add('play-hidden-mark');
             mark.title = '已隐藏，不发送给模型'; mark.removeAttribute('aria-hidden'); mark.setAttribute('aria-label', mark.title); mark.setAttribute('role', 'img');
-            speaker.append(mark);
+            details.append(mark);
         }
-        heading.append(speaker);
-        const recent = playRecentTime(message.createdAt); heading.append(element('time', `${recent.day} · ${recent.time}`, 'play-message-time'));
+        heading.append(element('strong', identity?.name ?? '角色', 'play-speaker'), details);
         head.append(heading); return head;
     }
     function renderMessage(message) {

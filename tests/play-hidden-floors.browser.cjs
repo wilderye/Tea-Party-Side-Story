@@ -46,6 +46,29 @@ async function screenshot(page, name) {
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
+async function verifyFloorHeader(message, viewport) {
+    const layout = await message.locator('.play-message-meta').evaluate(node => {
+        const box = selector => node.querySelector(selector).getBoundingClientRect();
+        const name = box('.play-speaker'), floor = box('.play-floor-number'), time = box('.play-message-time');
+        const ghost = node.querySelector('.play-hidden-mark')?.getBoundingClientRect();
+        const identity = box('.play-message-identity'), tools = box('.play-header-actions');
+        const head = node.getBoundingClientRect();
+        const center = rect => (rect.top + rect.bottom) / 2;
+        return { belowName: floor.top >= name.bottom && time.top >= name.bottom && (!ghost || ghost.top >= name.bottom),
+            sameRow: Math.abs(center(floor) - center(time)) < 1 && (!ghost || Math.abs(center(time) - center(ghost)) < 1),
+            gap: time.left - floor.right, ghostGap: ghost ? ghost.left - time.right : null,
+            leftAligned: Math.abs(floor.left - name.left) < 1, rightAligned: Math.abs((ghost ?? time).right - name.right) < 1,
+            separate: tools.right <= identity.left || tools.left >= identity.right || tools.top >= identity.bottom,
+            inside: [name, floor, time, ghost, tools].filter(Boolean).every(rect => rect.left >= head.left - 1 && rect.right <= head.right + 1) };
+    });
+    assert.ok(layout.belowName && layout.sameRow, '楼层、时间和隐藏图标在名字下方的同一行');
+    assert.equal(layout.gap, 9);
+    if (layout.ghostGap !== null) assert.equal(layout.ghostGap, 9, '楼层、时间和隐藏图标用相同间距');
+    assert.ok(layout.separate, '名字与楼层信息不遮挡操作按钮');
+    assert.ok(layout.inside, '长名字和楼层信息也不越出消息头部');
+    if (viewport.width > 760) assert.ok(await message.evaluate(node => node.classList.contains('play-user-message'))
+        ? layout.rightAligned : layout.leftAligned, '电脑版用户信息靠右，AI 信息靠左，符合版本 A');
+}
 async function verify(page, url, viewport) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -64,14 +87,20 @@ async function verify(page, url, viewport) {
     const original = await page.evaluate(() => runtime.getChat(seed.a));
     assert.equal(await user.locator('.play-floor-number').innerText(), '#0');
     const userMore = user.getByRole('button', { name: '更多消息操作', exact: true });
+    const toolsBefore = await user.locator('.play-header-actions').boundingBox();
     if (await userMore.isVisible()) {
         assert.equal(await user.getByRole('button', { name: '修改用户消息', exact: true }).isVisible(), true);
         assert.equal(await user.getByRole('button', { name: '隐藏楼层', exact: true }).isVisible(), false);
         assert.equal(await user.getByRole('button', { name: '删除用户消息', exact: true }).isVisible(), false);
         await userMore.click();
     }
+    if (viewport.width > 760) {
+        const toolsAfter = await user.locator('.play-header-actions').boundingBox();
+        assert.ok(Math.abs(toolsBefore.x + toolsBefore.width - toolsAfter.x - toolsAfter.width) < 1, '分支消息的更多也靠右向左展开');
+    }
     await user.getByRole('button', { name: '隐藏楼层', exact: true }).click();
     await user.getByRole('img', { name: '已隐藏，不发送给模型' }).waitFor();
+    await verifyFloorHeader(user, viewport);
     if (viewport.width <= 760) {
         const layout = await user.locator('.play-message-meta').evaluate(node => {
             const box = selector => node.querySelector(selector).getBoundingClientRect();
@@ -79,10 +108,12 @@ async function verify(page, url, viewport) {
             const bounds = node.getBoundingClientRect(), center = (bounds.left + bounds.right) / 2;
             return { centered: [avatar, name, tools].every(item => Math.abs((item.left + item.right) / 2 - center) < 1),
                 stacked: avatar.bottom < name.top && name.bottom <= time.top && time.bottom < tools.top,
-                gap: time.left - floor.right, ghostGap: ghost.left - time.right };
+                gap: time.left - floor.right, ghostGap: ghost.left - time.right,
+                bodyGap: node.nextElementSibling.getBoundingClientRect().top - bounds.bottom };
         });
         assert.ok(layout.centered && layout.stacked, '分支手机头部的头像、名字、元信息和按钮分行居中');
         assert.equal(layout.gap, 9); assert.equal(layout.ghostGap, 9, '楼层、时间和小幽灵都用相同间距');
+        assert.ok(layout.bodyGap >= 8 && layout.bodyGap <= 12, '分支手机头部到正文也使用缩小后的间距');
     }
     assert.equal((await page.evaluate(() => runtime.getChat(seed.a))).messages[0].text, original.messages[0].text);
     assert.match(await ai.innerText(), /小剧场正文/);
@@ -109,6 +140,20 @@ async function verify(page, url, viewport) {
     assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     await screenshot(page, `hidden-manager-${viewport.width}.png`);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await verifyFloorHeader(ai, viewport);
+    await screenshot(page, `floor-header-a-${viewport.width}.png`);
+    for (const message of [user, ai]) {
+        const previous = await message.evaluate(node => {
+            const name = node.querySelector('.play-speaker'), floor = node.querySelector('.play-floor-number');
+            const previous = { name: name.textContent, floor: floor.textContent };
+            name.textContent = '在雨夜的旧剧院等待下一场故事的林间旅人'; floor.textContent = '#1024'; return previous;
+        });
+        await verifyFloorHeader(message, viewport);
+        await message.evaluate((node, previous) => {
+            node.querySelector('.play-speaker').textContent = previous.name;
+            node.querySelector('.play-floor-number').textContent = previous.floor;
+        }, previous);
+    }
     const more = ai.getByRole('button', { name: '更多回复操作', exact: true });
     if (await more.isVisible()) await more.click();
     await ai.getByRole('button', { name: '显示楼层', exact: true }).click();
@@ -177,6 +222,8 @@ async function verify(page, url, viewport) {
             window.testAppearance ??= createAppearance(document.querySelector('#teahouse-panel'));
             window.testAppearance.apply(theme === 'default' ? 'default' : 'tavern');
         }, theme);
+        await verifyFloorHeader(user, viewport);
+        await screenshot(page, `floor-header-a-${theme}-${viewport.width}.png`);
         await button('聊天操作').click(); await button('隐藏楼层管理').click(); await dialog.waitFor();
         const colors = await dialog.evaluate(node => {
             const styles = getComputedStyle(node), panel = getComputedStyle(document.querySelector('#teahouse-panel'));
@@ -202,7 +249,7 @@ async function verify(page, url, viewport) {
     const url = `http://127.0.0.1:${server.address().port}/`;
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     try {
-        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
+        for (const viewport of [{ width: 1332, height: 896 }, { width: 1024, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
             const context = await browser.newContext({ viewport });
             await verify(await context.newPage(), url, viewport); await context.close();
         }

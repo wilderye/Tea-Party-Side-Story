@@ -13,7 +13,7 @@ export function createPlayFloorIcon(name) {
     icon.setAttribute('aria-hidden', 'true'); return icon;
 }
 
-/** User messages and replies reveal their secondary buttons inline on phones. */
+/** User messages and replies reveal their secondary buttons inline on both layouts. */
 export function setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit, visibility, role = 'assistant' }) {
     tools.classList.add('play-reply-tools'); tools.id = `play-reply-tools-${++replyToolsId}`;
     const secondary = [branch, prompt, visibility, remove].filter(Boolean);

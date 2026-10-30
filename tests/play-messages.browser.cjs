@@ -68,13 +68,27 @@ async function verifyDeletion(page, url, viewport) {
         .filter(button => button.getClientRects().length).map(button => button.getAttribute('aria-label')));
     const more = reply.getByRole('button', { name: '更多回复操作', exact: true });
     const deleteReply = async () => { if (await more.isVisible()) await more.click(); await removeReply.click(); };
-    if (viewport.width <= 760) {
-        assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], '手机默认收起分支、提示词和删除');
-        await more.click(); await reply.locator('.play-header-actions').press('Escape');
-        assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], 'Esc 收起按钮');
-        await more.click(); await reply.locator('.play-results').click();
-        assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], '点击按钮区外面收起按钮');
-        await more.click();
+    assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], '两端默认只显示收藏、编辑和最右侧的更多');
+    const starStyle = await reply.locator('.tea-star').evaluate(node => ({ background: getComputedStyle(node).backgroundColor,
+        fill: getComputedStyle(node.querySelector('svg')).fill }));
+    assert.equal(starStyle.background, 'rgba(0, 0, 0, 0)', '已收藏只填充星星内部，不显示方块底色');
+    assert.notEqual(starStyle.fill, 'none');
+    await more.click(); await reply.locator('.play-header-actions').press('Escape');
+    assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], 'Esc 收起按钮');
+    assert.equal(await more.evaluate(node => document.activeElement === node), true, 'Esc 后焦点回到更多');
+    await more.click(); await reply.locator('.play-results').click();
+    assert.deepEqual(await visibleLabels(), ['取消收藏', '编辑回复原文', '更多回复操作'], '点击按钮区外面收起按钮');
+    await screenshot(page, `message-collapsed-${viewport.width}.png`);
+    for (const message of [user, reply]) {
+        const tools = message.locator('.play-header-actions'), toggle = tools.locator('.play-reply-more');
+        const before = await tools.boundingBox();
+        await toggle.click();
+        const after = await tools.boundingBox();
+        if (viewport.width > 760) {
+            assert.ok(Math.abs(before.x + before.width - after.x - after.width) < 1, '电脑版更多向左展开，操作区右边缘不移动');
+            assert.ok(after.x <= before.x, '新增操作向左展开；只有删除一项时替换更多的位置');
+        }
+        if (message === user) await tools.press('Escape');
     }
     const layout = await record.evaluate(node => {
         const header = node.querySelector('.play-assistant-meta'), buttons = [...header.querySelectorAll('button')].filter(button => button.getClientRects().length);
@@ -93,11 +107,15 @@ async function verifyDeletion(page, url, viewport) {
             sameRow: rects.every(rect => Math.abs(rect.top - rects[0].top) < 1),
             identityReadable: replyIdentity.width >= 103 && replyTime.right <= replyIdentity.right + 1 && (replyTools.left >= replyIdentity.right || replyTools.top >= replyIdentity.bottom),
             inside: rects.every(rect => rect.left >= area.left - 1 && rect.right <= area.right + 1 && rect.top >= area.top - 1 && rect.bottom <= area.bottom + 1),
+            bodyGap: box('.play-results').top - area.bottom,
             separate: rects.every((rect, index) => rects.slice(index + 1).every(other => rect.right <= other.left + 1
                 || other.right <= rect.left + 1 || rect.bottom <= other.top + 1 || other.bottom <= rect.top + 1)) };
     });
     assert.deepEqual(layout.labels, ['创建分支', '查看实际提示词', '删除 AI 消息', '取消收藏', '编辑回复原文']);
-    if (viewport.width <= 760) assert.equal(layout.centered && layout.stacked, true, '手机端头像、姓名和操作按钮分行居中');
+    if (viewport.width <= 760) {
+        assert.equal(layout.centered && layout.stacked, true, '手机端头像、姓名和操作按钮分行居中');
+        assert.ok(layout.bodyGap >= 8 && layout.bodyGap <= 12, '手机正文距离头部约十像素，仍为按钮留出点击空间');
+    }
     else assert.equal(layout.userOnRight, true, '电脑端用户头像、姓名和时间靠右，操作按钮在其左侧');
     assert.equal(layout.identityReadable && layout.inside && layout.separate, true, '按钮不遮挡姓名、时间，也不重叠或越出消息顶部');
     assert.equal(layout.sameRow, true, '320px 手机也能让小图标操作区保持一行');
@@ -246,7 +264,7 @@ async function verifyEditPosition(page, url, viewport) {
     try {
         browser = await chromium.launch({ channel: 'msedge', headless: true });
         const url = `http://127.0.0.1:${server.address().port}/`;
-        for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 360, height: 844 }, { width: 320, height: 844 }]) {
+        for (const viewport of [{ width: 1332, height: 896 }, { width: 1024, height: 896 }, { width: 390, height: 844 }, { width: 360, height: 844 }, { width: 320, height: 844 }]) {
             const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
             page.on('pageerror', error => errors.push(error.message));
             page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
