@@ -306,7 +306,7 @@ const root = path.resolve(__dirname, '..');
         const before=JSON.stringify(core.chat),beforeMetadata=JSON.stringify(core.chat_metadata);
         Object.assign(openai.oai_settings,structuredClone(window.playNativeBase.settings),{stream_openai:false,n:1,function_calling:false});
         const script=(id,findRegex,replaceString,extra={})=>({id,scriptName:id,findRegex,replaceString,trimStrings:[],placement:[1,2],
-          disabled:false,markdownOnly:false,promptOnly:false,runOnEdit:true,substituteRegex:0,minDepth:999,maxDepth:1000,...extra});
+          disabled:false,markdownOnly:false,promptOnly:false,runOnEdit:true,substituteRegex:0,minDepth:null,maxDepth:null,...extra});
         await regex.saveScriptsByType([script('branch-normal','分支原文','分支替换'),script('branch-prompt','发送标记','发送替换',{promptOnly:true}),
           script('branch-display','显示标记','不应发送替换',{markdownOnly:true}),
           script('erase-user','[\\s\\S]+','',{promptOnly:true,placement:[1],minDepth:7,maxDepth:null}),

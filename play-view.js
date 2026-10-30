@@ -1,6 +1,7 @@
 import { element, textButton, glyph, iconButton } from './ui.js';
 import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
+import { playRoundDepth } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, mergePlayCharacters } from './play-character-picker.js';
@@ -171,18 +172,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.userHead.querySelector('.play-message-avatar').replaceWith(avatar(identity, 'play-message-avatar', 'persona'));
             view.user.setAttribute('aria-label', `${identity.name} 发送的小剧场提示词`);
         }
-        const tools = view.userEditor ? [view.userEditor.actions] : [view.userFavorite, view.edit, view.removePrompt];
-        if (view.userTools.firstChild !== tools[0]) view.userTools.replaceChildren(...tools);
+        const tools = view.userEditor ? [view.userEditor.actions] : [view.userFavorite, view.edit, view.removePrompt, view.userMore];
+        if (view.userTools.lastChild !== tools.at(-1)) view.userTools.replaceChildren(...tools);
         if (round.prompt === null) {
-            if (!view.userEditor) { view.userText.replaceChildren(); view.promptText = null; }
+            if (!view.userEditor) { view.userText.replaceChildren(); view.promptText = null; view.promptSourceSignature = null; }
             return;
         }
         // Expand only display names; keep the saved prompt and other macros untouched.
         const names = { user: identity.name, char: roundCharacter(round).name };
-        const text = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
-        if (!view.userEditor && view.promptText !== text) {
-            renderPlayText(view.userText, text, `${round.id}/user/text`);
+        const original = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
+        const depth = playRoundDepth(round, 'user');
+        const sourceSignature = JSON.stringify([original, context?.userName, playground.display?.revision ?? 0, depth]);
+        if (!view.userEditor && view.promptSourceSignature !== sourceSignature) {
+            const text = playground.display?.process(original, roundCharacter(round), context, 'user', depth) ?? original;
+            if (view.promptText !== text) renderPlayText(view.userText, text, `${round.id}/user/text`);
             view.promptText = text;
+            view.promptSourceSignature = sourceSignature;
         }
     }
     async function refreshFavorites() {
@@ -243,7 +248,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try {
             if (existing) { await playground.removeFavorite(existing.id); favoriteRows.delete(key); }
             else {
-                const cleanedText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
+                const cleanedText = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', playRoundDepth(round)) ?? result.text;
                 if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
                 const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
                     text: cleanedText,
@@ -438,6 +443,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 return;
             }
             restorePosition(positions.get(characterKey(selected)));
+            if (mobile.matches && hasActiveEditor()) {
+                const [id, view] = [...views].find(([, view]) => !view.item.hidden && (view.userEditor || [...view.outputs.values()].some(output => output.editor))) ?? [];
+                if (view) jumpToMessage(id, view.userEditor ? 'user' : 'assistant');
+            }
             restoringPosition = false;
             rememberPosition(true, false);
         });
@@ -537,7 +546,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const currentSelected = round && selectedResult(round);
             const canCont = canContinue(round, currentSelected);
             view.continueBtn.hidden = !(own && round?.prompt !== null && currentSelected?.text?.trim());
-            if (round?.initialIsLast === false) view.continueBtn.hidden = true;
+            if (round?.initialIsLast === false || round?.initialAssistantHidden) view.continueBtn.hidden = true;
             view.branch.hidden = !onBranch;
             view.branch.disabled = !result || !canEditResult(result) || isEditing(id) || settings.enabled === false;
             view.continueBtn.disabled = !canCont;
@@ -553,7 +562,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return canGenerate(round) && !!result && playground.availability({ resultId: result.id }).available;
     }
     function canContinue(round, result) {
-        return canRewrite(round, result) && !!result?.text?.trim() && !pendingSaveFor(result);
+        return canRewrite(round, result) && !!result?.text?.trim() && !pendingSaveFor(result) && !round.initialAssistantHidden;
     }
     function updateResultNavigation(round, view) {
         view.swipes.hidden = round.initialIsLast === false;
@@ -614,7 +623,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const original = round.prompt, position = mobile.matches ? capturePosition(false) : null;
         function finish() {
             view.userEditor?.dispose();
-            view.userEditor = null; view.promptText = null;
+            view.userEditor = null; view.promptText = null; view.promptSourceSignature = null;
             keepReading(() => { renderRecord(records.get(id).round, view); updateControls(); }, false);
             if (mobile.matches && position) { restorePosition(position); rememberPosition(false, true); }
             if (visible && !view.item.hidden) view.edit.focus({ preventScroll: true });
@@ -750,7 +759,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const userFavorite = iconButton('star', '收藏用户消息', () => void togglePromptFavorite(round.id)); userFavorite.classList.add('tea-star');
         const edit = iconButton('edit', '修改提示词', () => editPrompt(round.id)); edit.classList.add('play-edit-prompt');
         const removePrompt = iconButton('trash', '删除用户消息', () => void removeMessage(round.id, 'user')); removePrompt.classList.add('play-delete');
-        const userTools = element('div', undefined, 'play-header-actions'); userTools.append(userFavorite, edit, removePrompt); userHead.head.append(userTools);
+        const userTools = element('div', undefined, 'play-header-actions');
+        const userMore = setupPlayReplyHeaderActions(userTools, { favorite: userFavorite, edit, remove: removePrompt, role: 'user' }); userHead.head.append(userTools);
         const userTop = iconButton('top', '回到这条消息开头', () => jumpToMessage(round.id, 'user')); userTop.hidden = true;
         const generate = iconButton('refresh', '生成回复', () => void advanceResult(round.id)); generate.classList.add('play-generate'); generate.hidden = true;
         userActions.append(generate, userTop); userActions.hidden = true;
@@ -784,7 +794,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         });
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
         return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
-            userTools, replyTools, replyMore, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
+            userTools, userMore, replyTools, replyMore, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) {
         const editingId = [...(views.get(round.id)?.outputs ?? [])].find(([, output]) => output.editor)?.[0];
@@ -838,12 +848,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
-        const tools = output.editor ? [output.editor.actions] : [view.replyMore, view.branch, view.prompt, view.removeReply, view.favorite, view.editReply];
-        if (view.replyTools.firstChild !== tools[0]) view.replyTools.replaceChildren(...tools);
+        const tools = output.editor ? [output.editor.actions] : [view.branch, view.prompt, view.removeReply, view.favorite, view.editReply, view.replyMore];
+        if (view.replyTools.lastChild !== tools.at(-1)) view.replyTools.replaceChildren(...tools);
         const job = playground.getState(result.id);
-        const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0]);
+        const depth = playRoundDepth(round);
+        const sourceSignature = JSON.stringify([result.text, result.context?.userName, playground.display?.revision ?? 0, depth]);
         if (output.sourceSignature !== sourceSignature) {
-            output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
+            output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', depth) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
         renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error,
@@ -989,7 +1000,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const selected = selectedResult(round).id === result.id;
             option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(selected)); option.tabIndex = selected ? 0 : -1;
             const copy = element('span', undefined, 'play-result-option-copy');
-            const preview = playground.display?.process(result.text, roundCharacter(round), result.context) ?? result.text;
+            const preview = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', playRoundDepth(round)) ?? result.text;
             copy.append(element('span', playTextPreview(preview) || playResultStatusText[result.status] || '内容已隐藏', 'play-result-opening'),
                 element('time', messageTime(result.startedAt), 'play-result-time'));
             const check = glyph('check'); check.classList.add('play-result-check');

@@ -31,7 +31,7 @@ beforeEach(t => t.mock.method(globalThis, 'fetch', (url, options) => {
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
-test('酒馆正则保留原深度，分支忽略深度并过滤隐藏标签；显示专用规则不发给模型', async () => {
+test('酒馆和分支统一遵守正则深度并过滤插件隐藏标签；显示专用规则不发给模型', async () => {
     const f = fixture(), options = f.options(), nativeCalls = [], calls = [];
     const scripts = [
         { placement: [1, 2], findRegex: '普通', replaceString: '替换', minDepth: 100, maxDepth: 100 },
@@ -54,10 +54,69 @@ test('酒馆正则保留原深度，分支忽略深度并过滤隐藏标签；�
     const historyCalls = nativeCalls.filter(call => call.config?.isPrompt);
     assert.equal(historyCalls.length, 0, '原聊天也使用捕获的规则，仍遵守深度');
     assert.equal(messages.find(message => message.content === original[0].mes)?.role, 'assistant');
-    assert.deepEqual(messages.slice(-3).map(message => message.content), ['旧用户替换处理显示', '旧AI替换处理显示', '下一轮替换处理显示\n\n本轮要求']);
-    assert.equal(calls.length, 6);
+    assert.deepEqual(messages.slice(-3).map(message => message.content), ['旧用户普通发送显示', '旧AI普通发送显示', '下一轮普通发送显示\n\n本轮要求']);
+    assert.equal(calls.length, 0, '当前深度不符合规则的 100 层条件，两种来源均不执行');
     assert.equal(messages.map(message => message.content).join('\n').split('本轮要求').length, 2);
     assert.deepEqual(f.context.chat, original);
+});
+
+for (const hidden of [false, true]) test(`酒馆4层接插件3层只保留最新5层，隐藏中间插件楼层=${hidden}`, async () => {
+    const f = fixture();
+    f.context.chat = Array.from({ length: 4 }, (_, i) => ({ name: '角色甲', is_user: false, mes: `酒馆${i + 1}` }));
+    const options = f.options('插件3'); options.environment.branchMode = true; options.environment.playPrompt = '';
+    options.environment.branchHistory = [{ role: 'user', text: '插件1' }, { role: 'assistant', text: '插件2', hidden }];
+    const rule = { key: 'erase', enabled: true, script: { placement: [1, 2], promptOnly: true, minDepth: 5, maxDepth: null } };
+    options.environment.tavern.regexRules = [rule];
+    f.modules.regex.runRegexScript = () => '';
+    let scanned;
+    f.modules.world.getWorldInfoPrompt = async chat => { scanned = chat; return {}; };
+    const before = structuredClone(f.context.chat);
+    const request = await f.prepare(options); await request.send({ signal: options.signal });
+    const texts = f.requests[0].payload.messages.map(message => message.content).filter(Boolean).filter(text => /^(酒馆|插件)/.test(text));
+    assert.deepEqual(texts, hidden ? ['酒馆2', '酒馆3', '酒馆4', '插件1', '插件3'] : ['酒馆3', '酒馆4', '插件1', '插件2', '插件3']);
+    assert.equal(scanned.some(text => text.includes('插件2')), !hidden);
+    assert.deepEqual(f.context.chat, before);
+});
+
+for (const selected of [true, false]) test(`插件选择统一控制酒馆和分支发送正则，勾选=${selected}`, async () => {
+    const f = fixture(), options = f.options('插件标记');
+    options.environment.chat[0].mes = '酒馆标记'; options.environment.branchMode = true; options.environment.playPrompt = '';
+    options.environment.tavern.regexRules = [{ key: 'replace', enabled: true, script: { placement: [1, 2], promptOnly: true, findRegex: '标记', replaceString: '处理' } }];
+    options.environment.playRegex.overrides = { replace: selected };
+    f.modules.regex.runRegexScript = (script, text) => text.replace(script.findRegex, script.replaceString);
+    const request = await f.prepare(options); await request.send({ signal: options.signal });
+    assert.deepEqual(f.requests[0].payload.messages.slice(-2).map(message => message.content), selected ? ['酒馆处理', '插件处理'] : ['酒馆标记', '插件标记']);
+    options.environment.playRegex.enabled = false;
+    const disabled = await f.prepare(options); await disabled.send({ signal: options.signal });
+    assert.deepEqual(f.requests[1].payload.messages.slice(-2).map(message => message.content), ['酒馆标记', '插件标记']);
+});
+
+for (const position of ['start', 'user-before', 'user-after']) test(`隐藏末尾用户层不通过附加提示词恢复，提示词位置=${position}`, async () => {
+    const f = fixture(), options = f.options('隐藏用户正文');
+    options.environment.branchMode = true; options.environment.requestUser = { hidden: true };
+    options.environment.branchHistory = [{ role: 'assistant', text: '保留分支正文' }];
+    options.environment.playPrompt = '额外指令'; options.environment.playPromptPosition = position;
+    let scan;
+    f.modules.world.getWorldInfoPrompt = async chat => { scan = chat; return {}; };
+    const request = await f.prepare(options); await request.send({ signal: options.signal });
+    const contents = f.requests[0].payload.messages.map(message => message.content).join('\n');
+    assert.doesNotMatch(contents, /隐藏用户正文/);
+    assert.equal(contents.includes('额外指令'), position === 'start');
+    assert.equal(scan.some(text => text.includes('隐藏用户正文')), false);
+});
+
+test('分支续写目标按 -1 执行规则，规则清空正文时拒绝发送且不冒用前一层', async () => {
+    const f = fixture(), options = f.options('前一层');
+    options.environment.branchMode = true; options.environment.playPrompt = '';
+    options.continueMessage = '待续写正文';
+    options.environment.tavern.regexRules = [{ key: 'last', enabled: true, script: { placement: [2], promptOnly: true, minDepth: -1, maxDepth: 0 } }];
+    f.modules.regex.runRegexScript = (_script, text) => `${text}【处理】`;
+    const request = await f.prepare(options); await request.send({ signal: options.signal });
+    assert.equal(f.assemblies[0].history.at(-1).mes, '待续写正文【处理】');
+    assert.equal(f.assemblies[0].history.at(-2).mes, '前一层');
+    f.modules.regex.runRegexScript = () => '';
+    await assert.rejects(f.prepare(options), { code: 'empty_continue_prompt' });
+    assert.equal(f.requests.length, 1);
 });
 
 for (const squash of [false, true]) test(`自定义提示词在发送前回调之后仍位于最前面且只出现一次，合并系统消息=${squash}`, async () => {
@@ -107,7 +166,9 @@ for (const position of ['user-before', 'user-after']) {
         const f = fixture(), before = structuredClone(f.context.chat);
         const options = f.options();
         options.environment.playPrompt = '要求{{user}}【处理】'; options.environment.playPromptPosition = position;
-        f.modules.regex.getRegexedString = text => text.replace('【处理】', '');
+        options.environment.tavern.regexRules = [{ key: 'remove-marker', enabled: true,
+            script: { placement: [1, 2], promptOnly: true, findRegex: '【处理】', replaceString: '' } }];
+        f.modules.regex.runRegexScript = (script, text) => text.replace(script.findRegex, script.replaceString);
         const expected = position === 'user-before' ? '要求用户\n\n本次用户小剧场' : '本次用户小剧场\n\n要求用户';
         let scanned, intercepted;
         const scan = f.modules.world.getWorldInfoPrompt;
@@ -137,28 +198,36 @@ test('续写正文和思维链使用 -1 深度；不加入较早思维链，也�
     f.context.powerUserSettings.reasoning = { add_to_prompts: true, max_additions: 10,
         prefix: '<think>', suffix: '</think>', separator: '\n' };
     f.context.chat[0].extra = { reasoning: '更早的主聊天思维链' };
-    f.modules.regex.getRegexedString = (text, placement, options) => {
-        calls.push({ text, placement, options });
-        return options?.isPrompt ? text.replace('【发送前删除】', '') : text;
+    f.modules.regex.runRegexScript = (script, text) => {
+        calls.push({ text, id: script.id });
+        return script.id === 'zero' ? text + '【深度0】' : text.replace('【发送前删除】', '');
     };
     const before = structuredClone(f.context.powerUserSettings);
     const original = '待续写正文【发送前删除】';
     const options = { ...f.options(), continueMessage: original,
         continueExtra: { reasoning: '目标思维链【发送前删除】', api: 'openai', model: 'current-model' } };
+    options.environment.tavern.regexRules = [
+        { key: 'last-and-before', enabled: true, script: { id: 'last-and-before', placement: [1, 2, 3], promptOnly: true, minDepth: -1, maxDepth: 0 } },
+        { key: 'zero', enabled: true, script: { id: 'zero', placement: [1, 2, 3], promptOnly: true, minDepth: 0, maxDepth: 0 } },
+    ];
     await f.prepare(options);
     const assembly = f.assemblies.at(-1);
     assert.equal(assembly.history.at(-1).mes, '<think>目标思维链</think>\n待续写正文');
     assert.equal(assembly.history[0].mes, '主聊天旧回复');
-    assert.equal(assembly.cyclePrompt, original);
+    assert.equal(assembly.history.at(-2).mes, '本次用户小剧场【深度0】');
+    assert.equal(assembly.cyclePrompt, '待续写正文', '两种续写方式使用已经完成发送正则处理的正文');
     assert.equal(assembly.cycleReasoning, '<think>目标思维链</think>\n');
-    assert.deepEqual(calls.filter(call => call.options?.isPrompt).map(call => [call.text, call.options.depth]), [
-        ['主聊天旧回复', 1], ['本次用户小剧场', 0], [original, -1], ['目标思维链【发送前删除】', -1],
+    assert.deepEqual(calls.map(call => [call.text, call.id]), [
+        ['本次用户小剧场', 'last-and-before'], ['本次用户小剧场', 'zero'],
+        [original, 'last-and-before'], ['目标思维链【发送前删除】', 'last-and-before'],
     ]);
     assert.deepEqual(f.context.powerUserSettings, before, '酒馆主聊天的设置保持原值');
     calls.length = 0;
-    await f.prepare(f.options());
+    const normal = f.options(); normal.environment.tavern.regexRules = options.environment.tavern.regexRules;
+    await f.prepare(normal);
     assert.equal(f.assemblies.at(-1).history[0].mes, '主聊天旧回复');
-    assert.deepEqual(calls.filter(call => call.options?.isPrompt).map(call => call.options.depth), [1, 0]);
+    assert.equal(f.assemblies.at(-1).history.at(-1).mes, '本次用户小剧场【深度0】');
+    assert.deepEqual(calls.map(call => call.id), ['last-and-before', 'zero']);
 });
 
 test('第二种提示词校验早于世界书、发送前回调与模型请求', async () => {

@@ -9,6 +9,7 @@ import { getPlayPersonaSession } from './play-persona-session.js';
 import { readPlayTemplateFeatures } from './play-template-context.js';
 import { readPlayHelperVariables } from './play-variable-context.js';
 import { processPlayPromptText, readTavernRegex } from './play-processing.js';
+import { playMessageDepths } from './play-message-context.js';
 
 async function loadTavernModules() {
     const paths = {
@@ -122,27 +123,16 @@ function addPersona(modules, settings) {
 async function formatHistory(modules, chat, environment, isContinue) {
     const { regex, chats } = modules;
     const canUseTools = environment.tavern.canUseTools ?? modules.tools.ToolManager.isToolCallingSupported();
-    const rules = environment.tavern.regexRules;
-    const settings = { hiddenTags: environment.playHiddenTags ?? '', regexEnabled: environment.playRegex?.enabled !== false,
+    const rules = environment.tavern.regexRules ?? [];
+    const settings = { hiddenTags: environment.branchMode ? environment.playHiddenTags ?? '' : '', regexEnabled: environment.playRegex?.enabled !== false,
         regexOverrides: environment.playRegex?.overrides ?? {} };
-    const regexText = (text, placement, depth, branch = false) => {
-        if (branch) return processPlayPromptText(text, settings, rules ?? [], regex, placement);
-        if (!rules) return regex.getRegexedString(text, placement, { isPrompt: true, depth });
-        for (const rule of rules) {
-            if (!rule.enabled) continue;
-            const script = rule.script;
-            if (script.disabled || !script.promptOnly || !script.placement?.includes(placement)) continue;
-            if (script.minDepth !== null && Number.isFinite(Number(script.minDepth)) && script.minDepth >= -1 && depth < script.minDepth) continue;
-            if (script.maxDepth !== null && Number.isFinite(Number(script.maxDepth)) && script.maxDepth >= 0 && depth > script.maxDepth) continue;
-            text = regex.runRegexScript(script, text);
-        }
-        return text;
-    };
+    const regexText = (text, placement, depth, branch = false) =>
+        processPlayPromptText(text, settings, rules, regex, placement, depth, branch);
     const history = chat.filter(message => !message.is_system || (canUseTools && Array.isArray(message.extra?.tool_invocations)));
-    const nativeLength = environment.branchMode ? history.filter(message => !message.playBranch).length : history.length;
+    const depths = playMessageDepths(history, { isContinue, include: () => true });
     const prepared = await Promise.all(history.map(async (message, index) => {
         const placement = message.is_user ? regex.regex_placement.USER_INPUT : regex.regex_placement.AI_OUTPUT;
-        let text = regexText(message.mes, placement, nativeLength - index - (isContinue && !environment.branchMode ? 2 : 1), message.playBranch);
+        let text = regexText(message.mes, placement, depths.get(message), message.playBranch);
         text = await chats.appendFileContent(message, text);
         const titles = [];
         if (message.extra?.append_title && message.extra.title) titles.push(message.extra.title);
@@ -157,6 +147,7 @@ async function formatHistory(modules, chat, environment, isContinue) {
     let continuationReasoning = '', reasoningPrefix = '';
     if (isContinue && prepared.length) {
         const target = prepared.at(-1);
+        if (!target.mes.trim()) throw new PlaygroundError('empty_continue_prompt', '待续写正文经过正则处理后为空，请调整正则后重试。');
         const text = regexText(String(target.extra?.reasoning ?? ''), regex.regex_placement.REASONING, -1, target.playBranch);
         continuationReasoning = text === '\u200B' ? '' : text;
         if (continuationReasoning && environment.continuation?.sendReasoning !== false) {
@@ -271,22 +262,22 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         }
         if (chat[0]) chat[0].mes = core.substituteParams(chat[0].mes);
         for (const message of environment.branchHistory ?? []) {
+            if (message.hidden) continue;
             chat.push({ name: message.role === 'user' ? context.name1 : context.name2,
                 is_user: message.role === 'user', is_system: false, mes: core.substituteParams(message.text), extra: {}, playBranch: true });
         }
         const userPrompt = typeof prompt === 'string' ? core.substituteParams(prompt) : '';
         const userMessage = !customPrompt || promptPosition === 'start' ? userPrompt
             : (promptPosition === 'user-before' ? [customPrompt, userPrompt] : [userPrompt, customPrompt]).join('\n\n');
-        if (!environment.branchMode || userMessage) chat.push({ name: context.name1, is_user: true, is_system: false,
-            mes: userMessage, extra: {}, ...(environment.branchMode ? { playBranch: true } : {}) });
+        if (!environment.requestUser?.hidden && (!environment.branchMode || userMessage)) chat.push({ name: context.name1, is_user: true, is_system: false,
+            mes: userMessage, extra: {}, playBranch: true });
         if (continueMessage) {
             chat.push({ name: context.name2, is_user: false, is_system: false, mes: continueMessage, extra: structuredClone(continueExtra ?? {}),
-                ...(environment.branchMode ? { playBranch: true } : {}) });
+                playBranch: true });
         }
         if (environment.independent) core.chat.splice(0, core.chat.length, ...chat);
         const { history, continuationReasoning, reasoningPrefix } = await formatHistory(modules, chat, environment, !!continueMessage);
-        const cyclePrompt = environment.branchMode && continueMessage
-            ? history.at(-1).mes.slice(reasoningPrefix.length) : continueMessage;
+        const cyclePrompt = continueMessage ? history.at(-1).mes.slice(reasoningPrefix.length) : '';
         guard();
         const maxContext = environment.tavern.settings.openai_max_context - environment.tavern.settings.openai_max_tokens;
         const aborted = await extensions.runGenerationInterceptors(history, maxContext, continueMessage ? 'continue' : 'normal');

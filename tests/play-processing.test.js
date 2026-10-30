@@ -117,7 +117,7 @@ test('显示和收藏前处理使用该回复保存的人设名字，查找和�
     }
 });
 
-test('三处规则都读取，普通回复先于显示规则执行，楼层限制不影响小剧场', () => {
+test('三处规则都读取，普通回复先于显示规则执行，脱离聊天的文本不虚构深度', () => {
     const f = fixture(), rules = readTavernRegex(f.engine, f.ctx), calls = [];
     assert.deepEqual(rules.map(rule => rule.script.id), ['display', 'same', 'prompt', 'off', 'user', 'same', 'same', 'both']);
     const original = '<status>不应参与美化</status>正文';
@@ -191,20 +191,38 @@ test('未允许的预设和非当前角色规则仍列出，默认关闭，勾�
     assert.deepEqual({ context: f.ctx, groups: f.groups }, before);
 });
 
-test('深度规则会清空分支，但旧取消勾选同时阻止发送；开关关闭仍去掉隐藏标签', () => {
+test('深度规则只清空符合深度的分支，取消勾选阻止发送；开关关闭仍去掉隐藏标签', () => {
     const f = fixture();
     f.groups[0] = [{ id: 'erase', placement: [1, 2], promptOnly: true, findRegex: '[\\s\\S]+', replaceString: '', minDepth: 7, maxDepth: null }];
     f.groups[1] = []; f.groups[2] = [];
     const rules = readTavernRegex(f.engine, f.ctx), source = '分支正文<status>隐藏</status>';
     const engine = { runRegexScript: (script, text) => text.replace(new RegExp(script.findRegex), script.replaceString) };
     for (const placement of [1, 2]) {
-        assert.equal(processPlayPromptText(source, readPlaySettings({}), rules, engine, placement), '');
+        assert.equal(processPlayPromptText(source, readPlaySettings({}), rules, engine, placement, 6), '分支正文');
+        assert.equal(processPlayPromptText(source, readPlaySettings({}), rules, engine, placement, 7), '');
         for (const saved of [{ playRegexExclusions: [rules[0].key] }, { playRegexOverrides: { [rules[0].key]: false } }, { playRegexEnabled: false }]) {
             const settings = readPlaySettings(saved);
-            assert.equal(processPlayPromptText(source, settings, rules, engine, placement), '分支正文');
-            assert.equal(processPlayText(source, settings, rules, engine.runRegexScript, placement), '分支正文');
+            assert.equal(processPlayPromptText(source, settings, rules, engine, placement, 7), '分支正文');
+            assert.equal(processPlayText(source, settings, rules, engine.runRegexScript, placement, 7), '分支正文');
         }
     }
+});
+
+test('酒馆已保存正文只执行发送规则，插件原文先执行普通规则且不修改来源', () => {
+    const f = fixture();
+    f.groups[0] = [
+        { id: 'ordinary', placement: [1, 2], findRegex: '正文', replaceString: '正文追加', minDepth: null, maxDepth: null },
+        { id: 'prompt', placement: [1, 2], promptOnly: true, findRegex: '发送', replaceString: '处理后', minDepth: 0, maxDepth: 0 },
+    ];
+    f.groups[1] = []; f.groups[2] = [];
+    const rules = readTavernRegex(f.engine, f.ctx), settings = readPlaySettings({ playHiddenTags: '' });
+    const engine = { runRegexScript: (script, text) => text.replace(new RegExp(script.findRegex), script.replaceString) };
+    const native = '正文追加发送', branch = '正文发送';
+    for (const placement of [1, 2]) {
+        assert.equal(processPlayPromptText(native, settings, rules, engine, placement, 0, false), '正文追加处理后');
+        assert.equal(processPlayPromptText(branch, settings, rules, engine, placement, 0), '正文追加处理后');
+    }
+    assert.equal(native, '正文追加发送'); assert.equal(branch, '正文发送');
 });
 
 test('旧取消勾选只在读取时兼容，新选择可覆盖旧排除而不改变源设置', () => {

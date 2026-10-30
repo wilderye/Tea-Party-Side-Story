@@ -1,4 +1,5 @@
 import { favoriteCacheKey } from './play-history.js';
+import { playMessageDepths } from './play-message-context.js';
 
 /** Resolve only missing processed bodies, outside the storage write lock. */
 export function createPlayChatFavorites(history, display) {
@@ -8,12 +9,13 @@ export function createPlayChatFavorites(history, display) {
         const character = (await history.listCharacters()).find(character => character.id === chat.characterId);
         await display?.ensure(character);
         let processed = 0;
+        const depths = playMessageDepths(chat.messages);
         for (const message of chat.messages) {
             const result = message.role === 'user' ? message : message.results.find(result => result.id === message.selectedResultId);
             if (result.status === 'unfinished') continue;
             const identity = { messageId: message.id, resultId: message.role === 'user' ? null : result.id, bodyRevision: result.bodyRevision };
             if (!cached.has(favoriteCacheKey(identity))) {
-                entries.push({ ...identity, text: display?.process(result.text, character, result.context, message.role) ?? result.text });
+                entries.push({ ...identity, text: display?.process(result.text, character, result.context, message.role, depths.get(message)) ?? result.text });
                 if (++processed % 12 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             }
             // Long transcripts yield between small batches; no work is done

@@ -110,6 +110,24 @@ test('手动收藏通过后台保存通道传递角色和正文', async t => {
     assert.equal(messages[0].method, 'addManualFavorite'); assert.deepEqual(messages[0].args, [input]);
 });
 
+test('楼层显隐命令通过后台通道传递完整范围和冲突版本', async t => {
+    const messages = [];
+    const saved = { id: randomUUID(), revision: randomUUID(), messages: [{ id: randomUUID(), hidden: true }] };
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: data => {
+                messages.push(data);
+                queueMicrotask(() => this.port.onmessage({ data: { id: data.id, value: saved } }));
+            } };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    const args = [saved.id, [saved.messages[0].id, randomUUID()], true, randomUUID()];
+    assert.deepEqual(await createBrowserPlayHistory(context).setMessagesHidden(...args), saved);
+    assert.equal(messages.length, 1); assert.equal(messages[0].method, 'setMessagesHidden');
+    assert.deepEqual(messages[0].args, args);
+});
+
 test('取消通过编号通知后台，尚未收到后台确认前不丢弃可能已保存的记录', async t => {
     let worker;
     const messages = [];

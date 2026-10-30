@@ -587,6 +587,38 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-avatar-fallback { display:grid; place-items:center; background:var(--tea-avatar-paper,#e9d8ae); color:var(--tea-heading,var(--tea-forest)); font:700 20px/1 var(--tea-ui); }
 #teahouse-panel .play-message-avatar.play-avatar-fallback { background:var(--tea-avatar-paper,#fffdf5); color:var(--tea-heading,#567050); font:700 19px/1 var(--play-prose-font,var(--tea-ui)); }
 #teahouse-panel .play-message-identity { display:flex; flex:0 1 auto; order:1; flex-direction:column; align-items:flex-start; gap:2px; min-width:0; }
+#teahouse-panel .play-message-speaker-row { display:flex; align-items:center; gap:6px; max-width:100%; min-width:0; }
+#teahouse-panel .play-floor-number { font:11px/17px var(--tea-ui); color:var(--tea-secondary-ink,#8a8c77); font-variant-numeric:tabular-nums; }
+#teahouse-panel .play-hidden-mark { flex:none; font-size:12px; color:var(--tea-secondary-ink,#8a8c77); }
+.popup.tea-hidden-dialog { width:min(420px,calc(100vw - 32px))!important; max-width:calc(100vw - 32px)!important; min-height:0!important; max-height:calc(100dvh - 32px)!important; margin:auto!important; padding:0!important; border:1px solid var(--tea-line,#dddcd0)!important; border-radius:4px!important; background:var(--tea-paper,#faf7ee)!important; color:var(--tea-ink,#233d35)!important; text-shadow:none!important; box-shadow:0 20px 65px var(--tea-popup-shadow,#243c2d22)!important; overflow-y:auto; }
+.popup.tea-hidden-dialog::backdrop { background:#13251d65; backdrop-filter:blur(2px); }
+.popup.tea-hidden-dialog>.popup-body { width:100%; height:auto; min-height:0; padding:0!important; overflow:visible; }
+.popup.tea-hidden-dialog .popup-content { flex:none; margin:0!important; padding:0!important; overflow:visible; }
+.popup.tea-hidden-dialog :is(.popup-controls,.popup-button-close) { display:none!important; }
+.play-hidden-manager { display:flex; flex-direction:column; width:100%; gap:0; padding:25px 24px; color:var(--tea-ink,#233d35); font:14px/24px var(--tea-ui,'Microsoft YaHei',system-ui,sans-serif); text-align:left; }
+.play-hidden-manager,.play-hidden-manager * { box-sizing:border-box; text-shadow:none!important; }
+.play-hidden-manager [hidden] { display:none!important; }
+.play-hidden-manager h3,.play-hidden-manager p { margin:0; }
+.play-hidden-manager-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.play-hidden-manager-head h3 { font:600 21px/1.5 var(--play-prose-font,'TeaConversationSerif',serif)!important; letter-spacing:1px; color:var(--tea-heading,#234a3f)!important; }
+.play-hidden-manager button { margin:0!important; border:0!important; border-radius:4px!important; color:inherit!important; font:inherit; box-shadow:none!important; cursor:pointer; touch-action:manipulation; }
+.play-hidden-manager .tea-icon { display:inline-flex; flex:none; align-items:center; justify-content:center; width:36px; height:36px; padding:0!important; background:transparent!important; color:var(--tea-muted,#747b70)!important; }
+.play-hidden-manager .tea-glyph svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; }
+.play-hidden-summary { margin:17px 0 23px; padding-bottom:13px; border-bottom:1px solid var(--tea-line,#dddcd0); }
+.play-hidden-summary>div { display:flex; justify-content:space-between; align-items:baseline; gap:20px; padding:9px 0; }
+.play-hidden-summary dt { color:var(--tea-muted,#747b70); font-size:12px; white-space:nowrap; }
+.play-hidden-summary dd { margin:0; font-size:13px; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.play-hidden-ranges { color:var(--tea-accent,#a65340); }
+.play-hidden-range-fields { display:grid; grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr); align-items:end; gap:10px; }
+.play-hidden-range-fields label { display:flex; flex-direction:column; gap:8px; min-width:0; font-size:12px; color:var(--tea-muted,#747b70); }
+.play-hidden-range-fields input { width:100%; min-width:0; height:48px; margin:0!important; padding:9px 12px!important; border:0!important; border-bottom:1px solid var(--tea-accent,#a65340)!important; border-radius:0!important; background:var(--tea-field-paper,#fffdf6)!important; color:var(--tea-heading,#234a3f)!important; font:500 20px/1.4 var(--tea-ui,system-ui,sans-serif)!important; box-shadow:none!important; }
+.play-hidden-range-to { display:grid; place-items:center; height:48px; color:var(--tea-muted,#747b70); }
+.play-hidden-range-actions { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:24px; }
+.play-hidden-range-actions button { display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:7px 17px!important; border:1px solid var(--tea-line,#dddcd0)!important; background:transparent!important; font-size:14px; }
+.play-hidden-range-actions button:first-child { border-color:var(--tea-control-paper,#183e36)!important; background:var(--tea-control-paper,#183e36)!important; color:var(--tea-control-ink,var(--tea-paper,#faf7ee))!important; }
+.play-hidden-manager button:disabled { opacity:.4; cursor:default; }
+.play-hidden-manager button:focus-visible { outline:2px solid var(--tea-accent,#a65340); outline-offset:2px; }
+.play-hidden-manager .play-result-error { margin-top:12px; color:var(--tea-error,#a74036); font-size:12px; }
 #teahouse-panel .play-header-actions { display:flex; order:3; align-items:center; gap:4px; flex:none; }
 #teahouse-panel .play-header-actions .tea-icon { width:34px; min-width:34px; height:36px; border-radius:6px!important; color:var(--tea-action-ink,#718466)!important; }
 #teahouse-panel .play-header-actions .play-delete:hover:not(:disabled) { color:var(--play-coral-ink)!important; background:var(--tea-hover,#a653400c)!important; }
@@ -598,7 +630,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 #teahouse-panel .play-assistant-meta .play-header-actions { flex:0 1 auto; min-width:30px; flex-wrap:wrap; justify-content:flex-end; gap:2px; }
 #teahouse-panel .play-assistant-meta .play-header-actions .tea-icon { width:30px; min-width:30px; height:36px; }
 #teahouse-panel .play-assistant-meta .play-header-actions .tea-glyph svg { width:16px; height:16px; }
-#teahouse-panel .play-assistant-meta .play-header-actions .play-reply-more { display:none; }
+#teahouse-panel .play-header-actions .play-reply-more { display:none; }
 #teahouse-panel :is(.play-user-text,.play-results) { padding-bottom:17px; }
 #teahouse-panel :where(.play-prose) { display:flow-root; color:var(--play-prose-ink,var(--tea-ink)); font:var(--play-prose-weight,400) var(--tea-body-size)/var(--play-prose-leading,1.85) var(--play-prose-font,var(--tea-ui)); overflow-wrap:anywhere; }
 #teahouse-panel .play-assistant-message .play-result { touch-action:pan-y; }
@@ -799,12 +831,15 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-feed-content { padding:66px 19px 24px; }
     #teahouse-panel .play-message { --play-message-inset:10px; padding:14px var(--play-message-inset) 6px; }
     #teahouse-panel .play-record>.play-message { margin-bottom:27px; }
-    #teahouse-panel .play-message-meta { gap:11px; margin-bottom:13px; min-height:44px; }
+    #teahouse-panel .play-message-meta { flex-direction:column; align-items:stretch; gap:9px; margin-bottom:19px; min-height:0; }
     #teahouse-panel .play-message-meta::after { display:none; }
-    #teahouse-panel .play-message-identity { flex:1; gap:1px; }
-    #teahouse-panel .play-speaker { font-size:19px; line-height:25px; }
-    #teahouse-panel .play-message-time { font-size:11px; line-height:16px; color:var(--tea-secondary-ink,#838b75); }
-    #teahouse-panel .play-message-avatar { width:38px; height:38px; box-shadow:0 0 0 3px var(--tea-avatar-ring,#efecdf); }
+    #teahouse-panel .play-message-identity { display:flex; flex:none; flex-direction:row; flex-wrap:wrap; align-items:center; justify-content:center; gap:4px 9px; width:100%; text-align:center; padding:0 8px; }
+    #teahouse-panel .play-message-speaker-row { display:contents; }
+    #teahouse-panel .play-speaker { order:0; flex:0 0 100%; width:100%; font-size:20px; line-height:28px; letter-spacing:.7px; }
+    #teahouse-panel .play-floor-number { order:1; }
+    #teahouse-panel .play-message-time { order:2; font-size:11px; line-height:17px; color:var(--tea-secondary-ink,#838b75); }
+    #teahouse-panel .play-hidden-mark { order:3; }
+    #teahouse-panel .play-message-avatar { align-self:center; width:42px; height:42px; box-shadow:none; outline:1px solid var(--tea-avatar-ring,#e4d8c8); outline-offset:3px; }
     #teahouse-panel .play-message-actions { gap:3px; min-height:44px; }
     #teahouse-panel .play-message-actions .tea-icon { width:44px; min-width:44px; height:44px; }
     #teahouse-panel .play-assistant-message>.play-message-actions { grid-template-columns:minmax(44px,1fr) auto minmax(44px,1fr); column-gap:0; align-items:end; }
@@ -812,11 +847,21 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-right-actions { flex-direction:column; gap:0; }
     #teahouse-panel .play-message-actions:has(.play-stop:not([hidden])) .play-swipes { margin-left:0; }
     #teahouse-panel .play-again .tea-glyph svg { width:14px; height:14px; }
-    #teahouse-panel .play-header-actions { gap:0; }
-    #teahouse-panel .play-header-actions .tea-icon { width:40px; min-width:40px; height:44px; }
-    #teahouse-panel .play-assistant-meta .play-message-identity { min-width:104px; max-width:none; }
-    #teahouse-panel .play-assistant-meta .play-reply-tools:not(.is-expanded)>.play-reply-more { display:inline-flex; }
-    #teahouse-panel .play-assistant-meta .play-reply-tools:not(.is-expanded)>.play-reply-secondary { display:none; }
+    #teahouse-panel :is(.play-user-meta,.play-assistant-meta) .play-header-actions { flex:none; justify-content:center; flex-wrap:wrap; min-height:30px; gap:10px; margin-top:1px; padding:0 5px; }
+    #teahouse-panel :is(.play-user-meta,.play-assistant-meta) .play-header-actions .tea-icon { position:relative; width:30px; min-width:30px; height:30px; border-radius:0!important; background:transparent!important; }
+    #teahouse-panel .play-message-meta .play-header-actions .tea-icon::before { content:''; position:absolute; inset:-6px -5px; }
+    #teahouse-panel .play-message-meta .play-header-actions .tea-glyph svg { width:16px; height:16px; }
+    #teahouse-panel .play-message-meta .play-header-actions .play-floor-icon { font-size:14px; }
+    #teahouse-panel .play-message-meta .play-header-actions .tea-icon:hover:not(:disabled) { color:var(--tea-heading,#234a3f)!important; background:transparent!important; }
+    #teahouse-panel .play-message-meta .play-header-actions .tea-star[aria-pressed=true] { background:transparent!important; }
+    #teahouse-panel .play-assistant-meta .play-message-identity { min-width:0; max-width:none; }
+    #teahouse-panel .play-reply-tools:not(.is-expanded)>.play-reply-more { display:inline-flex; }
+    #teahouse-panel .play-reply-tools:not(.is-expanded)>.play-reply-secondary { display:none; }
+    #teahouse-panel .play-reply-tools.is-expanded>.play-reply-more { display:none; }
+    .play-hidden-manager { padding:19px 20px 22px; }
+    .play-hidden-summary { margin:13px 0 20px; }
+    .play-hidden-range-fields { gap:7px; }
+    .play-hidden-range-actions { margin-top:23px; gap:10px; }
     #teahouse-panel .play-swipes { gap:0; margin-left:16px; }
     #teahouse-panel .play-swipes .tea-icon { width:44px; min-width:44px; height:44px; }
     #teahouse-panel .play-count { min-width:58px; min-height:44px; padding:0 3px; font-size:13px; white-space:nowrap; }
@@ -832,9 +877,13 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     #teahouse-panel .play-page.is-message-editing .play-feed { scroll-padding-top:0; }
     #teahouse-panel .play-page.is-message-editing .play-reading-area { container-type:size; }
     #teahouse-panel .play-page.is-message-editing .play-jump-latest { display:none; }
-    /* Reserve just the message header and a small gap. Keep the whole input
-       above the keyboard so the caret at the end of long text stays visible. */
-    #teahouse-panel .play-page.is-message-editing .play-edit-form { display:flex; flex-direction:column; height:max(80px,calc(100cqh - 80px - env(safe-area-inset-bottom))); }
+    /* Let the centered header take its actual height, including wrapped names.
+       The editor fills the remaining visible space above the keyboard. */
+    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form) { display:flex; flex-direction:column; height:calc(100cqh - 22px - env(safe-area-inset-bottom)); }
+    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form)>.play-message-meta { flex:none; }
+    #teahouse-panel .play-page.is-message-editing .play-message:has(.play-edit-form)>:is(.play-user-text,.play-results),
+    #teahouse-panel .play-page.is-message-editing .play-result:has(.play-edit-form) { display:flex; flex:1; flex-direction:column; min-height:0; }
+    #teahouse-panel .play-page.is-message-editing .play-edit-form { display:flex; flex:1; flex-direction:column; min-height:80px; }
     #teahouse-panel .play-page.is-message-editing .play-edit-form textarea { flex:1; min-height:0; max-height:none; resize:none; }
     #teahouse-panel .play-page.is-message-editing .play-edit-form>.play-result-error { flex:none; }
     #teahouse-panel .play-message:has(.play-edit-form)>.play-message-meta { position:sticky; top:0; z-index:3; background:var(--tea-reading-paper,#fdfbf5); }
@@ -842,6 +891,15 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     @container play-edit (max-height:560px) {
         #teahouse-panel.tea-play-mode[data-mode=list]>.play-catalog { display:none; }
         #teahouse-panel .play-page.is-message-editing .play-reading-area { padding-top:env(safe-area-inset-top); }
+    }
+    @container play-edit (max-height:300px) {
+        #teahouse-panel .play-page.is-message-editing .play-message-meta { gap:2px; margin-bottom:6px; }
+        #teahouse-panel .play-page.is-message-editing .play-message-avatar { width:20px; height:20px; outline-offset:2px; }
+        #teahouse-panel .play-page.is-message-editing .play-message-identity { row-gap:0; }
+        #teahouse-panel .play-page.is-message-editing .play-speaker { font-size:16px; line-height:20px; }
+        #teahouse-panel .play-page.is-message-editing .play-message-time { font-size:10px; line-height:13px; }
+        #teahouse-panel .play-page.is-message-editing .play-header-actions { margin-top:0; min-height:24px; }
+        #teahouse-panel .play-page.is-message-editing .play-header-actions .tea-icon { width:24px; min-width:24px; height:24px; }
     }
 }
 @media(max-width:355px) {

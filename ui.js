@@ -78,6 +78,8 @@ const paths = {
     branch: '<path d="M6 4v11a5 5 0 0 0 5 5h7M6 9h5a5 5 0 0 0 5-5"/><circle cx="6" cy="3" r="2"/><circle cx="16" cy="3" r="2"/><circle cx="19" cy="20" r="2"/>',
     history: '<path d="M3 11a9 9 0 1 1 3 8M3 4v7h7M12 7v5l3 2"/>',
     menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    'eye-closed': '<path d="M3 8c2 4 5 6 9 6s7-2 9-6M4 11l-2 3m6-1-1 4m5-3v4m5-5 1 4m2-6 2 3"/>',
     more: '<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
     conversation: '<rect x="3" y="3" width="15" height="13" rx="2"/><path d="m7 16-4 4v-4M18 7h3v14l-4-3h-6v-2"/>',
     star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',

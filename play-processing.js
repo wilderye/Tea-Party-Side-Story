@@ -188,16 +188,21 @@ function getRuleGuard(rule) {
     return guard;
 }
 
-function processPlayRegex(source, settings, rules, runRegex, placement, purpose) {
-    let text = hidePlayTags(source, settings.hiddenTags);
+function processPlayRegex(source, settings, rules, runRegex, placement, purpose, depth, original = true) {
+    let text = original ? hidePlayTags(source, settings.hiddenTags) : source;
     if (settings.regexEnabled) {
         // Branch originals have not passed Tavern's ordinary write-time stage.
         // Both display and sending run ordinary substitutions before their own stage.
         for (const only of [false, true]) {
+            if (!only && !original) continue;
             for (const rule of rules) {
                 const script = rule.script;
                 if (!isPlayRegexSelected(rule, settings) || !script.placement?.includes(placement)) continue;
                 if (only ? !script[purpose] : script.markdownOnly || script.promptOnly) continue;
+                if (typeof depth === 'number') {
+                    if (script.minDepth !== null && Number.isFinite(Number(script.minDepth)) && script.minDepth >= -1 && depth < script.minDepth) continue;
+                    if (script.maxDepth !== null && Number.isFinite(Number(script.maxDepth)) && script.maxDepth >= 0 && depth > script.maxDepth) continue;
+                }
                 const guard = getRuleGuard(rule);
                 if (guard && !guard.canMatch(text)) continue;
                 // A plugin override may enable a script disabled in Tavern. Never
@@ -211,13 +216,12 @@ function processPlayRegex(source, settings, rules, runRegex, placement, purpose)
     return text;
 }
 
-export function processPlayText(source, settings, rules, runRegex, placement = 2) {
-    return processPlayRegex(source, settings, rules, runRegex, placement, 'markdownOnly');
+export function processPlayText(source, settings, rules, runRegex, placement = 2, depth) {
+    return processPlayRegex(source, settings, rules, runRegex, placement, 'markdownOnly', depth);
 }
 
-export function processPlayPromptText(source, settings, rules, engine, placement) {
-    // Depth intentionally does not apply to plugin branch messages.
-    return processPlayRegex(source, settings, rules, (script, text) => engine.runRegexScript(script, text), placement, 'promptOnly');
+export function processPlayPromptText(source, settings, rules, engine, placement, depth, original = true) {
+    return processPlayRegex(source, settings, rules, (script, text) => engine.runRegexScript(script, text), placement, 'promptOnly', depth, original);
 }
 
 const loadNativeRegex = () => import(new URL('../../../../scripts/extensions/regex/engine.js', import.meta.url).href);
@@ -247,8 +251,9 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             const task = (async () => {
                 const loaded = await loadEngine(character);
                 if (id !== refreshId) return;
+                const loadedRules = readTavernRegex(loaded, ctx(), character);
                 roleEngines.set(character.avatar, loaded);
-                roleRules.set(character.avatar, readTavernRegex(loaded, ctx(), character));
+                roleRules.set(character.avatar, loadedRules);
             })().finally(() => { if (roleLoading.get(character.avatar) === task) roleLoading.delete(character.avatar); });
             roleLoading.set(character.avatar, task);
         }
@@ -295,12 +300,8 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             syncState(structuredClone(readPlaySettings(settings)), nextRules);
             return rules;
         },
-        process(source, character, requestContext, role = 'assistant') {
-            let targetRules = rules;
-            if (engine && character?.avatar) {
-                if (!roleRules.has(character.avatar)) roleRules.set(character.avatar, readTavernRegex(engine, ctx(), character));
-                targetRules = roleRules.get(character.avatar);
-            }
+        process(source, character, requestContext, role = 'assistant', depth) {
+            const targetRules = character?.avatar ? roleRules.get(character.avatar) ?? [] : rules;
             const target = character ?? selectedCharacter;
             const targetEngine = roleEngines.get(target?.avatar) ?? engine;
             const placement = role === 'user' ? targetEngine?.regex_placement.USER_INPUT ?? 1 : targetEngine?.regex_placement.AI_OUTPUT ?? 2;
@@ -316,7 +317,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
                             : requestContext?.userName === undefined ? match : escapeRegex(requestContext.userName)) : script.findRegex;
                 return targetEngine.runRegexScript({ ...script, findRegex, replaceString: names(script.replaceString),
                     trimStrings: script.trimStrings?.map(names) }, text, { characterOverride: target?.name });
-            }, placement);
+            }, placement, depth);
         },
     };
 }

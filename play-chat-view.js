@@ -1,10 +1,11 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
+import { playMessageDepths, playHiddenRanges } from './play-message-context.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText } from './play-render.js';
 import { playChatTitle } from './play-history.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
-import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayFloorIcon, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer } from './play-message-ui.js';
 
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 const pad = value => String(value).padStart(2, '0');
@@ -113,10 +114,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function processed(message, result = currentResult(message)) {
         const text = result?.text ?? message.text;
-        const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}`;
+        const depth = messageDepths.get(message);
+        const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}/${depth}`;
         const cached = displayCache.get(key);
         if (cached?.raw === text) return cached.text;
-        const rendered = playground.display?.process(text, owner(), result?.context, message.role) ?? text;
+        const rendered = playground.display?.process(text, owner(), result?.context, message.role, depth) ?? text;
         cacheEntry(displayCache, key, { raw: text, text: rendered });
         return rendered;
     }
@@ -197,14 +199,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 if (id !== queryId) return;
                 const name = record.name, ai = [...record.messages].reverse().find(message => message.role === 'assistant');
                 const character = selected;
-                const displayText = (message, result) => playground.display?.process(result?.text ?? message.text, character, result?.context, message.role) ?? result?.text ?? message.text;
+                const displayText = (message, result) => playground.display?.process(result?.text ?? message.text, character, result?.context, message.role, message.depth) ?? result?.text ?? message.text;
                 const preview = ai ? favoriteFirstLine(displayText(ai)) : '暂无消息';
                 let matchMessageId;
                 if (term) {
                     let checked = 0;
                     for (const message of record.messages) {
                         if (id !== queryId || route !== 'history') return;
-                        const result = null, key = `${record.id}/${message.messageId}/${message.resultId ?? ''}/${message.bodyRevision}/${playground.display?.revision ?? 0}`;
+                        const result = null, key = `${record.id}/${message.messageId}/${message.resultId ?? ''}/${message.bodyRevision}/${playground.display?.revision ?? 0}/${message.depth}`;
                         let cached = displayCache.get(key);
                         if (!cached || cached.raw !== (result?.text ?? message.text)) {
                             cached = { raw: result?.text ?? message.text, text: playSearchText(displayText(message, result)).toLocaleLowerCase() };
@@ -318,7 +320,15 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const identity = message.role === 'user' ? { name: userContext?.userName ?? ctx().name1 ?? 'User', avatar: userContext?.userAvatar || null } : owner();
         const head = element('header', undefined, `play-message-meta play-${message.role === 'user' ? 'user' : 'assistant'}-meta`);
         head.append(createCharacterAvatar(ctx, identity ?? { name: '角色', avatar: null }, 'play-message-avatar', message.role === 'user' ? 'persona' : 'avatar'));
-        const heading = element('div', undefined, 'play-message-identity'); heading.append(element('strong', identity?.name ?? '角色', 'play-speaker'));
+        const heading = element('div', undefined, 'play-message-identity');
+        const speaker = element('span', undefined, 'play-message-speaker-row');
+        speaker.append(element('small', `#${index}`, 'play-floor-number'), element('strong', identity?.name ?? '角色', 'play-speaker'));
+        if (message.hidden) {
+            const mark = createPlayFloorIcon('ghost'); mark.classList.add('play-hidden-mark');
+            mark.title = '已隐藏，不发送给模型'; mark.removeAttribute('aria-hidden'); mark.setAttribute('aria-label', mark.title); mark.setAttribute('role', 'img');
+            speaker.append(mark);
+        }
+        heading.append(speaker);
         const recent = playRecentTime(message.createdAt); heading.append(element('time', `${recent.day} · ${recent.time}`, 'play-message-time'));
         head.append(heading); return head;
     }
@@ -333,6 +343,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             view = { node, body, error, output: { box: body } }; node.append(body); messageViews.set(message.id, view);
         }
         const { node, body, output, error } = view;
+        node.classList.toggle('is-hidden-floor', !!message.hidden);
         node.querySelector('.play-message-meta')?.remove();
         node.querySelector(':scope > .play-message-actions')?.remove();
         node.querySelector(':scope > .play-delete-checkbox')?.remove();
@@ -348,20 +359,25 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         }
         const edit = iconButton('edit', message.role === 'user' ? '修改用户消息' : '编辑回复原文', () => editMessage(message, body, tools));
         const remove = iconButton('trash', message.role === 'user' ? '删除用户消息' : '删除 AI 消息', () => void removeMessage(message));
+        const visibility = iconButton('eye', message.hidden ? '显示楼层' : '隐藏楼层',
+            () => void run(() => playground.setMessagesHidden(chat.id, [message.id], !message.hidden, chat.revision)));
+        visibility.replaceChildren(createPlayFloorIcon(message.hidden ? 'eye-slash' : 'eye'));
+        visibility.classList.add('play-floor-visibility'); visibility.disabled = busy() || settings.enabled === false;
         edit.disabled = remove.disabled = busy() || settings.enabled === false;
         const favorite = iconButton('star', message.role === 'user' ? '收藏用户消息' : '收藏演出记录', () => void toggleMessageFavorite(message)); favorite.classList.add('tea-star');
         const starred = message.role === 'user' ? promptFavorites?.isFavorite({ prompt: message.text, origin: message.origin })
             : favorites.has(favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt }));
         if (starred) { favorite.title = '取消收藏'; favorite.setAttribute('aria-label', favorite.title); }
         favorite.setAttribute('aria-pressed', String(!!starred)); favorite.disabled = busy() || !(result?.text ?? message.text)?.trim() || settings.enabled === false;
-        tools.append(favorite, edit, remove); head.append(tools); node.insertBefore(head, body);
+        tools.append(visibility, favorite, edit, remove); head.append(tools); node.insertBefore(head, body);
+        if (message.role === 'user') setupPlayReplyHeaderActions(tools, { remove, favorite, edit, visibility, role: 'user' });
         if (message.role === 'assistant') {
             const prompt = iconButton('prompt', '查看实际提示词', () => onInspectPrompt?.(currentResult(message).id));
             prompt.classList.add('play-sent-prompt-action'); prompt.hidden = !onInspectPrompt;
             const branch = iconButton('branch', '创建分支', () => void branchAt(message));
             branch.classList.add('play-branch-action');
             branch.disabled = branchDisabled(message);
-            setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit });
+            setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit, visibility });
             const index = message.results.indexOf(result), atEnd = index === message.results.length - 1;
             const { actions: footer, swipes, prev, count, next, again, continueBtn, stop, assistantTop } = createPlayReplyActions({
                 onPrevious: () => void selectVersion(message, index - 1), onChoose: () => void showVersions(message),
@@ -379,7 +395,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             next.title = atEnd ? '生成新版本' : '下一个结果'; next.setAttribute('aria-label', next.title); next.disabled = busy() || !canWrite();
             again.title = result.status === 'save-failed' ? '重试保存' : '重新生成'; again.setAttribute('aria-label', again.title);
             again.disabled = mutating || (!canWrite() && result.status !== 'save-failed') || (busy() && result.status !== 'save-failed');
-            continueBtn.disabled = busy() || !canWrite() || !result.text.trim();
+            continueBtn.disabled = busy() || !canWrite() || !result.text.trim() || !!message.hidden;
+            if (message.hidden) continueBtn.title = '请先显示此楼层再续写';
             const job = ownJobs().find(job => job.resultId === result.id);
             stop.hidden = !showPlayReplyStop(job, playground.getStates().filter(job => activePhases.has(job.phase)).length > 1);
             if (result.status === 'unfinished' && !ownJobs().length) {
@@ -409,14 +426,17 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         }
         return node;
     }
+    let messageDepths = new Map();
     function renderChat(saved = positions.get(chat?.id), targetId) {
         if (!chat) return;
+        messageDepths = playMessageDepths(chat.messages);
         editor = null;
         const name = playChatTitle(chat), parts = /^(.*?)\s*·\s*(分支#\d+)$/.exec(name);
         titleName.textContent = parts?.[1] ?? name; titleName.title = name;
         titleBranch.textContent = parts ? `· ${parts[2]}` : ''; titleBranch.hidden = !parts;
         menuItems.replaceChildren();
         menuItems.append(textButton(chatFavorite ? '取消收藏该聊天' : '收藏该聊天', () => void toggleChatFavorite()),
+            textButton('隐藏楼层管理', () => void manageHiddenFloors()),
             textButton('修改聊天名称', () => void renameChat(chat)), textButton('删除该聊天', () => void deleteChat(chat)),
             textButton('删除', () => { menu.open = false; deletingFrom = -1; renderChat(position()); }));
         for (const button of menuItems.children) button.disabled = busy() || settings.enabled === false;
@@ -543,6 +563,73 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         try { await action(); deletingFrom = null; await reload(); }
         catch (error) { notify(error.message); }
         finally { mutating = false; if (chat && visible) renderChat(positions.get(chat.id)); }
+    }
+    async function manageHiddenFloors() {
+        if (busy() || settings.enabled === false) return;
+        menu.open = false;
+        const chatId = chat.id;
+        const area = element('div', undefined, 'play-hidden-manager');
+        let dialogPopup;
+        const header = element('header', undefined, 'play-hidden-manager-head');
+        const close = iconButton('close', '关闭', () => void dialogPopup?.complete(ctx().POPUP_RESULT.AFFIRMATIVE));
+        header.append(element('h3', '隐藏楼层管理'), close);
+        const summary = element('dl', undefined, 'play-hidden-summary');
+        const latest = element('dd', undefined, 'play-hidden-latest'), ranges = element('dd', undefined, 'play-hidden-ranges');
+        for (const [label, value] of [['最新楼层', latest], ['已隐藏', ranges]]) {
+            const row = element('div'); row.append(element('dt', label), value); summary.append(row);
+        }
+        const fields = element('div', undefined, 'play-hidden-range-fields');
+        const inputs = ['起始楼层', '结束楼层'].map(name => {
+            const label = element('label'), input = element('input', undefined, 'text_pole');
+            input.type = 'text'; input.inputMode = 'numeric'; input.pattern = '[0-9]*'; input.autocomplete = 'off'; input.setAttribute('aria-label', name);
+            label.append(element('span', name), input); fields.append(label); return input;
+        });
+        const separator = element('span', '—', 'play-hidden-range-to'); separator.setAttribute('aria-hidden', 'true');
+        fields.insertBefore(separator, fields.lastElementChild);
+        inputs[0].value = '0';
+        const actions = element('div', undefined, 'play-hidden-range-actions');
+        const error = element('p', '', 'play-result-error'); error.setAttribute('role', 'alert'); error.hidden = true;
+        const update = () => {
+            latest.textContent = chat.messages.length ? `#${chat.messages.length - 1}` : '无';
+            ranges.textContent = playHiddenRanges(chat.messages) || '无';
+            for (const button of actions.children) button.disabled = !chat.messages.length || mutating;
+        };
+        async function apply(hidden) {
+            if (mutating || chat?.id !== chatId) return;
+            error.hidden = true;
+            const [first, last] = inputs.map(input => /^\d+$/.test(input.value.trim()) ? Number(input.value) : NaN);
+            if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 0 || first > last || last >= chat.messages.length) {
+                error.textContent = '请输入有效的起始、结束楼层整数，且不要超过最新楼层。'; error.hidden = false; return;
+            }
+            const ids = chat.messages.slice(first, last + 1).map(message => message.id), revision = chat.revision;
+            remember(); mutating = true; updateInput(); update();
+            for (const input of inputs) input.disabled = true;
+            try {
+                await playground.setMessagesHidden(chatId, ids, hidden, revision);
+                await reload();
+            } catch (cause) {
+                error.textContent = cause.message; error.hidden = false;
+                if (cause.code === 'chat_conflict' || cause.code === 'message_missing') {
+                    try { await reload(); } catch { /* Preserve the original operation error. */ }
+                }
+            } finally {
+                mutating = false;
+                for (const input of inputs) input.disabled = false;
+                if (chat?.id === chatId) { update(); if (visible) renderChat(positions.get(chatId)); }
+            }
+        }
+        actions.append(textButton('隐藏', () => void apply(true)), textButton('显示', () => void apply(false)));
+        actions.firstElementChild.prepend(createPlayFloorIcon('eye')); actions.lastElementChild.prepend(createPlayFloorIcon('eye-slash'));
+        area.append(header, summary, fields, error, actions);
+        update();
+        await ctx().callGenericPopup(area, ctx().POPUP_TYPE.TEXT, '', { okButton: false, onClosing: () => !mutating,
+            onOpen: popup => {
+                dialogPopup = popup; popup.dlg.classList.add('tea-hidden-dialog'); popup.dlg.setAttribute('aria-label', '隐藏楼层管理');
+                const source = getComputedStyle(page.closest('#teahouse-panel'));
+                for (const name of ['--tea-paper', '--tea-ink', '--tea-heading', '--tea-muted', '--tea-line', '--tea-accent', '--tea-field-paper', '--tea-control-paper', '--tea-control-ink', '--tea-error', '--tea-ui', '--play-prose-font', '--tea-popup-shadow', 'color-scheme']) {
+                    const value = source.getPropertyValue(name); if (value.trim()) popup.dlg.style.setProperty(name, value);
+                }
+            } });
     }
     async function sendDraft() {
         const job = ownJobs().find(job => activePhases.has(job.phase));
@@ -703,7 +790,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 renderPlayReply(view.output, current, { displayText: processed(latest, current), job: playground.getState(current.id),
                     error: view.error, anchor: `${chat.id}/${latest.id}` });
                 view.continueBtn.hidden = chat.messages.at(-1)?.id !== latest.id || !current.text.trim();
-                view.continueBtn.disabled = busy() || !canWrite();
+                view.continueBtn.disabled = busy() || !canWrite() || !!latest.hidden;
             }
             for (const button of content.querySelectorAll('.play-header-actions button')) {
                 const message = chat.messages.find(message => message.id === button.closest('[data-message-id]').dataset.messageId);

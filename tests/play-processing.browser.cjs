@@ -35,7 +35,7 @@ POPUP_TYPE:{TEXT:1,CONFIRM:2},POPUP_RESULT:{CANCELLED:0,AFFIRMATIVE:1},callGener
 Popup:class{constructor(panel,_type,_text,options){this.options=options;this.dlg=document.createElement('dialog');this.dlg.className='popup';this.dlg.innerHTML='<div class="popup-body"><div class="popup-content"></div></div>';this.dlg.querySelector('.popup-content').append(panel)}
 show(){document.body.append(this.dlg);this.dlg.showModal();this.options.onOpen();return new Promise(resolve=>this.finish=resolve)}
 async complete(){if(await this.options.onClosing()){this.dlg.remove();this.finish()}}}};
-const script=(id,scriptName,findRegex,replaceString,extra={})=>({id,scriptName,findRegex,replaceString,placement:[2],minDepth:999,maxDepth:0,...extra});
+const script=(id,scriptName,findRegex,replaceString,extra={})=>({id,scriptName,findRegex,replaceString,placement:[2],minDepth:null,maxDepth:null,...extra});
 const globalRules=[script('global','全局替换','全局标记','全局已处理')];
 const presetRules=[script('same','状态栏美化','<status>([\\s\\S]*?)</status>','<div class="status-card">状态卡：$1</div>',{markdownOnly:true})];
 const characterRules=[
@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-persona-session.js','play-character-context.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -189,6 +189,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  assert.equal(await editor.inputValue(),draft,'编辑框保留原始宏，显示时才换成人名');
  await editor.fill('取消后不保存');await action('取消').click();
  assert.equal((await page.evaluate(id=>runtime.getRound(id),id)).prompt,draft);
+ await record.locator('.play-user-text').getByText('测试甲 请听 茶客 说话。',{exact:true}).waitFor();
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();await editor.fill('本窗口的修改草稿');
  await page.evaluate(async({id,draft})=>{await testHistory.editPrompt(id,'另一窗口保存的新提示词',draft);ui.refresh();},{id,draft});
  await closeSettings(await openSettings());

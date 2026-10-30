@@ -290,7 +290,7 @@ const cards = ['甲.[+]*', '乙'].map((name, i) => ({ name, avatar: `${i}.png`, 
                     assert.equal(matches.length, 1); assert.ok(matches[0] > previous); assert.equal(messages[matches[0]].role, role); previous = matches[0];
                     assert.ok(text(messages[matches[0]]).endsWith('仅分支启用'), '非当前角色的插件勾选用于每一种分支发送');
                 }
-                assert.ok(!text(messages[native]).includes('仅分支启用'), '插件启用不影响角色原酒馆聊天');
+                assert.ok(text(messages[native]).includes('仅分支启用'), '插件选择统一处理本次发送的酒馆副本，原酒馆聊天保持不变');
             }
             console.log(JSON.stringify({ port: url.port, check: 'non-current character outbound send/version/regenerate/continue include Tavern then branch exactly once', ...branchCheck }));
             console.log(JSON.stringify({ port: url.port, nativeRequests: outbound.length, optionalModes: optional.states, ...result }));

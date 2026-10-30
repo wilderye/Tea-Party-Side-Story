@@ -338,7 +338,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const status = element('p', '', 'tea-setting-description'); status.setAttribute('role', 'status');
     const list = element('div', undefined, 'play-regex-groups'); let loading = false, loaded = !!viewState?.loaded;
     const refresh = iconButton('refresh', '刷新列表', () => void load());
-    toolbar.append(element('p', '角色正则跟随小剧场选中的角色，预设正则使用当前预设。勾选同时控制小剧场显示和分支发送，各规则仍按原用途生效，忽略楼层限制。未单独选择时跟随酒馆；在这里修改不影响酒馆原聊天。', 'tea-setting-description'), refresh);
+    toolbar.append(element('p', '角色正则跟随小剧场选中的角色，预设正则使用当前预设。勾选统一控制本次请求引用的酒馆聊天和插件聊天，各规则按原用途和深度生效。插件消息接在酒馆消息后，普通发送最新消息深度为 0，续写目标为 -1；隐藏楼层不参与。酒馆保存时已删除的文字无法恢复。在这里修改不改变酒馆原聊天的设置。', 'tea-setting-description'), refresh);
     details.append(toolbar, status, list);
     section.append(details); area.append(section);
 

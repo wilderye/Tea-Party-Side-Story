@@ -2,10 +2,86 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { memoryFiles, characterA, contextA, time } from './play-fixture.js';
-import { PLAY_HISTORY_INDEX, playRoundFile, playBodyFile, playChatTitle, readPlayRound } from '../play-history.js';
+import { PLAY_HISTORY_INDEX, playRoundFile, playBodyFile, playChatTitle, readPlayRound, playCurrentMessages } from '../play-history.js';
 import { createPlayground } from '../playground.js';
 import { createPlayChatFavorites } from '../play-chat-favorites.js';
 import { deferred } from './play-fixture.js';
+import { playMessageDepths, playHiddenRanges } from '../play-message-context.js';
+
+test('隐藏整层只提交元数据，刷新、版本选择和新分支共用楼层标记', async () => {
+    const f = memoryFiles(), chat = await seed(f), original = structuredClone(chat);
+    const reads = []; f.io.beforeRead = name => reads.push(name);
+    const before = f.writes.length;
+    const hidden = await f.store.setMessagesHidden(chat.id, chat.messages.map(message => message.id), true, chat.revision);
+    assert.equal(f.writes.length - before, 2, '一次聊天元数据和一次目录提交');
+    assert.equal(reads.some(name => name.startsWith('teahouse-play-body-')), false);
+    assert.ok(hidden.messages.every(message => message.hidden));
+    const reopened = await f.createStore().getChat(chat.id);
+    assert.deepEqual(reopened.messages.map(message => message.role === 'user' ? message.text : message.results), original.messages.map(message => message.role === 'user' ? message.text : message.results));
+    assert.ok(playCurrentMessages(reopened).every(message => message.hidden));
+    const pair = await f.store.getRound(chat.id);
+    assert.equal(pair.initialUserHidden, true); assert.equal(pair.initialAssistantHidden, true);
+    const writes = f.writes.length;
+    await f.store.setMessagesHidden(chat.id, chat.messages.map(message => message.id), true, hidden.revision);
+    assert.equal(f.writes.length, writes, '重复设置不再提交');
+    const version = await f.store.setMessageVersion(chat.id, chat.messages[1].id, chat.messages[1].results[1].id);
+    assert.equal(version.messages[1].hidden, true);
+    const branch = await f.store.createBranch(chat.id, chat.messages[1].id, version.revision);
+    assert.ok(branch.messages.every(message => message.hidden));
+    await f.store.setMessagesHidden(branch.id, [branch.messages[0].id], false, branch.revision);
+    assert.equal((await f.store.getChat(chat.id)).messages[0].hidden, true);
+});
+
+test('隐藏范围拒绝过期和缺失目标，保存失败保留原状态；隐藏回复不能续写', async () => {
+    const f = memoryFiles(), chat = await seed(f);
+    await assert.rejects(f.store.setMessagesHidden(chat.id, [chat.messages[0].id, randomUUID()], true, chat.revision), { code: 'message_missing' });
+    const changed = await f.store.setMessagesHidden(chat.id, [chat.messages[1].id], true, chat.revision);
+    await assert.rejects(f.store.setMessagesHidden(chat.id, [chat.messages[0].id], true, chat.revision), { code: 'chat_conflict' });
+    f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
+    await assert.rejects(f.store.setMessagesHidden(chat.id, [chat.messages[0].id], true, changed.revision), /模拟保存失败/);
+    f.io.beforeWrite = null;
+    const current = await f.store.getChat(chat.id);
+    assert.equal(current.messages[0].hidden, undefined);
+    const service = createPlayground({ history: f.store, isCurrent: () => true,
+        captureEnvironment: () => ({ character: characterA, context: contextA, independent: true }),
+        prepareRequest: async () => assert.fail('隐藏目标不能开始请求准备') });
+    const target = current.messages[1];
+    await assert.rejects(service.continueChat(chat.id, target.id, target.selectedResultId, { character: characterA, characterId: chat.characterId }), { code: 'message_hidden' });
+    await assert.rejects(service.continueResult(chat.id, target.selectedResultId, { character: characterA, characterId: chat.characterId }), { code: 'message_hidden' });
+    assert.equal((await f.store.getChat(chat.id)).messages[1].results[0].status, 'complete');
+});
+
+test('显示深度排除隐藏层，目录保持楼层身份，范围由同一数据计算', async () => {
+    const f = memoryFiles(), initial = await seed(f), { chat } = await append(f, initial, '下一轮');
+    const current = await f.store.setMessagesHidden(chat.id, [chat.messages[1].id, chat.messages[2].id], true, chat.revision);
+    const depths = playMessageDepths(current.messages);
+    assert.deepEqual(current.messages.map(message => depths.get(message)), [1, undefined, undefined, 0]);
+    assert.equal(playHiddenRanges(current.messages), '1–2');
+    const search = await f.store.getChatSearch(chat.id);
+    assert.deepEqual(search.messages.map(message => message.depth), [1, undefined, undefined, 0]);
+    assert.deepEqual(search.messages.map(message => message.messageId), current.messages.map(message => message.id));
+});
+
+test('分支和游玩重生成保留单独用户层的隐藏身份，保存原文和 AI 隐藏不变', async () => {
+    const f = memoryFiles(), initial = await seed(f);
+    await f.store.setMessagesHidden(initial.id, initial.messages.map(message => message.id), true, initial.revision);
+    const requests = [];
+    const service = createPlayground({ history: f.store, isCurrent: () => true,
+        captureEnvironment: () => ({ character: characterA, context: contextA, independent: true }),
+        prepareRequest: async request => { requests.push(request); return { send: async () => '新正文' }; } });
+    const ai = initial.messages[1], target = { character: characterA, characterId: initial.characterId };
+    await service.regenerateChat(initial.id, ai.id, ai.selectedResultId, target);
+    assert.equal(requests[0].environment.requestUser.hidden, true);
+    assert.equal(requests[0].environment.requestUser.id, initial.messages[0].id);
+    let current = await f.store.getChat(initial.id);
+    assert.ok(current.messages.every(message => message.hidden));
+    await service.regenerate(initial.id, current.messages[1].selectedResultId, target);
+    assert.equal(requests[1].environment.requestUser.hidden, true);
+    assert.equal(requests[1].environment.requestUser.id, initial.messages[0].id);
+    current = await f.store.getChat(initial.id);
+    assert.equal(current.messages[0].text, initial.messages[0].text);
+    assert.equal(current.messages[1].hidden, true);
+});
 
 async function seed(f) {
     const round = await f.begin();

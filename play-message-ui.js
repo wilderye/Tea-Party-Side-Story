@@ -7,16 +7,23 @@ export const playResultStatusText = { preparing: '正在准备', generating: '�
 
 let replyToolsId = 0, replyToolsDismissalBound = false;
 
-/** Both reply views reveal the same secondary buttons inline on phones. */
-export function setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit }) {
+/** Use the same hidden-floor icons as SillyTavern's message controls. */
+export function createPlayFloorIcon(name) {
+    const icon = element('span', undefined, `fa-solid fa-${name} play-floor-icon`);
+    icon.setAttribute('aria-hidden', 'true'); return icon;
+}
+
+/** User messages and replies reveal their secondary buttons inline on phones. */
+export function setupPlayReplyHeaderActions(tools, { branch, prompt, remove, favorite, edit, visibility, role = 'assistant' }) {
     tools.classList.add('play-reply-tools'); tools.id = `play-reply-tools-${++replyToolsId}`;
-    for (const button of [branch, prompt, remove]) button.classList.add('play-reply-secondary');
-    const more = iconButton('more', '更多回复操作', () => {
+    const secondary = [branch, prompt, visibility, remove].filter(Boolean);
+    for (const button of secondary) button.classList.add('play-reply-secondary');
+    const more = iconButton('more', role === 'user' ? '更多消息操作' : '更多回复操作', () => {
         tools.classList.add('is-expanded'); more.setAttribute('aria-expanded', 'true');
-        [branch, prompt, remove, favorite, edit].find(button => !button.hidden && !button.disabled)?.focus({ preventScroll: true });
+        [...secondary, favorite, edit].find(button => !button.hidden && !button.disabled)?.focus({ preventScroll: true });
     });
     more.classList.add('play-reply-more'); more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', tools.id);
-    tools.replaceChildren(more, branch, prompt, remove, favorite, edit);
+    tools.replaceChildren(...(role === 'user' ? [visibility, favorite, edit, remove, more].filter(Boolean) : [...secondary, favorite, edit, more]));
     tools.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !tools.classList.contains('is-expanded')) return;
         event.preventDefault(); event.stopPropagation(); tools.classList.remove('is-expanded');

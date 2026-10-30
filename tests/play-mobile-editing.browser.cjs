@@ -54,14 +54,15 @@ async function verifyGeometry(panel, editor, actions, mobile) {
         feed.y += inset; feed.height -= inset;
     }
     if (mobile) {
-        assert.ok(box.height >= Math.max(80, feed.height - 90), '手机编辑框使用正文区的大部分高度');
+        const header = await actions.boundingBox();
+        assert.ok(box.height >= Math.max(80, feed.height - header.height - 60), `手机编辑框使用居中头部下面的剩余空间：${JSON.stringify({ feed, box, header })}`);
         assert.ok(box.y >= feed.y && box.y + box.height <= feed.y + feed.height + 1, '整个编辑框都在可见正文区域内，长文末尾不会藏到键盘后面');
     } else {
         assert.ok(box.height < 150, '桌面短文字保持原来的紧凑高度');
     }
     for (const name of ['保存', '取消']) {
         const action = await actions.getByRole('button', { name, exact: true }).boundingBox();
-        assert.ok(action.y >= feed.y && action.y + action.height <= box.y + 1 && action.y + action.height <= feed.y + feed.height, `${name}完整露在编辑框上方`);
+        assert.ok(action.y >= feed.y && action.y + action.height <= box.y + 1 && action.y + action.height <= feed.y + feed.height, `${name}完整露在编辑框上方：${JSON.stringify({ feed, box, action })}`);
     }
 }
 

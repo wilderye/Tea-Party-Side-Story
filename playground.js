@@ -1,5 +1,6 @@
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
+import { playRequestMessages } from './play-message-context.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
@@ -183,6 +184,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             if (continueResultId) {
                 const currentRound = await abortable(() => chatMode ? history.getChat(roundId) : history.getRound(roundId), job.controller.signal);
                 const results = chatMode ? currentRound.messages.at(-1)?.results : currentRound?.results;
+                if (chatMode ? currentRound.messages.at(-1)?.hidden : currentRound.initialAssistantHidden) {
+                    throw new PlaygroundError('message_hidden', '请先显示此楼层再续写。');
+                }
                 const target = results?.find(result => result.id === continueResultId);
                 if (!target) throw new PlaygroundError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
                 if (!target.text.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
@@ -198,16 +202,14 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 ...(continueResultId ? { expectedText: baseText } : {}) }, { signal: job.controller.signal });
             let requestPrompt = job.round.prompt;
             if (chatMode) {
-                const messages = playCurrentMessages(job.round);
-                job.messageId = messages.at(-1).messageId;
-                // The final user message is passed separately so the current
-                // custom instruction is added once, never saved into history.
-                messages.pop();
-                const user = messages.at(-1)?.role === 'user' ? messages.pop() : null;
+                const { history: messages, user, target } = playRequestMessages(playCurrentMessages(job.round));
+                job.messageId = target.messageId;
                 requestPrompt = user?.text;
-                environment.branchHistory = messages.map(message => ({ role: message.role, text: message.text, extra: message.extra,
-                    context: message.context }));
+                environment.branchHistory = messages;
+                environment.requestUser = user;
                 environment.branchMode = true;
+            } else if (job.round.initialUserId) {
+                environment.requestUser = { id: job.round.initialUserId, hidden: job.round.initialUserHidden };
             }
             notify(job);
             job.controller.signal.throwIfAborted();
@@ -356,6 +358,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         renameChat(id, name, revision) {
             assertIdleChat(id);
             return historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true);
+        },
+        setMessagesHidden(id, messageIds, hidden, revision) {
+            assertIdleChat(id);
+            return historyAction('修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, revision), true);
         },
         editMessage(id, messageId, update) {
             assertIdleChat(id);

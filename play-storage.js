@@ -5,8 +5,8 @@ const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites'
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
     'listChats', 'getChat', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
-    'addChatFavorite', 'syncChatFavorite'];
-const workerVersion = 12;
+    'addChatFavorite', 'syncChatFavorite', 'setMessagesHidden'];
+const workerVersion = 13;
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {

@@ -32,7 +32,7 @@ test('删除 AI 消息移除全部版本，保留用户消息、收藏副本及�
 test('删除用户消息保留 AI 回复；不能编辑恢复原提示词或用它再次生成', async () => {
     const f = memoryFiles(), round = await completedRound(f);
     const removed = await f.store.removePrompt(round.id, round.prompt);
-    assert.deepEqual(removed, { ...round, prompt: null });
+    assert.deepEqual(removed, { ...round, prompt: null, initialUserId: null, initialUserHidden: false });
     assert.deepEqual(await f.createStore().getRound(round.id), removed);
     await assert.rejects(f.store.editPrompt(round.id, '试图恢复旧草稿', round.prompt), error => error.code === 'prompt_missing');
     await assert.rejects(f.begin({ roundId: round.id }), error => error.code === 'prompt_missing');

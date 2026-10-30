@@ -8,6 +8,22 @@ test('分支请求在预设关闭聊天记录时明确拒绝，不发送缺少�
     await assert.rejects(f.prepare(), { code: 'branch_history_disabled' });
 });
 
+test('接续聊天的深度世界书和预设插入按同一历史定位，深度0在最新插件消息后', async () => {
+    const f = fixture(); f.options.type = 'normal'; f.options.cyclePrompt = '';
+    f.environment.branchMode = true;
+    f.options.history = Array.from({ length: 7 }, (_, index) => ({ name: 'Character', is_user: index === 6,
+        mes: index < 4 ? `酒馆${index + 1}` : `插件${index - 3}`, extra: {} }));
+    f.options.extensionPrompts = {
+        world0: { value: '深度0世界书', position: 1, depth: 0, role: 'system' },
+        note1: { value: '深度1作者注释', position: 1, depth: 1, role: 'system' },
+        persona3: { value: '深度3人设', position: 1, depth: 3, role: 'system' },
+    };
+    f.prompts.collection.push({ identifier: 'depthPreset', content: '预设深度2', role: 'system', injection_position: 1, injection_depth: 2 });
+    const messages = await f.prepare();
+    assert.deepEqual(messages.map(message => message.content), ['酒馆1', '酒馆2', '酒馆3', '酒馆4', '深度3人设',
+        '插件1', '预设深度2', '插件2', '深度1作者注释', '插件3', '深度0世界书']);
+});
+
 function fixture(settings = {}) {
     class MessageCollection {
         constructor(identifier) { this.identifier = identifier; this.messages = []; }
@@ -88,16 +104,16 @@ test('续写保留酒馆的空消息替代文字设置', async () => {
     assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令', '继续', '原回复，', '接着写']);
 });
 
-test('第二种移除独立 AI 消息，在底部用户消息中先放续写提示词、思维链再放保存原正文', async () => {
+test('第二种移除独立 AI 消息，在底部用户消息中放续写提示词、思维链和准备好的正文', async () => {
     const f = fixture();
     f.environment.continuation = { mode: 'prompt', prompt: '接着下面写：\n{{lastChatMessage}}' };
-    f.options.cyclePrompt = '原回复，【保存原文】$&';
+    f.options.cyclePrompt = '原回复，【发送处理后】$&';
     f.options.cycleReasoning = '<think>目标思维链</think>\n';
     f.options.history.at(-1).mes = '<think>目标思维链</think>\n正则处理后的正文';
     const before = structuredClone(f.options.history);
     const chat = await f.prepare();
     assert.deepEqual(chat.map(message => message.content), ['提示词', '插入的助手指令',
-        '接着下面写：\n<think>目标思维链</think>\n原回复，【保存原文】$&']);
+        '接着下面写：\n<think>目标思维链</think>\n原回复，【发送处理后】$&']);
     assert.equal(chat.at(-1).role, 'user');
     assert.deepEqual(f.options.history, before, '只改变请求副本，不删除保存的消息');
 });

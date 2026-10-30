@@ -1,5 +1,7 @@
 // The directory is committed after a complete round file. A failed upload
 // therefore never replaces a readable round with half of a new version.
+import { playMessageDepths } from './play-message-context.js';
+
 export const PLAY_HISTORY_INDEX = 'teahouse-play-index.json';
 const idPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const statuses = ['unfinished', 'complete', 'stopped', 'failed'];
@@ -38,9 +40,11 @@ export function readPlayChat(value, { bodyStored = false } = {}) {
     const messages = value.messages.map(message => {
         assert(isId(message?.id) && !ids.has(message.id) && isDate(message.createdAt));
         ids.add(message.id);
+        assert(message.hidden === undefined || typeof message.hidden === 'boolean');
+        const visibility = message.hidden === true ? { hidden: true } : {};
         if (message.role === 'user') {
             assert((bodyStored || typeof message.text === 'string') && isId(message.bodyRevision));
-            return { id: message.id, role: 'user', createdAt: message.createdAt,
+            return { id: message.id, role: 'user', createdAt: message.createdAt, ...visibility,
                 ...(message.text !== undefined ? { text: message.text } : {}), bodyRevision: message.bodyRevision, origin: readPlayOrigin(message.origin) };
         }
         assert(message.role === 'assistant' && Array.isArray(message.results) && message.results.length > 0);
@@ -50,7 +54,7 @@ export function readPlayChat(value, { bodyStored = false } = {}) {
             return { ...readResult(result, bodyStored), bodyRevision: result.bodyRevision };
         });
         assert(results.some(result => result.id === message.selectedResultId));
-        return { id: message.id, role: 'assistant', createdAt: message.createdAt,
+        return { id: message.id, role: 'assistant', createdAt: message.createdAt, ...visibility,
             selectedResultId: message.selectedResultId, results };
     });
     assert(value.startMessageIds.length <= 2 && value.startMessageIds.every(isId)
@@ -70,7 +74,8 @@ export function playChatTitle(chat) {
 export function playCurrentMessages(chat) {
     return chat.messages.map(message => message.role === 'user' ? { ...message }
         : { id: message.id, role: message.role, createdAt: message.createdAt,
-            ...message.results.find(result => result.id === message.selectedResultId), messageId: message.id });
+            ...message.results.find(result => result.id === message.selectedResultId), messageId: message.id,
+            ...(message.hidden ? { hidden: true } : {}) });
 }
 
 // Existing playground APIs expose only the original pair, derived from the
@@ -82,6 +87,9 @@ function startRound(chat) {
         results: (messages.find(message => message.role === 'assistant')?.results ?? []).map(({ bodyRevision, ...result }) => result),
         selectedResultId: messages.find(message => message.role === 'assistant')?.selectedResultId ?? null,
         initialAssistantId: messages.find(message => message.role === 'assistant')?.id ?? null,
+        initialUserId: messages.find(message => message.role === 'user')?.id ?? null,
+        initialUserHidden: !!messages.find(message => message.role === 'user')?.hidden,
+        initialAssistantHidden: !!messages.find(message => message.role === 'assistant')?.hidden,
         initialIsLast: !messages.some(message => message.role === 'assistant') || chat.messages.at(-1)?.id === messages.find(message => message.role === 'assistant')?.id };
 }
 
@@ -400,15 +408,18 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             const round = readPlayRound(value), result = round.results.find(result => result.id === selectedResultId) ?? round.results.at(-1);
             return { id, revision: row.revision, name: round.origin?.title || [...(round.prompt ?? '')].slice(0, 60).join('') || '未命名聊天',
                 messages: search ? [round.prompt !== null && { role: 'user', text: round.prompt, messageId: null, context: result?.context },
-                    result && { role: 'assistant', text: result.text, messageId: null, context: result.context }].filter(Boolean)
-                    : result ? [{ role: 'assistant', text: result.text, context: result.context }] : [] };
+                    result && { role: 'assistant', text: result.text, messageId: null, context: result.context, depth: 0 }].filter(Boolean)
+                    .map(message => ({ ...message, depth: message.role === 'user' ? (result ? 1 : 0) : 0 }))
+                    : result ? [{ role: 'assistant', text: result.text, context: result.context, depth: 0 }] : [] };
         }
-        const messages = search ? value.messages : [value.messages.findLast(message => message.role === 'assistant')].filter(Boolean);
+        const chat = readPlayChat(value, { bodyStored: true });
+        const depths = playMessageDepths(chat.messages);
+        const messages = search ? chat.messages : [chat.messages.findLast(message => message.role === 'assistant')].filter(Boolean);
         const readable = [];
         for (const message of messages) {
             const result = message.role === 'user' ? message : message.results.find(result => result.id === message.selectedResultId);
             assert(result && isId(result.id) && isId(result.bodyRevision));
-            readable.push({ role: message.role, messageId: message.id, resultId: message.role === 'user' ? null : result.id,
+            readable.push({ role: message.role, messageId: message.id, hidden: !!message.hidden, depth: depths.get(message), resultId: message.role === 'user' ? null : result.id,
                 bodyRevision: result.bodyRevision, text: await readBody(result.id, result.bodyRevision), context: result.context });
         }
         return { id, revision: row.revision, name: row.name || '未命名聊天', messages: readable };
@@ -671,6 +682,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     throw new PlayHistoryError('chat_conflict', '当前回复版本已改变，请重新读取后再操作。');
                 }
                 if (input.operation === 'continue') {
+                    if (assistant.hidden) throw new PlayHistoryError('message_hidden', '请先显示此楼层再续写。');
                     assert(isText(target.text), '这份回复没有正文，无法续写。');
                     if (target.text !== input.expectedText) throw new PlayHistoryError('edit_conflict', '这条回复已在其他窗口修改，请重新读取后再续写。');
                     Object.assign(target, { status: 'unfinished', finishedAt: null, context: result.context });
@@ -771,6 +783,19 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 if (target.text !== expectedText) throw new PlayHistoryError('edit_conflict', '这条消息已在其他窗口修改，请保留草稿并重新读取。');
                 target.text = text; target.bodyRevision = uuid();
             });
+        },
+        setMessagesHidden(id, messageIds, hidden, expectedRevision) {
+            assert(Array.isArray(messageIds) && messageIds.length > 0 && messageIds.every(isId)
+                && typeof hidden === 'boolean', '请选择有效的楼层。');
+            const targets = new Set(messageIds);
+            return changeChat(id, expectedRevision, chat => {
+                const messages = chat.messages.filter(message => targets.has(message.id));
+                if (messages.length !== targets.size) throw new PlayHistoryError('message_missing', '所选楼层已删除，请重新读取后核对范围。');
+                for (const message of messages) {
+                    if (hidden) message.hidden = true;
+                    else delete message.hidden;
+                }
+            }, { bodyStored: true });
         },
         removeMessage(id, messageId, expectedRevision) {
             assert(isId(messageId));
@@ -980,6 +1005,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 }
                 owner.name = input.character.name;
                 if (input.continueResultId) {
+                    if (round.initialAssistantHidden) throw new PlayHistoryError('message_hidden', '请先显示此楼层再续写。');
                     const target = round.results.findIndex(item => item.id === input.continueResultId);
                     if (target < 0) throw new PlayHistoryError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
                     const existing = round.results[target];
