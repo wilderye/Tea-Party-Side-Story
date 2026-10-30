@@ -30,7 +30,7 @@ document.getElementById('render').onclick=()=>window.renderText('<!doctype html>
 const allowed = new Set(['play-message-context.js','play-sent-prompt.js', 'play-chat-favorites.js', 'style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
   'play-persona-session.js', 'play-character-context.js',
   'play-storage-worker.js', 'play-storage-lock.js', 'play-prompt.js', 'play-task-module.js', 'play-template-context.js','play-variable-context.js', 'play-preparation.js', 'play-preset.js', 'play-parameters.js', 'play-request.js',
-  'play-render.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
+  'play-render.js', 'view-diagnostics.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://test'), file = url.pathname.slice(1);

@@ -264,6 +264,25 @@ test('规则来源名称跟随同一次读取，切换酒馆角色后在刷新�
     assert.deepEqual(display.sources, {}); assert.deepEqual(display.rules, []);
 });
 
+test('刷新显示规则时保留可用快照，不出现临时空规则；只有完整新结果才替换', async () => {
+    const f = fixture();
+    f.groups[0] = [{ id: 'one', scriptName: '规则', placement: [2], replaceString: 'old' }];
+    f.groups[1] = []; f.groups[2] = [];
+    let release, gate;
+    const display = createPlayDisplay(() => f.ctx, {}, async () => { if (gate) await gate; return f.engine; });
+    const target = f.ctx.characters[0];
+    assert.equal(display.isReady(target), false);
+    await display.refresh(target);
+    assert.equal(display.isReady(target), true);
+    assert.equal(display.process('标记', target), 'old');
+    gate = new Promise(resolve => { release = resolve; });
+    const pending = display.refresh(target);
+    f.groups[0][0].replaceString = 'new';
+    assert.equal(display.process('标记', target), 'old', '网络等待期间仍按上次完整快照显示');
+    release(); await pending;
+    assert.equal(display.process('标记', target), 'new');
+});
+
 test('重复刷新或未改动配置时不递增 revision，配置与规则变更时才使缓存失效', async () => {
     const f = fixture(), settings = { playHiddenTags: 'think', playRegexExclusions: [] };
     const display = createPlayDisplay(() => f.ctx, settings, async () => f.engine);

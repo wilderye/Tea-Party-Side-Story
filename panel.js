@@ -1,6 +1,7 @@
 import { findEntries, isManuscript, reconcileRandomOrder } from './library.js';
 import { renderMarkdown } from './markdown.js';
 import { createAppearance } from './appearance.js';
+import { createViewDiagnostics } from './view-diagnostics.js';
 import { element, textButton, glyph, iconButton, copyText, createPageJump } from './ui.js';
 import { renderDiagnostics } from './diagnostics-view.js';
 import { showSentPromptViewer } from './play-sent-prompt-view.js';
@@ -155,7 +156,7 @@ function createMobileNavigation(panel, media) {
 
 export function createTheatrePanel(ctx, state, actions) {
     let panel, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
-    let mobileNavigation;
+    let mobileNavigation, viewDiagnostics;
     let scope = 'community', mode = 'list';
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
     let searchComposing = false, catalogCollapsed = false, restoringCatalog = false;
@@ -644,6 +645,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panel || searchComposing) return;
+        viewDiagnostics?.activate('render');
         sentPromptViewer?.dispose(); sentPromptViewer = null;
         if (mode !== 'favorite-editor') disposeFavoriteComposer();
         if (resetPosition) resetCatalogPosition(); else captureCatalogPosition();
@@ -1155,6 +1157,9 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer = new ResizeObserver(measureBodies);
                 mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
                 message = ''; panel = element('div'); panel.id = 'teahouse-panel';
+                viewDiagnostics = createViewDiagnostics(panel, actions.diagnostics, () => ({ scope, mode, route: playRoute,
+                    appearance: state.settings.appearance === 'tavern' ? 'tavern' : 'default',
+                    fontSource: state.settings.fontSource === 'tavern' ? 'tavern' : 'default' }));
                 mobileNavigation = createMobileNavigation(panel, media);
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
@@ -1173,6 +1178,7 @@ export function createTheatrePanel(ctx, state, actions) {
                         captureCatalogPosition(); return true;
                     },
                     onOpen: () => {
+                        viewDiagnostics?.event('弹窗开启动画结束');
                         mobileNavigation?.sync(scope);
                         restoreCatalogPosition();
                         measureBodies();
@@ -1204,6 +1210,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
                 appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
+                viewDiagnostics?.dispose(); viewDiagnostics = null;
                 searchComposing = false;
                 restoringCatalog = false;
             }

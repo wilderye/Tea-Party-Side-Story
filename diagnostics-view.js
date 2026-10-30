@@ -37,7 +37,7 @@ export function renderDiagnostics(area, diagnostics, viewState) {
     controls.append(viewButton, exportButton, clearButton);
     function refresh() {
         const { entries, persistenceError } = diagnostics.read();
-        notice.textContent = persistenceError || '按时间记录插件运行情况和完整错误；不附带提示词或密钥。';
+        notice.textContent = persistenceError || '自动记录打开页面时的加载、显示和位置变化，以及完整错误。出现闪烁后可直接导出；不附带正文、角色名称或密钥。';
         clearButton.disabled = entries.length === 0;
         // Preserve the visible line and text selection while new logs arrive.
         const top = list.getBoundingClientRect().top;

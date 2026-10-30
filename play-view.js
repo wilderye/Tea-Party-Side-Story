@@ -1,6 +1,7 @@
 import { element, textButton, glyph, iconButton } from './ui.js';
 import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
+import { recordViewEvent } from './view-diagnostics.js';
 import { playRoundDepth } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
@@ -86,6 +87,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
+    let displayLoad, batchNumber = 0, lastProgrammaticScroll;
+    const observe = (operation, values) => recordViewEvent(root, operation, values);
     const storageKey = 'teahouse-play-view-v1';
 
     try {
@@ -283,7 +286,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const distanceToBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
         let res = null;
         const rows = rowsByCharacter.get(selected.id) ?? [];
-        if (followBottom && historyRange(rows).end === rows.length && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) res = { bottom: true };
+        if (followBottom && historyRange(rows).end === rows.length && (!rows.length || records.get(rows.at(-1).id)?.round)
+            && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) res = { bottom: true };
         else {
             const top = feed.getBoundingClientRect().top + readingInset();
             const items = [...content.querySelectorAll(':scope > .play-record:not([hidden])')];
@@ -331,7 +335,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const key = characterKey(selected), saved = positions.get(key);
         const distanceToBottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop;
         const rows = rowsByCharacter.get(selected.id) ?? [];
-        if (followBottom && historyRange(rows).end === rows.length && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) {
+        if (followBottom && historyRange(rows).end === rows.length && (!rows.length || records.get(rows.at(-1).id)?.round)
+            && (distanceToBottom <= 24 || (saved?.bottom && distanceToBottom <= 32))) {
             commitPosition({ bottom: true });
             return;
         }
@@ -343,17 +348,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function updateJump() {
         const rows = rowsByCharacter.get(selected?.id) ?? [];
-        const hasLater = historyRange(rows).end < rows.length;
-        jump.hidden = !visible || feed.clientHeight <= 0 || (!hasLater && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= feed.clientHeight);
+        const hasLater = historyRange(rows).end < rows.length || !!rows.length && !records.get(rows.at(-1).id)?.round;
+        jump.hidden = !visible || content.hidden || feed.clientHeight <= 0 || (!hasLater && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= feed.clientHeight);
         jump.disabled = jump.hidden;
     }
     function setFeedScroll(value) {
         const previous = feed.scrollTop;
         feed.scrollTop = value;
-        if (feed.scrollTop !== previous) onProgrammaticScroll(feed);
+        if (feed.scrollTop !== previous) {
+            lastProgrammaticScroll = feed.scrollTop;
+            onProgrammaticScroll(feed);
+            observe('恢复阅读位置', { programmatic: true, targetScroll: Math.round(value), scrollTop: feed.scrollTop,
+                scrollHeight: feed.scrollHeight, clientHeight: feed.clientHeight });
+        }
     }
     function restorePosition(position) {
-        if (!visible || !feed.clientHeight) return;
+        if (!visible || content.hidden || !feed.clientHeight) return;
         if (!position || position.bottom) {
             const target = feed.scrollHeight;
             if (Math.abs(feed.scrollTop - target) > 2) setFeedScroll(target);
@@ -378,9 +388,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function jumpToLatest() {
         if (!visible) return;
+        // Cancel an in-flight older-page batch before moving the history window.
+        // It must not append its old range after the user asks for the latest.
+        if (historyLoad) { refreshId++; historyLoad = null; }
         positions.set(characterKey(selected), { bottom: true });
         const rows = rowsByCharacter.get(selected?.id) ?? [];
-        if (historyRange(rows).end < rows.length) {
+        if (historyRange(rows).end < rows.length || rows.length && !records.get(rows.at(-1).id)?.round) {
+            displayedCharacter = '';
             resetHistoryWindow(rows);
             renderHistory(); void refresh();
         }
@@ -462,16 +476,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
     feed.addEventListener('scroll', () => {
         if (!visible) return;
+        const programmatic = lastProgrammaticScroll !== undefined && Math.abs(lastProgrammaticScroll - feed.scrollTop) < 2;
+        lastProgrammaticScroll = undefined;
         // Native resizing can clamp/focus-scroll the feed before ResizeObserver
         // runs. Do not overwrite the saved paragraph/bottom with that movement.
         if (nativeInputSizing && cachedPosition?.key === characterKey(selected) && cachedPosition.feedHeight !== feed.clientHeight) return;
         const moved = cachedPosition?.key === characterKey(selected) && Math.abs(cachedPosition.scrollTop - feed.scrollTop) >= 2;
-        if (moved && !restoringPosition) { pendingReveal = null; latestRequest = null; }
+        if (moved && !programmatic && !restoringPosition) { pendingReveal = null; latestRequest = null; }
         // A scroll event queued before opening the menu may arrive afterwards.
         // Only dismiss it if the content has moved since the menu was positioned.
         if (resultMenu && feed.scrollTop !== resultMenu.scrollTop) closeResults(false);
         rememberPosition(true, false); updateJump();
-        if (moved && !restoringPosition && feed.scrollHeight > feed.clientHeight) {
+        if (moved && !programmatic && !restoringPosition && feed.scrollHeight > feed.clientHeight) {
             if (feed.scrollTop < 120) void loadEarlierHistory();
             else if (feed.scrollHeight - feed.clientHeight - feed.scrollTop < 120) void loadHistory('later');
         }
@@ -888,7 +904,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         for (const [bar, direction, remaining, label] of [
             [earlierBar, 'earlier', start, '更早'], [laterBar, 'later', rows.length - end, '后续'],
         ]) {
-            bar.hidden = !selected || remaining <= 0;
+            bar.hidden = content.hidden || !selected || remaining <= 0;
             if (bar.hidden) continue;
             bar.textContent = historyLoad?.direction === direction ? '正在加载记录…' : `加载${label}记录（剩余 ${remaining} 条）`;
             bar.disabled = !!historyLoad;
@@ -896,6 +912,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     async function readHistoryRows(rows, isCurrent, show) {
         let next = 0, frame = 0;
+        const batch = ++batchNumber, started = performance.now();
+        observe('开始读取一批记录', { batch, count: rows.length });
         const schedule = () => {
             if (!frame && visible) frame = requestAnimationFrame(() => { frame = 0; if (isCurrent()) show(); });
         };
@@ -903,10 +921,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             await Promise.all(Array.from({ length: Math.min(4, rows.length) }, async () => {
                 while (next < rows.length && isCurrent()) {
                     const row = rows[next++], cached = records.get(row.id);
+                    const readStarted = performance.now();
+                    const directory = rowsByCharacter.get(selected?.id) ?? [];
+                    const details = { batch, record: row.id, ordinal: directory.findIndex(item => item.id === row.id) + 1, total: directory.length };
+                    observe('开始读取记录', details);
                     try {
                         const round = await playground.getRound(row.id);
+                        observe('记录读取完成', { ...details, durationMs: Math.round(performance.now() - readStarted), reason: isCurrent() ? 'current' : 'stale' });
                         if (isCurrent()) records.set(row.id, { round, revision: row.revision });
                     } catch {
+                        observe('记录读取失败', { ...details, durationMs: Math.round(performance.now() - readStarted), reason: isCurrent() ? 'current' : 'stale' });
                         if (!isCurrent()) return;
                         if (cached?.round) cached.error = true; else records.set(row.id, { error: true });
                     }
@@ -914,6 +938,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 }
             }));
         } finally {
+            observe('一批记录读取结束', { batch, durationMs: Math.round(performance.now() - started), reason: isCurrent() ? 'current' : 'stale' });
             cancelAnimationFrame(frame);
             if (isCurrent()) show();
         }
@@ -950,6 +975,24 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const visibleRows = rows.slice(start, end);
         const visibleIds = new Set(visibleRows.map(row => row.id));
         for (const [id, view] of views) view.item.hidden = !visibleIds.has(id);
+        const savedTarget = pendingReveal?.key === key ? pendingReveal.roundId : positions.get(key)?.anchor?.split('/')[0];
+        const targetId = visibleIds.has(savedTarget) ? savedTarget : visibleRows.at(-1)?.id;
+        const target = records.get(targetId), rulesReady = displayReady();
+        // A directory containing the last row does not mean its body has arrived.
+        // Keep one stable loading surface until the intended opening record can
+        // be rendered with its display rules, then commit and position together.
+        if (!ready || !rulesReady || displayedCharacter !== key && targetId && !target?.round) {
+            content.hidden = true; displayedCharacter = '';
+            empty.hidden = !readError.hidden || !!target?.error && rulesReady;
+            empty.dataset.state = 'loading'; emptyArt.hidden = true;
+            emptyTitle.textContent = '正在读取演出记录…';
+            if (target?.error && rulesReady) showReadError('要显示的演出记录暂时无法读取。');
+            feed.setAttribute('aria-busy', String(!empty.hidden));
+            updateEarlierBar(); updateJump(); updateControls();
+            observe('等待首次正文', { target: targetId, rulesReady, ready: !!target?.round, failed: !!target?.error, total: rows.length });
+            return;
+        }
+        content.hidden = false; feed.setAttribute('aria-busy', 'false');
         let shown = 0, next = null;
         for (const row of [...visibleRows].reverse()) {
             const cached = records.get(row.id); if (!cached?.round) continue;
@@ -972,6 +1015,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const anchorId = positions.get(key)?.anchor?.split('/')[0];
         const awaitingAnchor = anchorId && visibleIds.has(anchorId) && !records.has(anchorId);
         displayedCharacter = ready && !awaitingAnchor && (shown || !rows.length) ? key : '';
+        observe('显示记录批次', { target: targetId, total: rows.length, start, end, shown, rulesReady,
+            latestReady: !!records.get(rows.at(-1)?.id)?.round, rulesRevision: playground.display?.revision ?? 0 });
         updateControls();
     }
     async function changeResult(id, direction, resultId) {
@@ -1053,21 +1098,44 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function showReadError(message) {
         readError.replaceChildren(element('span', message), textButton('重新读取', () => void refresh())); readError.hidden = false;
     }
+    function displayReady() {
+        const target = selected ?? current;
+        return !playground.display || !!playground.display.isReady?.(target)
+            || !!(displayLoad?.avatar === target?.avatar && displayLoad?.settled);
+    }
+    function refreshDisplay(character = selected ?? current) {
+        if (!playground.display) return;
+        if (displayLoad?.avatar === character?.avatar && !displayLoad.settled) return displayLoad.promise;
+        const request = displayLoad = { avatar: character?.avatar, settled: false };
+        const started = performance.now();
+        observe('开始读取显示规则', { cached: !!playground.display.isReady?.(character), character: characterKey(character) });
+        request.promise = playground.display.refresh(character).then(() => {
+            observe('显示规则读取完成', { durationMs: Math.round(performance.now() - started), rulesRevision: playground.display.revision });
+        }, () => {
+            observe('显示规则读取失败', { durationMs: Math.round(performance.now() - started) });
+            if (visible && displayLoad === request) notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。');
+        }).finally(() => {
+            request.settled = true;
+            if (visible && displayLoad === request && (selected ?? current)?.avatar === request.avatar) {
+                keepReading(renderHistory); layout();
+            }
+        });
+        return request.promise;
+    }
     async function chooseCharacter(character) {
         if (characterKey(selected) === characterKey(character)) { if (mobile.matches) setBrowsing(false); return; }
         latestRequest = null; pendingReveal = null;
         closeResults(false); rememberPosition(); selected = character;
+        displayedCharacter = '';
+        displayLoad = null; void refreshDisplay(character);
         if (mobile.matches) setBrowsing(false);
         renderPeople(); renderHistory(); updateComposer(); restorePosition(positions.get(characterKey(selected)));
-        if (playground.display) {
-            try { await playground.display.refresh(character); if (visible) keepReading(renderHistory); }
-            catch { notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'); }
-        }
         await refresh();
     }
     async function refresh() {
         const id = ++refreshId;
         historyLoad = null;
+        readError.hidden = true;
         syncCurrent();
         try {
             if (id !== refreshId) return;
@@ -1080,6 +1148,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 : characters.find(item => item.id && item.id === previous.id) ?? characters.find(item => item.avatar && item.avatar === previous.avatar) ?? currentRow ?? characters[0] ?? null;
             if (!selected) browsing = true;
             const key = characterKey(selected);
+            if (visible && !displayReady()) void refreshDisplay(selected ?? current);
             if (previous && !previous.id && selected?.id && previous.avatar === selected.avatar) {
                 for (const map of [positions, drafts, historyWindows]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
                 for (const request of requests.values()) if (request.key === previousKey) request.key = key;
@@ -1091,6 +1160,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const previousRows = rowsByCharacter.get(characterId) ?? [];
             const previousRange = historyRange(previousRows, key);
             rowsByCharacter.set(characterId, rows);
+            observe('记录目录读取完成', { character: key, total: rows.length, batch: id });
             loaded = true;
             const reveal = pendingReveal?.key === key ? pendingReveal : null;
             const targetId = reveal?.roundId ?? positions.get(key)?.anchor?.split('/')[0];
@@ -1200,10 +1270,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (visible) { root = container; return; }
             // Reattaching the panel can reset scrollTop before its first layout.
             // Keep the saved position authoritative until that layout restores it.
-            root = container; visible = true; restoringPosition = true;
+            root = container; visible = true; restoringPosition = true; displayedCharacter = '';
             syncCurrent(); browsing ??= !current; updateBrowser();
             resetHistoryWindow(rowsByCharacter.get(selected?.id) ?? []);
             renderHistory(); updateComposer();
+            restorePosition(positions.get(characterKey(selected)));
             resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
             // Paint the panel controls before measuring history or loading the
             // native helpers. A tab click must not wait for conversation layout.
@@ -1211,10 +1282,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             activationFrame = requestAnimationFrame(() => {
                 activationTimer = setTimeout(() => {
                     if (!visible) return;
-                    renderPeople(); layout(); void refreshUser(); void refreshFavorites(); void refresh();
-                    if (playground.display) void playground.display.refresh(selected).finally(() => {
-                        if (visible) keepReading(renderHistory);
-                    }).catch(() => notify('酒馆正则读取失败，请在设置中刷新正则列表后重试。'));
+                    renderPeople(); layout(); void refreshUser(); void refreshFavorites();
+                    void refreshDisplay(); void refresh();
                     if (playground.initialize) void playground.initialize().then(() => {
                         if (visible) updateControls();
                     }).catch(() => notify('生成接口载入失败，请关闭后再打开剧场演出重试。'));

@@ -237,7 +237,7 @@ function displaySnapshot(config, rules) {
 
 /** A view snapshot, refreshed on opening/settings actions; never a saved rule copy. */
 export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, diagnostics) {
-    let loading, engine, rules = [], sources = {}, config = structuredClone(readPlaySettings(settings)), revision = 0;
+    let engine, rules = [], sources = {}, config = structuredClone(readPlaySettings(settings)), revision = 0;
     let lastSnapshot = displaySnapshot(config, rules);
     let selectedCharacter;
     const roleRules = new Map();
@@ -274,6 +274,7 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
         get revision() { return revision; },
         get rules() { return rules; },
         get sources() { return sources; },
+        isReady: character => character?.avatar ? roleRules.has(character.avatar) : !!engine,
         updateSettings() { syncState(structuredClone(readPlaySettings(settings)), rules); },
         ensure,
         async refresh(character) {
@@ -283,17 +284,20 @@ export function createPlayDisplay(ctx, settings, loadEngine = loadNativeRegex, d
             try {
                 const context = ctx();
                 const target = selectedCharacter ?? context.characters?.[context.characterId];
-                roleEngines.clear(); roleRules.clear(); roleLoading.clear();
-                await ensure(target);
+                // Keep the last usable snapshot while the next one loads. A
+                // history batch must not briefly render with an empty rule set.
+                roleLoading.clear();
+                const nextEngine = await loadEngine(target);
                 if (id !== refreshId) return rules;
-                engine = roleEngines.get(target?.avatar) ?? await (loading ??= loadEngine(target));
-                nextRules = readTavernRegex(engine, context, target);
-                if (target?.avatar) roleRules.set(target.avatar, nextRules);
+                nextRules = readTavernRegex(nextEngine, context, target);
+                roleEngines.clear(); roleRules.clear();
+                engine = nextEngine;
+                if (target?.avatar) { roleRules.set(target.avatar, nextRules); roleEngines.set(target.avatar, engine); }
                 sources = { PRESET: engine.getCurrentPresetName(), SCOPED: target?.name ?? '' };
             } catch (error) {
                 if (id !== refreshId) return rules;
                 diagnostics?.error('载入酒馆回复显示规则', error);
-                loading = null; sources = {}; roleRules.clear(); roleEngines.clear(); roleLoading.clear(); engine = null;
+                sources = {}; roleRules.clear(); roleEngines.clear(); roleLoading.clear(); engine = null;
                 syncState(structuredClone(readPlaySettings(settings)), []);
                 throw error;
             }

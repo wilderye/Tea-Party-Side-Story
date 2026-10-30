@@ -259,3 +259,33 @@ test('相同错误被多处引用时保留每处信息，不误判为循环引�
     assert.equal(saved.errors[0].stack, cause.stack); assert.equal(saved.errors[1].stack, cause.stack);
     assert.equal(saved.cause.stack, cause.stack); assert.doesNotMatch(logs.export(), /循环引用/);
 });
+
+test('显示观察只记录允许的标量，密集事件不逐次写存储，导出和刷新保留同一时间线', () => {
+    const { logs, storage } = fixture();
+    let writes = 0;
+    const set = storage.setItem;
+    storage.setItem = (...args) => { writes++; set(...args); };
+    for (let sequence = 1; sequence <= 40; sequence++) logs.view('显示观察：记录读取完成', {
+        session: 'qa-1', sequence, ordinal: sequence, durationMs: sequence * 3,
+        text: '私密正文', characterName: '私密角色', settings: { password: '私密密钥' },
+        resource: { url: 'https://private.invalid/secret' }, headers: { Authorization: 'Bearer secret' },
+    });
+    assert.equal(writes, 0, '密集显示事件先留在内存，避免渲染回调同步写入');
+    logs.error('读取失败', new Error('actual read failure'));
+    assert.equal(writes, 1, '原始错误和前面的观察一同保存');
+    logs.view('显示观察：结束本次打开', { sequence: 41, session: 'qa-1' });
+    const exported = logs.export();
+    assert.equal(writes, 2, '导出前保存尚未写入的观察');
+    assert.match(exported, /"ordinal":40/); assert.match(exported, /actual read failure/);
+    assert.doesNotMatch(exported, /私密|private.invalid|secret|Authorization/);
+    assert.equal(createDiagnostics({ storage }).export(), exported);
+});
+
+test('清空日志取消待保存观察，存储失败仍能导出观察', () => {
+    const { logs, storage } = fixture();
+    logs.view('旧观察', { sequence: 1 }); logs.clear(); logs.flush();
+    assert.equal(logs.export(), '');
+    storage.setItem = () => { throw Error('storage disabled'); };
+    logs.view('新观察', { sequence: 2 }); logs.flush();
+    assert.match(logs.export(), /新观察/); assert.match(logs.read().persistenceError, /导出/);
+});

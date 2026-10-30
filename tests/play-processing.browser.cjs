@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-persona-session.js','play-character-context.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -434,16 +434,26 @@ if (require.main === module) (async()=>{
     const box=selector=>record.querySelector(selector).getBoundingClientRect();
     const edit=box('.play-edit-prompt'),identity=box('.play-user-meta .play-message-identity');
     const avatar=box('.play-user-meta .play-message-avatar'),body=box('.play-user-text');
+    const mobileHeaders=['user','assistant'].map(role=>{
+     const head=box(`.play-${role}-meta`),portrait=box(`.play-${role}-meta .play-message-avatar`);
+     const details=box(`.play-${role}-meta .play-message-identity`),tools=box(`.play-${role}-meta .play-header-actions`);
+     const center=(head.left+head.right)/2;
+     return{stacked:portrait.bottom<=details.top&&details.bottom<=tools.top,
+      centered:[portrait,details,tools].every(part=>Math.abs((part.left+part.right)/2-center)<1)};
+    });
     const prose=selector=>{const s=getComputedStyle(record.querySelector(selector));return{font:s.fontFamily,size:s.fontSize,color:s.color,align:s.textAlign};};
-    return{editAfterIdentity:edit.left>=identity.right,editBeforeIdentity:edit.right<=identity.left,
-     avatarOnLeft:Math.abs(avatar.left-body.left)<1,
+    return{mobileHeaders,editBeforeIdentity:edit.right<=identity.left,
      avatarOnRight:Math.abs(avatar.right-body.right)<1,
      sameBodyLeft:Math.abs(body.left-box('.play-results').left)<1,
      user:prose('.play-user-text .play-prose'),reply:prose('.play-results .play-prose'),
      againText:record.querySelector('.play-again').textContent.trim()};
    });
-   assert.equal(viewport.width<=760?messageLayout.editAfterIdentity:messageLayout.editBeforeIdentity,true,'用户消息的操作按钮在手机端位于身份信息右侧，电脑端位于左侧');
-   assert.equal(viewport.width<=760?messageLayout.avatarOnLeft:messageLayout.avatarOnRight,true,'用户头像在手机端与正文左边缘对齐，电脑端与右边缘对齐');
+   if(viewport.width<=760) {
+    assert.ok(messageLayout.mobileHeaders.every(header=>header.stacked&&header.centered),'手机用户和 AI 消息的头像、身份信息、操作按钮依次分行居中，互不重叠');
+   } else {
+    assert.equal(messageLayout.editBeforeIdentity,true,'电脑端用户消息的操作按钮位于身份信息左侧');
+    assert.equal(messageLayout.avatarOnRight,true,'电脑端用户头像与正文右边缘对齐');
+   }
    assert.equal(messageLayout.sameBodyLeft,true,'两类消息正文共用左边缘');
    assert.deepEqual(messageLayout.user,messageLayout.reply,'两类消息共用正文排版');
    assert.match(messageLayout.user.font,/Microsoft YaHei|PingFang SC|sans-serif/);
@@ -629,7 +639,11 @@ if (require.main === module) (async()=>{
    if(viewport.width<=760)assert.ok(editorBox.height>400,'手机回复编辑框占据大部分可见区域');
    else assert.ok(editorBox.height<150,'桌面短回复的编辑框按内容显示，不撑满半屏');
    assert.ok(saveBox.y+saveBox.height<=editorBox.y,'保存图标位于编辑框上方');
-   assert.ok(saveBox.x>editorBox.x+editorBox.width/2,'保存图标位于消息右侧');
+   if(viewport.width<=760) {
+    const cancelBox=await editAction('取消').boundingBox();
+    assert.ok(Math.abs((saveBox.x+cancelBox.x+cancelBox.width)/2-(editorBox.x+editorBox.width/2))<1,'手机保存和取消按钮作为一组居中');
+    assert.ok(saveBox.x+saveBox.width<=cancelBox.x&&Math.abs(saveBox.y-cancelBox.y)<1,'手机保存和取消按钮在同一行，互不重叠');
+   } else assert.ok(saveBox.x>editorBox.x+editorBox.width/2,'电脑保存图标位于消息右侧');
    assert.equal(await editor.inputValue(),'<thinking>找回整段小剧场</thinking>');
    await editor.fill('<thinking>思考</thinking>\n修正后的正文');
    if(viewport.width<=760)assert.ok((await editor.boundingBox()).height>400,'手机输入两行正文后仍保留大编辑区域');

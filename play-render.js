@@ -1,6 +1,7 @@
 import MarkdownIt from './vendor/markdown-it.js';
 import { renderMarkdown } from './markdown.js';
 import { element } from './ui.js';
+import { recordViewEvent } from './view-diagnostics.js';
 
 // HTML is enabled only for recognizing blocks. Prose still uses the escaped
 // Markdown renderer, and every executable document stays in its own iframe.
@@ -16,6 +17,7 @@ globalThis.addEventListener?.('message', event => {
         if (frame.contentWindow !== event.source || frameSizes.get(frame) !== event.data.token) continue;
         const height = event.data.height;
         if (typeof height === 'number' && Number.isFinite(height) && height > 0 && height <= 100000) {
+            recordViewEvent(frame, '网页高度变化', { record: frame.closest('.play-record')?.dataset.record, frameHeight: Math.ceil(height) });
             frame.style.height = `${Math.ceil(height)}px`;
         }
         break;
@@ -169,6 +171,9 @@ export function renderPlayText(container, source, anchor, renderHtml = false, hi
             unfenced(lines.slice(start).join('\n'));
         }
     } else prose(source);
+    recordViewEvent(container, '正文生成', { record: container.closest('.play-record')?.dataset.record,
+        replaced: container.childElementCount > 0, added: fragment.childElementCount,
+        framesAdded: fragment.querySelectorAll('iframe').length, framesRemoved: container.querySelectorAll('iframe').length });
     container.replaceChildren(fragment);
     let index = 0;
     for (const child of container.children) {

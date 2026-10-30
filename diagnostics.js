@@ -2,6 +2,28 @@ const STORAGE_KEY = 'teahouse-diagnostics-v1';
 const fields = new Set(['phase', 'apiMode', 'source', 'model', 'stream', 'endpoint',
     'startedAt', 'requestStartedAt', 'firstContentAt', 'lastContentAt', 'receivedCharacters', 'savedAt',
     'count', 'file', 'line', 'column']);
+// UI observations are scalars selected by the collector, never DOM/content or
+// configuration objects. Keep the schema version in every viewing session.
+const viewFields = new Set(('session sequence schema count pageMs elapsedMs durationMs scope mode route appearance fontSource '
+    + 'browser platform viewportWidth viewportHeight scale pixelRatio visibility reason character record batch ordinal total '
+    + 'start end target ready pending failed latestReady rulesReady rulesRevision cached shown added removed replaced '
+    + 'scrollTop scrollHeight clientHeight bottomDistance programmatic targetScroll loading earlier later jump '
+    + 'proseAdded proseRemoved textChanges framesAdded framesRemoved image imageKind complete naturalWidth naturalHeight '
+    + 'fontFamily fontWeight fontSize lineHeight fontStatus fontLoaded fontLoading fontUnloaded fontFailed fontSwap fontBlock '
+    + 'probe node connected hidden width height top color textFill background opacity display cssVisibility animation transition transform filter mask '
+    + 'textNodes imagePending framePending longTaskSupported layoutShiftSupported '
+    + 'frameHeight maxFrameGap longTasks longestTask layoutShifts layoutShiftScore resourceKind resource duration transferBytes '
+    + 'decodedBytes cacheHint sampleMs suppressed').split(' '));
+
+function viewMetadata(value) {
+    const result = {};
+    for (const [key, item] of Object.entries(value ?? {})) {
+        if (!viewFields.has(key)) continue;
+        if (typeof item === 'number' && Number.isFinite(item) || typeof item === 'boolean') result[key] = item;
+        else if (typeof item === 'string') result[key] = redactor()(item).replace(/[\r\n]/g, ' ').slice(0, 180);
+    }
+    return result;
+}
 const statusNames = { complete: '已完成', failed: '失败', stopped: '已停止', 'save-failed': '保存失败' };
 const phaseNames = { preparing: '准备提示词', generating: '已发出生成请求', 'retry-wait': '等待自动重试', saving: '保存回复' };
 // Error objects sometimes carry an entire request or host configuration. Keep
@@ -85,6 +107,7 @@ export function formatDiagnostic(entry) {
     const message = entry.error ? errorText(entry.error) : [entry.operation, entry.message].filter(Boolean).join(' · ');
     const context = [...fields].filter(key => entry[key] !== undefined && entry[key] !== '')
         .map(key => `${key}: ${entry[key]}`);
+    if (entry.view) context.push(JSON.stringify(entry.view));
     return `[${entry.at}] [${entry.level}] ${[message, ...context].join('\n')}`;
 }
 
@@ -101,7 +124,7 @@ function metadata(value, clean) {
 /** Local diagnostics contain observed events and errors, never request/settings objects. */
 export function createDiagnostics({ storage, limit = 500, now = () => new Date().toISOString(),
     uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` } = {}) {
-    let entries = [], persistenceError = '', epoch = 0;
+    let entries = [], persistenceError = '', epoch = 0, viewTimer;
     const listeners = new Set();
     try {
         storage ??= globalThis.localStorage;
@@ -113,7 +136,8 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
                     level: ['info', 'warn', 'error'].includes(item.level) ? item.level : item.error ? 'error' : 'info',
                     operation: clean(item.operation ?? ''),
                     message: clean(item.message ?? item.status ?? ''),
-                    ...metadata(item, clean), ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
+                    ...metadata(item, clean), ...(item.view ? { view: viewMetadata(item.view) } : {}),
+                    ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
             }).sort((a, b) => a.at.localeCompare(b.at));
     } catch (error) {
         persistenceError = '旧日志无法读取；新日志仍可查看和导出。';
@@ -147,6 +171,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
         }
     }
     function changed() {
+        clearTimeout(viewTimer); viewTimer = undefined;
         persist();
         let viewerFailed = false;
         for (const listener of listeners) {
@@ -200,11 +225,19 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
     }
     return {
         start,
+        view(operation, values) {
+            entries.push({ id: uuid(), at: now(), level: 'info', operation: redactor()(operation), message: '', view: viewMetadata(values) });
+            trim(entries, limit);
+            // Never synchronously serialize the whole log in a rendering or
+            // scroll callback. Export and lifecycle boundaries flush this batch.
+            if (!viewTimer) { viewTimer = setTimeout(changed, 1000); viewTimer.unref?.(); }
+        },
+        flush() { if (viewTimer) changed(); },
         info(operation, values = {}) { append('info', operation, values); },
         warn(operation, error, values = {}, secrets = []) { append('warn', operation, values, error, redactor(secrets)); },
         error(operation, error, values = {}, secrets = []) { append('error', operation, values, error, redactor(secrets)); },
         read: () => ({ entries: structuredClone(entries), persistenceError, limit }),
-        export: () => entries.map(formatDiagnostic).join('\n\n'),
+        export() { if (viewTimer) changed(); return entries.map(formatDiagnostic).join('\n\n'); },
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         clear() { entries = []; epoch++; changed(); },
     };
