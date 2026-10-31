@@ -21,7 +21,8 @@ const ctx = { mainApi:'openai', characterId:0, name1:'你', name2:'角色',
  uuidv4:()=>{const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=bytes[6]&15|64;bytes[8]=bytes[8]&63|128;const hex=[...bytes].map(n=>n.toString(16).padStart(2,'0')).join('');return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20)},
  getRequestHeaders:()=>({'Content-Type':'application/json','X-CSRF-Token':'play-test'}),eventTypes:{},eventSource:{on(){}} };
 window.requestCount = 0;
-window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{prepareRequest:async()=>({send:async args=> {
+window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{loadRegex:async()=>({SCRIPT_TYPES:{},regex_placement:{USER_INPUT:1,AI_OUTPUT:2},
+ getCurrentPresetAPI:()=> 'openai',getCurrentPresetName:()=> '测试预设',getScriptsByType:()=> [],runRegexScript:(_rule,text)=>text}),prepareRequest:async()=>({send:async args=> {
  window.requestCount++; return window.reply ? window.reply(args) : '模拟回复';
 }})});
 window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml,true);
@@ -232,6 +233,9 @@ async function verifyExpiredWriter(page) {
           const live = await a.evaluate(id => runtime.getRound(id), results[0].roundId);
           assert.equal(live.results[0].text, '模拟回复');
           assert.equal(live.results[0].extra.reasoning, '测试思考内容');
+          const liveReader = await a.evaluate(async id => (await runtime.createRoundReader())(id), results[0].roundId);
+          assert.equal(liveReader.results[0].text, '模拟回复');
+          assert.equal(liveReader.results[0].extra.reasoning, '测试思考内容');
           const stored = await b.evaluate(id => runtime.getRound(id), results[0].roundId);
           assert.equal(stored.results[0].text, '');
           assert.equal(stored.results[0].status, 'unfinished');
@@ -259,6 +263,17 @@ async function verifyExpiredWriter(page) {
       assert.equal(promptEdited.prompt, '原位置保存的用户消息', '页面、共享后台任务和兼容保存入口都支持修改用户消息');
       assert.equal(promptEdited.results[0].text, '通过历史保存接口编辑后的正文');
       assert.equal((await a.evaluate(()=>runtime.availability())).available, true);
+      const reading = await b.evaluate(async id => {
+        const readRound = await runtime.createRoundReader(), readDirectory = await runtime.createChatDirectoryReader();
+        return { round: await readRound(id), preview: await readDirectory(id), search: await readDirectory(id, { search:true }),
+          metadata: await runtime.getChatMetadata(id), window: await runtime.getChatWindow(id, { latest:true }) };
+      }, round.id);
+      assert.equal(reading.round.prompt, '原位置保存的用户消息');
+      assert.equal(reading.preview.messages[0].text, '通过历史保存接口编辑后的正文');
+      assert.deepEqual(reading.search.messages.map(message=>message.text), ['原位置保存的用户消息','通过历史保存接口编辑后的正文']);
+      assert.equal(reading.metadata.messages[0].text, undefined);
+      assert.equal(reading.metadata.messages[1].results[0].text, undefined);
+      assert.equal(reading.window.chat.messages[1].results[0].text, '通过历史保存接口编辑后的正文');
 
       const favorite = await a.evaluate(({id,result}) => runtime.addFavorite({roundId:id,resultId:result.id,startedAt:result.startedAt,
         expectedText:'通过历史保存接口编辑后的正文',firstLine:'通过历史保存接口编辑后的正文'}), {id:round.id,result:round.results[0]});
@@ -270,6 +285,19 @@ async function verifyExpiredWriter(page) {
       assert.equal((await a.evaluate(id=>runtime.getFavorite(id),favorite.id)).text,'单独修改的收藏正文','重新生成不改收藏');
       assert.equal((await a.evaluate(()=>runtime.listFavorites())).length,1);
       await b.evaluate(id=>runtime.removeFavorite(id),favorite.id);
+      assert.equal((await a.evaluate(()=>runtime.listFavorites())).length,0);
+      const chatFavorite = await a.evaluate(id=>runtime.favoriteChat(id), results[1].roundId);
+      const favoriteWindow = await b.evaluate(id=>runtime.getFavoriteWindow(id, { start:0,end:1 }), chatFavorite.id);
+      assert.equal(favoriteWindow.messages[0].text, '页面二');
+      assert.equal(favoriteWindow.messages[1].text, undefined);
+      await a.evaluate(async id=>{
+        const chat=await runtime.getChatMetadata(id);
+        await runtime.editMessage(id,chat.messages[0].id,{text:'局域网收藏来源更新',expectedText:'页面二'});
+      }, results[1].roundId);
+      const syncedFavorite = await b.evaluate(id=>runtime.syncFavorite(id, { start:0,end:1 }), chatFavorite.id);
+      assert.equal(syncedFavorite.messages[0].text, '局域网收藏来源更新');
+      assert.equal(syncedFavorite.messages[1].text, undefined);
+      await b.evaluate(id=>runtime.removeFavorite(id), chatFavorite.id);
       assert.equal((await a.evaluate(()=>runtime.listFavorites())).length,0);
 
       const beforeCancel = [...files];

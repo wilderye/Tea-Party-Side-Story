@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBrowserPlayHistory, createPlayFiles } from '../play-storage.js';
-import { memoryFiles, time } from './play-fixture.js';
+import { memoryFiles, characterA, contextA, time } from './play-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { createDiagnostics, serializeDiagnosticError } from '../diagnostics.js';
+import { createPlayRuntime } from '../play-runtime.js';
+import { createPlayChatFavorites } from '../play-chat-favorites.js';
+import { PLAY_HISTORY_INDEX } from '../play-history.js';
 
 const context = () => ({ uuidv4: randomUUID, getRequestHeaders: () => ({ 'Content-Type': 'application/json' }) });
 function browser(t, SharedWorker, indexedDB) {
@@ -14,7 +17,7 @@ function browser(t, SharedWorker, indexedDB) {
     }
 }
 
-test('读取五类历史信息不启动后台保存任务，也不依赖浏览器本地存储', async t => {
+test('读取历史信息不启动后台保存任务，也不依赖浏览器本地存储', async t => {
     const f = memoryFiles(), round = await f.begin(), resultId = round.results[0].id;
     await f.store.saveResult(round.id, resultId, { text: '已保存正文', status: 'complete', finishedAt: time(1) });
     const favorite = await f.store.addFavorite({ roundId: round.id, resultId, startedAt: round.results[0].startedAt,
@@ -34,6 +37,84 @@ test('读取五类历史信息不启动后台保存任务，也不依赖浏览�
     assert.equal((await history.getFavorite(favorite.id)).text, '已保存正文');
     const window = await history.getChatWindow(round.id);
     assert.equal(window.chat.messages.at(-1).results[0].text, '已保存正文');
+    assert.equal(workerStarts, 0); assert.equal(databaseOpens, 0);
+});
+
+test('局域网兼容路径提供完整记录接口，新增方法不能只接入电脑路径', t => {
+    browser(t, undefined, { open() { assert.fail('创建记录服务不应打开本地存储'); } });
+    assert.deepEqual(Object.keys(createBrowserPlayHistory(context)).sort(), Object.keys(memoryFiles().store).sort());
+});
+
+test('局域网运行入口批量读取演出和历史，分支与收藏只读取指定正文范围', async t => {
+    const f = memoryFiles(), round = await f.begin();
+    await f.store.saveResult(round.id, round.results[0].id, { text: '初始回复', status: 'complete', finishedAt: time(1) });
+    let chat = await f.store.getChat(round.id);
+    for (let i = 1; i < 15; i++) {
+        const resultId = randomUUID();
+        await f.store.begin({ roundId: chat.id, chatMode: true, operation: 'send', character: characterA, context: contextA,
+            prompt: `用户消息${i}`, resultId, startedAt: time(i * 2), expectedRevision: chat.revision });
+        await f.store.saveResult(chat.id, resultId, { text: `回复${i}`, status: 'complete', finishedAt: time(i * 2 + 1) });
+        chat = await f.store.getChat(chat.id);
+    }
+    const favorites = createPlayChatFavorites(f.store, { ensure: async () => {}, process: text => text });
+    const favorite = await favorites.add(chat.id), reads = [], requests = [];
+    let workerStarts = 0, databaseOpens = 0;
+    browser(t, class { constructor() { workerStarts++; throw Error('unsupported'); } },
+        { open() { databaseOpens++; throw Error('storage denied'); } });
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        requests.push({ url, method: options?.method });
+        assert.ok(url.startsWith('/user/files/'));
+        const name = url.slice('/user/files/'.length), text = f.files.get(name);
+        reads.push(name);
+        return new Response(text ?? '', { status: text === undefined ? 404 : 200 });
+    });
+    const ctx = { ...context(), eventTypes: {}, eventSource: { on() {} } };
+    const runtime = () => createPlayRuntime(() => ctx, { enabled: true }, undefined, { prepareRequest: async () => ({}) });
+    const bodyReads = () => reads.filter(name => name.startsWith('teahouse-play-body-')).length;
+    const readRound = await runtime().createRoundReader();
+    assert.equal((await readRound(chat.id)).results[0].text, '初始回复');
+    assert.equal((await readRound(chat.id)).results[0].text, '初始回复');
+    assert.equal(reads.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+
+    reads.length = 0;
+    const readDirectory = await runtime().createChatDirectoryReader();
+    assert.equal((await readDirectory(chat.id)).messages[0].text, '回复14');
+    assert.equal((await readDirectory(chat.id)).messages[0].text, '回复14');
+    assert.equal(reads.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+    assert.equal(bodyReads(), 1);
+    assert.equal((await readDirectory(chat.id, { search: true })).messages.length, 30);
+    assert.equal(reads.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+
+    reads.length = 0;
+    const metadata = await runtime().getChatMetadata(chat.id);
+    assert.equal(metadata.messages.length, 30);
+    assert.ok(metadata.messages.every(message => message.text === undefined && message.results?.every(result => result.text === undefined) !== false));
+    assert.equal(bodyReads(), 0);
+    const history = createBrowserPlayHistory(() => ctx), last = metadata.messages.at(-1).results[0];
+    assert.equal(await history.getMessageBody(last.id, last.bodyRevision), '回复14');
+    await assert.rejects(history.getMessageBody(randomUUID(), randomUUID()), { code: 'body_missing' });
+
+    reads.length = 0;
+    const branch = await runtime().getChatWindow(chat.id, { latest: true });
+    assert.equal(branch.end - branch.start, 24);
+    assert.equal(branch.chat.messages.at(-1).results[0].text, '回复14');
+    assert.equal(branch.chat.messages[0].text, undefined);
+    assert.equal(bodyReads(), 24);
+
+    reads.length = 0;
+    const reader = runtime(), first = await reader.getFavoriteWindow(favorite.id, { start: 0, end: 24 });
+    assert.equal(first.messages.length, 30);
+    assert.equal(first.messages[23].text, '回复11');
+    assert.equal(first.messages[24].text, undefined);
+    assert.equal(bodyReads(), 24);
+    reads.length = 0;
+    assert.equal((await reader.syncFavorite(favorite.id, { start: 0, end: 24 })).sourceRevision, chat.revision);
+    assert.equal(bodyReads(), 0);
+    const more = await reader.getFavoriteWindow(favorite.id, { start: 24, end: 30 });
+    assert.equal(more.messages[0].text, undefined);
+    assert.equal(more.messages[29].text, '回复14');
+    assert.equal(bodyReads(), 6);
+    assert.ok(requests.every(request => request.method !== 'POST'));
     assert.equal(workerStarts, 0); assert.equal(databaseOpens, 0);
 });
 

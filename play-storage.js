@@ -1,7 +1,8 @@
 import { createPlayHistory, PlayHistoryError } from './play-history.js';
 import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js';
 
-const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite', 'getChatPreview', 'getChatSearch', 'getChatWindow'];
+const readMethods = ['listCharacters', 'listRounds', 'getRound', 'createRoundReader', 'listFavorites', 'getFavorite',
+    'getFavoriteWindow', 'getChatPreview', 'getChatSearch', 'createChatDirectoryReader', 'getChatWindow', 'getChatMetadata', 'getMessageBody'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
     'listChats', 'getChat', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
