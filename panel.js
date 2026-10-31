@@ -28,9 +28,9 @@ function createMobileNavigation(panel, media) {
     const options = { passive: true, signal: listeners.signal };
     const scrollTops = new WeakMap();
     let slot, nav, tools, heading, scope, readingScroll, endTimer, paintFrame = 0;
-    let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0;
+    let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0, suspended = false;
     const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
-    const isReading = () => media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
+    const isReading = () => !suspended && media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
     const isEditingMessage = () => !!panel.querySelector('.play-reading-area .play-edit-form:not([hidden] *)');
     function paint() {
         paintFrame = 0;
@@ -115,12 +115,14 @@ function createMobileNavigation(panel, media) {
     }, { ...options, capture: true });
     panel.addEventListener('keydown', cancelScroll, { signal: listeners.signal });
     panel.addEventListener('focusin', event => {
+        if (suspended) return;
         if (event.target.matches('input, textarea, select') || slot?.contains(event.target)) {
             cancelScroll(); setOffset(0);
         }
     }, { signal: listeners.signal });
     window.visualViewport?.addEventListener('resize', cancelScroll, options);
     function sync(value, resetPosition = false) {
+        if (suspended) return;
         cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0;
         slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
         nav = slot?.firstElementChild;
@@ -143,10 +145,12 @@ function createMobileNavigation(panel, media) {
     }
     return {
         sync,
+        suspend() { suspended = true; cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0; offset = paintedOffset; },
+        resume() { suspended = false; },
         // The history view asks how much of its fixed viewport is covered.
         // It still owns paragraph capture/restoration and history persistence.
         getReadingInset() {
-            if (!isReading() || scope !== 'play') return 0;
+            if (!media.matches || scope !== 'play' || panel.dataset.mode !== 'list' || !slot?.isConnected) return 0;
             return isEditingMessage() ? (heading?.offsetHeight ?? 0) : height - paintedOffset;
         },
         ignoreScroll(area) {
@@ -167,6 +171,7 @@ export function createTheatrePanel(ctx, state, actions) {
     const chatReturns = [];
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
     let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
+    let settingsLayer, settingsBackground, settingsRevision;
     let favoriteComposer, sentPromptViewer;
     const favoriteReaders = new Map();
     const catalogs = new Map();
@@ -264,6 +269,12 @@ export function createTheatrePanel(ctx, state, actions) {
             }
         }
     }
+    function applyReadingAppearance() {
+        applyFontSource();
+        const bodySize = `${bodyFontSize()}px`;
+        if (panel.style.getPropertyValue('--tea-body-size') !== bodySize) panel.style.setProperty('--tea-body-size', bodySize);
+        panel.classList.toggle('tea-compact', state.settings.compact !== false);
+    }
     const pageStart = () => media?.matches ? catalog.page * mobilePageSize() : catalog.desktopStarts[catalog.page] ?? 0;
     const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : catalog.desktopStarts.length;
     const pageForIndex = index => media?.matches ? Math.max(0, Math.floor(index / mobilePageSize())) : Math.max(0, catalog.desktopStarts.findLastIndex(start => start <= index));
@@ -334,6 +345,7 @@ export function createTheatrePanel(ctx, state, actions) {
     async function close() { if (popup) await popup.complete(ctx().POPUP_RESULT.CANCELLED); }
     async function back() {
         if (!await canLeave()) return;
+        if (settingsLayer) { closeSettingsLayer(); return; }
         disposeFavoriteComposer();
         const leavingSettings = mode === 'settings';
         mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
@@ -460,7 +472,54 @@ export function createTheatrePanel(ctx, state, actions) {
         if (favoriteComposer) { disposeFavoriteComposer(); mode = 'list'; }
         settingsReturnMode = mode;
         actions.diagnostics?.info('打开插件设置');
+        if (scope === 'play' && mode === 'list') {
+            openSettingsLayer(); return;
+        }
         mode = 'settings'; message = ''; render();
+    }
+    function settingsHeader() {
+        if (!media.matches) return topbar();
+        const title = element('header', undefined, 'tea-view-title tea-back-title');
+        title.append(iconButton('left', '返回剧场演出', back), element('h2', '设置'), element('small', '自动保存', 'tea-auto-save'));
+        return title;
+    }
+    function openSettingsLayer() {
+        settingsBackground = [...panel.children].filter(node => media.matches || !node.classList.contains('tea-catalog'))
+            .map(node => ({ node, ariaHidden: node.getAttribute('aria-hidden') }));
+        const view = playRoute === 'play' ? playView : chatView;
+        view?.suspend();
+        mobileNavigation?.suspend();
+        observer?.disconnect(); cancelAnimationFrame(measureFrame);
+        settingsRevision = actions.playground?.display?.revision;
+        mode = 'settings'; message = '';
+        settingsLayer = element('section', undefined, 'tea-workspace tea-settings-layer');
+        settingsLayer.setAttribute('role', 'region'); settingsLayer.setAttribute('aria-label', '插件设置');
+        settingsLayer.append(settingsHeader()); renderSettings(settingsLayer);
+        // The layer intercepts pointer input. Keep focus out of the covered
+        // transcript without changing inherited inert/pointer styles on it.
+        for (const { node } of settingsBackground) node.setAttribute('aria-hidden', 'true');
+        panel.append(settingsLayer); observer?.observe(settingsLayer.querySelector('.tea-settings'));
+        settingsLayer.querySelector('button')?.focus({ preventScroll: true });
+        viewDiagnostics?.activate('render');
+    }
+    function closeSettingsLayer({ resume = true } = {}) {
+        if (!settingsLayer) return;
+        const layer = settingsLayer; settingsLayer = null;
+        observer?.disconnect(); cancelAnimationFrame(measureFrame);
+        diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;
+        apiSettings?.cancel();
+        for (const { node, ariaHidden } of settingsBackground ?? []) {
+            if (ariaHidden === null) node.removeAttribute('aria-hidden'); else node.setAttribute('aria-hidden', ariaHidden);
+        }
+        settingsBackground = null; layer.remove(); mode = settingsReturnMode;
+        mobileNavigation?.resume();
+        actions.playground?.display?.updateSettings();
+        const displayChanged = settingsRevision !== actions.playground?.display?.revision;
+        if (resume) {
+            (playRoute === 'play' ? playView : chatView)?.resume(panel, { displayChanged });
+            panel.querySelector('.tea-settings-toggle')?.focus({ preventScroll: true });
+            viewDiagnostics?.activate('render');
+        }
     }
     async function refreshFavoriteCatalog() {
         const id = ++favoriteLoadId;
@@ -647,6 +706,18 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panel || searchComposing) return;
+        if (settingsLayer) {
+            if (mode === 'settings') {
+                applyReadingAppearance();
+                if (!preserveSettings) {
+                    const saved = settingsView?.capture(); diagnosticsView?.dispose(); diagnosticsView = null;
+                    settingsLayer.replaceChildren(settingsHeader()); renderSettings(settingsLayer, saved);
+                    settingsLayer.querySelector('.tea-settings').scrollTop = saved?.scrollTop ?? 0;
+                }
+                return;
+            }
+            const nextMode = mode; closeSettingsLayer({ resume: false }); mode = nextMode;
+        }
         viewDiagnostics?.activate('render');
         sentPromptViewer?.dispose(); sentPromptViewer = null;
         if (mode !== 'favorite-editor') disposeFavoriteComposer();
@@ -681,10 +752,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (favoriteWorkspace) favoriteWorkspace.hidden = true;
         if (chatCatalog) { chatCatalog.hidden = true; chatWorkspace.hidden = true; }
         if (panel.dataset.mode !== mode) panel.dataset.mode = mode;
-        applyFontSource();
-        const bodySize = `${bodyFontSize()}px`;
-        if (panel.style.getPropertyValue('--tea-body-size') !== bodySize) panel.style.setProperty('--tea-body-size', bodySize);
-        panel.classList.toggle('tea-compact', state.settings.compact !== false);
+        applyReadingAppearance();
         panel.classList.toggle('tea-searching', scope !== 'play' && media.matches && (catalog.mobileSearchOpen || !!catalog.query));
         panel.classList.toggle('tea-play-mode', scope === 'play');
         panel.classList.toggle('tea-record-favorites', isRecordFavorites());
@@ -698,6 +766,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     chatWorkspace.hidden = false; appendStatus(); getChatView().activate(panel); chatActive = true;
                     mobileNavigation?.sync(scope, resetPosition); return;
                 }
+                getPlayView().prepareActivation();
                 playWorkspace.hidden = false; appendStatus();
                 mobileNavigation?.sync(scope, resetPosition);
                 getPlayView().activate(panel); playActive = true; return;
@@ -1163,6 +1232,22 @@ export function createTheatrePanel(ctx, state, actions) {
                     appearance: state.settings.appearance === 'tavern' ? 'tavern' : 'default',
                     fontSource: state.settings.fontSource === 'tavern' ? 'tavern' : 'default' }));
                 mobileNavigation = createMobileNavigation(panel, media);
+                panel.addEventListener('focusin', event => {
+                    if (!settingsLayer || settingsLayer.contains(event.target)
+                        || !media.matches && event.target.closest('.tea-catalog')) return;
+                    event.stopImmediatePropagation();
+                    settingsLayer.querySelector('button')?.focus({ preventScroll: true });
+                }, true);
+                panel.addEventListener('keydown', event => {
+                    if (!settingsLayer || event.key !== 'Tab') return;
+                    const regions = [settingsLayer, ...(!media.matches ? [...panel.querySelectorAll(':scope > .tea-catalog:not([hidden])')] : [])];
+                    const controls = regions.flatMap(node => [...node.querySelectorAll('button, input, textarea, select, summary, a[href], [tabindex]')])
+                        .filter(node => !node.disabled && node.tabIndex >= 0 && node.checkVisibility() && !node.closest('[hidden], [inert]'));
+                    if (!controls.length) return;
+                    const current = controls.indexOf(document.activeElement);
+                    const next = (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+                    event.preventDefault(); controls[next].focus();
+                }, true);
                 appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
                 panel.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open], .play-chat-menu[open]')) {
@@ -1196,6 +1281,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 await popup.show();
                 actions.diagnostics?.info('关闭剧场面板');
             } finally {
+                closeSettingsLayer({ resume: false });
                 sentPromptViewer?.dispose(); sentPromptViewer = null;
                 disposeFavoriteComposer();
                 apiSettings?.cancel();

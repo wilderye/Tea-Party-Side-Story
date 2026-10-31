@@ -61,6 +61,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     let characters = [], selected, chat, visible = false, route = 'history', browsing = false;
     let searchOpen = false, queryTimer, queryId = 0, directoryId = 0, openId = 0, reloadId = 0, loading = false, mutating = false, panel;
     let editor, deletingFrom = null, restoring = false, renderFrame, inputFrame, inputComposing = false;
+    let suspended = false, resumeNeedsRender = false;
     const versionMenu = createPlayResultMenu();
     const inputSizer = createPlayInputSizer({ input, compose, page: branchPage, isVisible: () => visible && route === 'chat' && !compose.hidden,
         isComposing: () => inputComposing });
@@ -118,7 +119,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             previous: chatIdle && index > 0, choose: chatIdle,
             next: chatIdle && (index < (message.results?.length ?? 0) - 1 || canWrite()),
             again: !writeBlocked() && (result?.status === 'save-failed' || chatIdle && canWrite()),
-            continue: chatIdle && canWrite() && !!result?.text.trim() && !message.hidden && last };
+            continue: chatIdle && canWrite() && !!result?.text?.trim() && !message.hidden && last };
     }
     function menuPermission(action) {
         return ['rename', 'hidden'].includes(action) ? !writeBlocked() : !busy();
@@ -311,11 +312,23 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         setFeedScroll(feed.scrollTop + node.getBoundingClientRect().top - feed.getBoundingClientRect().top - getReadingInset() - 10);
         remember(); updateReadingControls();
     }
+    async function loadRange(nextStart, nextEnd, saved, latest = false) {
+        if (!chat || loading) return;
+        const id = chat.id, request = openId, refresh = ++reloadId;
+        loading = true; updateInput();
+        try {
+            const result = await playground.getChatWindow(id, { start: nextStart, end: nextEnd, latest });
+            if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
+            chat = result.chat; start = result.start; end = result.end;
+            if (visible && route === 'chat') renderChat(saved);
+            else if (suspended) resumeNeedsRender = true;
+        } catch (error) { if (request === openId) notify(error.message); }
+        finally { if (request === openId) { loading = false; updateInput(); syncPermissions(); } }
+    }
     function jumpToLatest() {
         if (!chat) return;
-        start = Math.max(0, chat.messages.length - 24); end = chat.messages.length;
         positions.set(chat.id, { bottom: true });
-        renderChat({ bottom: true });
+        void loadRange(0, 0, { bottom: true }, true);
     }
     function restore(saved, targetId, immediate = false) {
         restoring = true;
@@ -465,8 +478,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             textButton('删除', () => { menu.open = false; deletingFrom = -1; renderChat(position()); }));
         for (const [index, action] of ['favorite', 'hidden', 'rename', 'delete', 'truncate'].entries()) menuItems.children[index].dataset.chatAction = action;
         const nodes = chat.messages.slice(start, end).map(renderMessage);
-        if (start > 0) nodes.unshift(textButton('显示更早的消息', () => { const saved = position(); start = Math.max(0, start - 24); renderChat(saved); }));
-        if (end < chat.messages.length) nodes.push(textButton('显示后面的消息', () => { const saved = position(); end = Math.min(chat.messages.length, end + 24); renderChat(saved); }));
+        if (start > 0) nodes.unshift(textButton('显示更早的消息', () => void loadRange(Math.max(0, start - 24), end, position())));
+        if (end < chat.messages.length) nodes.push(textButton('显示后面的消息', () => void loadRange(start, Math.min(chat.messages.length, end + 24), position())));
         if (!nodes.length) nodes.push(element('p', '输入内容，开始这段剧情。', 'play-empty-title'));
         const retained = new Set(nodes);
         for (const node of [...content.children]) if (!retained.has(node)) node.remove();
@@ -541,7 +554,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         deleteControls.hidden = true; menu.open = false;
         route = 'chat'; branchPage.hidden = false; directory.hidden = true; input.value = drafts.get(id) ?? '';
         try {
-            const next = await playground.getChat(id);
+            const saved = positions.get(id), editingMessageId = editingSessions.get(id)?.messageId;
+            const window = await playground.getChatWindow(id, { anchorId: editingMessageId ?? targetId ?? saved?.messageId,
+                latest: !editingMessageId && !targetId && !!saved?.bottom });
+            const next = window.chat;
             if (request !== openId) return;
             if (!await refreshCharacters(false, () => request === openId && route === 'chat')) return;
             chat = next; selected = characters.find(character => character.id === chat.characterId); picker.render();
@@ -553,13 +569,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 targetId = chat.messages.find(message => chat.startMessageIds.includes(message.id)
                     && message.role === (targetId === 'initial-user' ? 'user' : 'assistant'))?.id;
             }
-            const saved = positions.get(id), editingMessageId = editingSessions.get(id)?.messageId;
-            const anchor = editingMessageId ?? targetId ?? saved?.messageId;
-            const index = chat.messages.findIndex(message => message.id === anchor);
-            end = !editingMessageId && !targetId && saved?.bottom ? chat.messages.length : index < 0 ? chat.messages.length : Math.min(chat.messages.length, index + 24);
-            start = index < 0 ? Math.max(0, end - 24) : Math.max(0, index - 12);
-            if (!editingMessageId && !targetId && saved?.bottom) start = Math.max(0, end - 24);
-            loading = false; renderChat(saved, targetId ?? editingMessageId);
+            const index = chat.messages.findIndex(message => message.id === targetId);
+            start = window.start; end = window.end;
+            loading = false;
+            if (!suspended) renderChat(saved, targetId ?? editingMessageId);
+            else if (suspended) resumeNeedsRender = true;
             if (visible) { resize.observe(content); resize.observe(feed); resize.observe(branchPage); }
             if (targetId && index < 0) notify('原回复已删除');
         } catch (error) { if (request === openId) showError(content, error, () => open(id, targetId)); }
@@ -568,18 +582,16 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     async function reload() {
         if (!chat) return;
         const id = chat.id, request = openId, refresh = ++reloadId, saved = positions.get(id);
-        const next = await playground.getChat(id);
+        const editingMessageId = editingSessions.get(id)?.messageId;
+        const window = await playground.getChatWindow(id, { start, end, latest: !editingMessageId && !!saved?.bottom,
+            anchorId: editingMessageId });
+        const next = window.chat;
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
         chat = next; await loadFavorites(() => request === openId && refresh === reloadId && chat?.id === id);
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
-        end = saved?.bottom ? chat.messages.length : Math.min(Math.max(end, start + 24), chat.messages.length);
-        start = Math.min(start, Math.max(0, end - 1));
-        if (saved?.bottom) start = Math.max(0, end - 24);
-        const editingIndex = chat.messages.findIndex(message => message.id === editingSessions.get(id)?.messageId);
-        if (editingIndex >= 0 && (editingIndex < start || editingIndex >= end)) {
-            start = Math.max(0, editingIndex - 12); end = Math.min(chat.messages.length, editingIndex + 24);
-        }
+        start = window.start; end = window.end;
         if (visible && route === 'chat') renderChat(saved);
+        else if (suspended) resumeNeedsRender = true;
     }
     async function run(action) {
         if (mutating) return;
@@ -688,10 +700,21 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         await run(() => playground.setMessageVersion(chat.id, message.id, message.results[index].id, message.selectedResultId));
     }
     function closeVersions(restore = true) { versionMenu.close(restore); }
-    function showVersions(message) {
+    async function showVersions(message) {
         if (!messagePermissions(message).choose) return;
         const view = messageViews.get(message.id), reply = replyViews.get(view?.node);
         if (!reply) return;
+        if (message.results.some(result => result.text === undefined)) {
+            const id = chat.id, request = openId;
+            try {
+                const window = await playground.getChatWindow(id, { start, end, versionsFor: message.id });
+                if (request !== openId || chat?.id !== id || !visible || !view.node.isConnected
+                    || chat.messages.find(item => item.id === message.id) !== message || !messagePermissions(message).choose) return;
+                const next = window.chat.messages.find(item => item.id === message.id);
+                if (!next || window.chat.revision !== chat.revision) { await reload(); return; }
+                for (const result of message.results) result.text = next.results.find(item => item.id === result.id)?.text;
+            } catch (error) { notify(error.message); return; }
+        }
         versionMenu.toggle({ key: message.id, root: panel, readingArea, feed, opener: reply.count, alignment: view.body,
             selectedId: message.selectedResultId, label: '选择回复版本',
             entries: message.results.map(result => {
@@ -803,6 +826,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const message = chat.messages.find(message => message.results?.some(result => result.id === job.resultId));
         const result = message?.results.find(result => result.id === job.resultId);
         if (result) { result.text = job.text; result.status = job.phase; result.error = job.error; }
+        if (suspended && result) resumeNeedsRender = true;
         if (!visible || renderFrame) return;
         renderFrame = requestAnimationFrame(() => {
             renderFrame = 0; if (!visible || !chat) return;
@@ -832,10 +856,24 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             await refreshDirectory(sort); list.scrollTop = saved?.scroll ?? 0; picker.render();
         },
         activate(container) {
-            panel = container; visible = true; setBrowsing(browsing); updateSearch(); picker.render();
+            panel = container; visible = true; suspended = false; setBrowsing(browsing); updateSearch(); picker.render();
             if (route === 'chat') { resize.observe(content); resize.observe(feed); resize.observe(branchPage); scheduleInputSizing(); restore(positions.get(chat?.id)); }
         },
-        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false;
+        suspend() {
+            remember(); saveDirectory(); closeVersions(false); visible = false; suspended = true;
+            cancelAnimationFrame(inputFrame); inputFrame = 0; cancelAnimationFrame(renderFrame); renderFrame = 0;
+            resize.disconnect(); picker.suspend();
+        },
+        resume(container, { displayChanged = false } = {}) {
+            panel = container; visible = true; suspended = false; picker.render();
+            if (route === 'chat') {
+                resize.observe(content); resize.observe(feed); resize.observe(branchPage);
+                if (displayChanged || resumeNeedsRender) renderChat(positions.get(chat?.id));
+                else { scheduleInputSizing(); restore(positions.get(chat?.id)); updateInput(); syncPermissions(); }
+            } else if (displayChanged) void renderDirectory();
+            resumeNeedsRender = false;
+        },
+        deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false; suspended = false;
             cancelAnimationFrame(inputFrame); inputFrame = 0; cancelAnimationFrame(renderFrame); renderFrame = 0; resize.disconnect(); picker.suspend(); },
         async refresh() {
             if (route === 'history') await refreshDirectory(false);

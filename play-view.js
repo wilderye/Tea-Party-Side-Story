@@ -89,6 +89,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
     let displayLoad, batchNumber = 0, lastProgrammaticScroll;
+    let suspended = false, resumeNeedsRefresh = false;
     const observe = (operation, values) => recordViewEvent(root, operation, values);
     const storageKey = 'teahouse-play-view-v1';
 
@@ -967,7 +968,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const { start, end } = historyRange(rows, key);
         const visibleRows = rows.slice(start, end);
         const visibleIds = new Set(visibleRows.map(row => row.id));
-        for (const [id, view] of views) view.item.hidden = !visibleIds.has(id);
+        for (const [id, view] of views) {
+            if (!visibleIds.has(id) && !isEditing(id) && !roundBusy(id) && !view.removing && !view.favoriting
+                && !view.item.querySelector('iframe')) {
+                view.item.remove(); views.delete(id);
+            } else if (view.item.hidden !== !visibleIds.has(id)) view.item.hidden = !visibleIds.has(id);
+        }
         const savedTarget = pendingReveal?.key === key ? pendingReveal.roundId : positions.get(key)?.anchor?.split('/')[0];
         const targetId = visibleIds.has(savedTarget) ? savedTarget : visibleRows.at(-1)?.id;
         const target = records.get(targetId), rulesReady = displayReady();
@@ -985,7 +991,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             observe('等待首次正文', { target: targetId, rulesReady, ready: !!target?.round, failed: !!target?.error, total: rows.length });
             return;
         }
-        content.hidden = false; feed.setAttribute('aria-busy', 'false');
+        if (content.hidden) content.hidden = false;
+        if (feed.getAttribute('aria-busy') !== 'false') feed.setAttribute('aria-busy', 'false');
         let shown = 0, next = null;
         for (const row of [...visibleRows].reverse()) {
             const cached = records.get(row.id); if (!cached?.round) continue;
@@ -995,7 +1002,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 content.insertBefore(view.item, next ?? laterBar);
             }
             next = view.item;
-            view.item.hidden = false; renderRecord(cached.round, view); shown++;
+            if (view.item.hidden) view.item.hidden = false;
+            renderRecord(cached.round, view); shown++;
         }
         content.prepend(earlierBar); content.append(laterBar);
         updateEarlierBar();
@@ -1075,6 +1083,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         await refresh();
     }
     async function refresh() {
+        if (suspended) { resumeNeedsRefresh = true; return; }
         const id = ++refreshId;
         historyLoad = null;
         readError.hidden = true;
@@ -1191,7 +1200,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             scheduleSave();
         }
         changedJobs.set(job.resultId, job);
-        if (!streamFrame) streamFrame = requestAnimationFrame(renderChangedJobs);
+        if (!streamFrame && !suspended) streamFrame = requestAnimationFrame(renderChangedJobs);
         if (job.roundId && (!previous?.roundId || job.phase === 'idle' || job.phase === 'save-failed')) void refresh();
     });
     const events = ctx().eventTypes ?? {};
@@ -1208,7 +1217,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
 
     return {
         browser, chooseButton, page,
+        prepareActivation() {
+            if (visible) return;
+            resetHistoryWindow(rowsByCharacter.get(selected?.id) ?? []);
+            const rows = rowsByCharacter.get(selected?.id) ?? [], { start, end } = historyRange(rows);
+            const ids = new Set(rows.slice(start, end).map(row => row.id));
+            for (const [id, view] of views) if (view.item.hidden !== !ids.has(id)) view.item.hidden = !ids.has(id);
+        },
         activate(container) {
+            suspended = false;
             if (visible) { root = container; return; }
             // Reattaching the panel can reset scrollTop before its first layout.
             // Keep the saved position authoritative until that layout restores it.
@@ -1233,6 +1250,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             });
         },
         deactivate() {
+            suspended = false;
             const key = characterKey(selected);
             if (visible && (!cachedPosition || cachedPosition.key !== key || cachedPosition.inset !== readingInset()
                 || Math.abs((cachedPosition.scrollTop ?? -999) - feed.scrollTop) >= 2)) {
@@ -1241,6 +1259,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); characterPicker.suspend(); scheduleSave();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
             cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0; inputComposing = false;
+        },
+        suspend() {
+            const rows = rowsByCharacter.get(selected?.id) ?? [], { start, end } = historyRange(rows);
+            resumeNeedsRefresh ||= !!historyLoad || !loaded || !displayReady() || rows.slice(start, end).some(row => records.get(row.id)?.revision !== row.revision);
+            this.deactivate(); suspended = true;
+        },
+        resume(container, { displayChanged = false } = {}) {
+            root = container; visible = true; suspended = false;
+            const refreshNeeded = resumeNeedsRefresh || displayedCharacter !== characterKey(selected); resumeNeedsRefresh = false;
+            restorePosition(positions.get(characterKey(selected)));
+            if (displayChanged || changedJobs.size) keepReading(() => { renderChangedJobs(); renderHistory(); });
+            if (refreshNeeded) void refresh();
+            renderPeople(); updateBrowser();
+            restorePosition(positions.get(characterKey(selected)));
+            resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
+            updateControls(); updateComposer(); layout();
         },
         refresh, layout,
         getSelectedCharacter: () => selected,

@@ -42,7 +42,7 @@ async function verifyDesktop(page, viewport) {
     }));
     const expectSettings = async saved => {
         await settle(page);
-        assert.equal(await panel.getAttribute('data-mode'), 'settings');
+        assert.equal(await panel.locator('.tea-settings-layer').count() > 0 || await panel.getAttribute('data-mode') === 'settings', true);
         assert.equal(await settingsButton.getAttribute('aria-pressed'), 'true');
         if (saved) assert.deepEqual(await settingsState(), saved, '操作左侧目录后，设置值、展开状态和滚动位置不变');
     };
@@ -111,7 +111,7 @@ async function verifyDesktop(page, viewport) {
     assert.equal(await panel.locator('.play-people').getByRole('button', { name: '测试乙', exact: true }).getAttribute('aria-pressed'), 'true');
     await settings.evaluate(node => { node.scrollTop = 0; });
     await screenshot(page, `settings-character-${viewport.width}.png`);
-    const topbar = panel.locator('.tea-topbar:visible');
+    const topbar = panel.locator('.tea-settings-layer .tea-topbar');
     const controls = await topbar.locator('button').evaluateAll(nodes => nodes.map(node => {
         const rect = node.getBoundingClientRect(); return { left: rect.left, right: rect.right };
     }));

@@ -118,6 +118,9 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         getChat(id, options) {
             return playground.getChat(id, legacySelection(id, options));
         },
+        getChatWindow(id, options) {
+            return playground.getChatWindow(id, legacySelection(id, options));
+        },
         getChatPreview: (id, options) => playground.getChatPreview(id, legacySelection(id, options)),
         getChatSearch: (id, options) => playground.getChatSearch(id, legacySelection(id, options)),
         getFavorite: id => chatFavorites.read(id),

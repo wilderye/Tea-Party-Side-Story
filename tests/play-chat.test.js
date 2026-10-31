@@ -107,6 +107,72 @@ async function append(f, chat, prompt, text = '后续回复') {
     return { chat: await f.store.getChat(chat.id), started };
 }
 
+test('聊天阅读窗口只读显示范围和当前版本，翻页复用正文缓存，版本列表按需读取', async () => {
+    const f = memoryFiles(); let chat = await seed(f);
+    for (let i = 0; i < 15; i++) ({ chat } = await append(f, chat, `第 ${i} 次发送`));
+    const reads = []; f.io.beforeRead = name => reads.push(name);
+    const reader = f.createStore(), writes = f.writes.length;
+    const window = await reader.getChatWindow(chat.id);
+    assert.equal(window.chat.messages.length, 32);
+    assert.deepEqual([window.start, window.end], [8, 32]);
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 24);
+    assert.equal(window.chat.messages[0].text, undefined);
+    assert.equal(window.chat.messages.at(-1).results[0].text, '后续回复');
+    reads.length = 0;
+    const expanded = await reader.getChatWindow(chat.id, { start: 0, end: 32 });
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 8);
+    assert.equal(expanded.chat.messages[1].results[1].text, undefined, '未选择的回复版本仍未读取');
+    reads.length = 0;
+    const versions = await reader.getChatWindow(chat.id, { start: 0, end: 32, versionsFor: chat.messages[1].id });
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 1);
+    assert.deepEqual(versions.chat.messages[1].results.map(result => result.text), ['开头一', '开头二']);
+    assert.equal(f.writes.length, writes, '阅读和版本列表不保存聊天');
+    assert.deepEqual(await reader.getChat(chat.id), chat, '生成等全量入口仍返回完整聊天和版本');
+});
+
+test('阅读窗口包含编辑目标，旧起始消息跳转和最新范围均读取相应正文', async () => {
+    const f = memoryFiles(); let chat = await seed(f);
+    for (let i = 0; i < 15; i++) ({ chat } = await append(f, chat, `第 ${i} 次发送`));
+    const reader = f.createStore();
+    const editing = await reader.getChatWindow(chat.id, { start: 24, end: 32, anchorId: chat.messages[0].id });
+    assert.equal(editing.start, 0); assert.equal(editing.end, 24);
+    assert.equal(editing.chat.messages[0].text, chat.messages[0].text);
+    const initial = await reader.getChatWindow(chat.id, { anchorId: 'initial-assistant' });
+    assert.ok(initial.start <= 1 && initial.end > 1);
+    assert.equal(initial.chat.messages[1].results[0].text, '开头一');
+    const latest = await reader.getChatWindow(chat.id, { start: 0, end: 1, latest: true });
+    assert.deepEqual([latest.start, latest.end], [8, 32]);
+});
+
+test('范围外旧正文损坏不阻挡新消息阅读，全量读取仍报告原错误', async () => {
+    const f = memoryFiles(), chat = await seed(f), message = chat.messages[0];
+    f.files.delete(playBodyFile(message.id, message.bodyRevision));
+    const reader = f.createStore();
+    const window = await reader.getChatWindow(chat.id, { start: 1, end: 2 });
+    assert.equal(window.chat.messages[1].results[0].text, '开头一');
+    await assert.rejects(reader.getChat(chat.id), { code: 'body_missing' });
+    await assert.rejects(reader.getChatWindow(chat.id, { start: 0, end: 2 }), { code: 'body_missing' });
+});
+
+test('窗口读取遇到旧正文已清理时重读新修订，旧对子沿用现有迁移', async () => {
+    const f = memoryFiles(), chat = await seed(f), user = chat.messages[0];
+    let updated;
+    f.io.beforeRead = async name => {
+        if (name !== playBodyFile(user.id, user.bodyRevision)) return;
+        f.io.beforeRead = null;
+        updated = await f.store.editMessage(chat.id, user.id, { text: '另一窗口刚修改的正文', expectedText: user.text });
+    };
+    const window = await f.createStore().getChatWindow(chat.id);
+    assert.equal(window.chat.revision, updated.revision);
+    assert.equal(window.chat.messages[0].text, '另一窗口刚修改的正文');
+    const round = await f.store.getRound(chat.id);
+    useLegacyRound(f, round);
+    const legacy = await f.createStore().getChatWindow(chat.id, { selectedResultId: round.results[1].id });
+    assert.equal(legacy.chat.messages[1].selectedResultId, round.results[1].id);
+    assert.equal(legacy.chat.messages[1].results.length, 2);
+    assert.equal(f.directory().rounds[0].kind, 'chat');
+});
+
 test('旧对子在存储入口转换，保留编号、时间、全部版本和原选择；目录不拆版本', async () => {
     const f = memoryFiles(), seeded = await seed(f), round = await f.store.getRound(seeded.id);
     useLegacyRound(f, round);

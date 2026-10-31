@@ -424,6 +424,44 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         }
         return { id, revision: row.revision, name: row.name || '未命名聊天', messages: readable };
     }
+    async function readChatWindow(id, options = {}, retry = true) {
+        const row = (await index()).rounds.find(item => item.id === id);
+        let chat;
+        if (row?.kind === 'chat') chat = await readChatFromRow(row, true, { bodyStored: true });
+        else chat = await api.getChat(id, options);
+        const total = chat.messages.length, size = 24;
+        const anchor = options.anchorId === 'initial-user' || options.anchorId === 'initial-assistant'
+            ? chat.messages.find(message => chat.startMessageIds.includes(message.id)
+                && message.role === (options.anchorId === 'initial-user' ? 'user' : 'assistant'))?.id : options.anchorId;
+        const anchorIndex = chat.messages.findIndex(message => message.id === anchor);
+        let end = options.latest ? total : Number.isInteger(options.end) ? Math.max(0, Math.min(total, options.end))
+            : anchorIndex < 0 ? total : Math.min(total, anchorIndex + size);
+        let start = options.latest ? Math.max(0, total - size) : Number.isInteger(options.start)
+            ? Math.max(0, Math.min(end, options.start)) : anchorIndex < 0 ? Math.max(0, end - size) : Math.max(0, anchorIndex - size / 2);
+        // Keep metadata for floor numbers, permissions and depth calculations.
+        // Only the displayed message bodies cross the storage boundary.
+        if (!options.latest && anchorIndex >= 0 && (anchorIndex < start || anchorIndex >= end)) {
+            start = Math.max(0, anchorIndex - size / 2); end = Math.min(total, anchorIndex + size);
+        }
+        try {
+            for (const message of chat.messages.slice(start, end)) {
+                if (message.role === 'user') {
+                    if (message.text === undefined) message.text = await readBody(message.id, message.bodyRevision);
+                } else for (const result of message.results) {
+                    if (result.id !== message.selectedResultId && message.id !== options.versionsFor) continue;
+                    if (result.text === undefined) result.text = await readBody(result.id, result.bodyRevision);
+                }
+            }
+        } catch (error) {
+            if (retry && error.code === 'body_missing') {
+                const current = (await index()).rounds.find(item => item.id === id);
+                if (current && current.revision !== chat.revision) return readChatWindow(id, options, false);
+            }
+            throw error;
+        }
+        if (!chat.name && !chat.origin?.title) chat.name = row?.name || '未命名聊天';
+        return { chat, start, end };
+    }
     async function readFavoriteFromRow(row, retry = true) {
         if (!row) throw new PlayHistoryError('favorite_missing', '这份演出记录收藏已不存在');
         const text = await readFile(playFavoriteFile(row.id, row.revision));
@@ -701,9 +739,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         }, signal);
     }
 
-    return {
+    const api = {
         getChatPreview(id, { selectedResultId } = {}) { assert(isId(id)); return readChatDirectoryContent(id, selectedResultId); },
         getChatSearch(id, { selectedResultId } = {}) { assert(isId(id)); return readChatDirectoryContent(id, selectedResultId, true); },
+        getChatWindow(id, options) { assert(isId(id)); return readChatWindow(id, options); },
         async listChats(characterId) {
             assert(isId(characterId));
             return (await index()).rounds.filter(row => row.characterId === characterId)
@@ -1162,4 +1201,5 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             });
         },
     };
+    return api;
 }

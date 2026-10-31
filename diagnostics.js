@@ -236,7 +236,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
         info(operation, values = {}) { append('info', operation, values); },
         warn(operation, error, values = {}, secrets = []) { append('warn', operation, values, error, redactor(secrets)); },
         error(operation, error, values = {}, secrets = []) { append('error', operation, values, error, redactor(secrets)); },
-        read: () => ({ entries: structuredClone(entries), persistenceError, limit }),
+        read: ({ includeEntries = true } = {}) => ({ entries: includeEntries ? structuredClone(entries) : [], count: entries.length, persistenceError, limit }),
         export() { if (viewTimer) changed(); return entries.map(formatDiagnostic).join('\n\n'); },
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         clear() { entries = []; epoch++; changed(); },

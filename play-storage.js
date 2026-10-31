@@ -1,12 +1,12 @@
 import { createPlayHistory, PlayHistoryError } from './play-history.js';
 import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js';
 
-const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite', 'getChatPreview', 'getChatSearch'];
+const readMethods = ['listCharacters', 'listRounds', 'getRound', 'listFavorites', 'getFavorite', 'getChatPreview', 'getChatSearch', 'getChatWindow'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
     'listChats', 'getChat', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
     'addChatFavorite', 'syncChatFavorite', 'setMessagesHidden'];
-const workerVersion = 13;
+const workerVersion = 14;
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {

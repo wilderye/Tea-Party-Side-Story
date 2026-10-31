@@ -32,6 +32,8 @@ test('读取五类历史信息不启动后台保存任务，也不依赖浏览�
     assert.equal((await history.getRound(round.id)).results[0].text, '已保存正文');
     assert.equal((await history.listFavorites()).length, 1);
     assert.equal((await history.getFavorite(favorite.id)).text, '已保存正文');
+    const window = await history.getChatWindow(round.id);
+    assert.equal(window.chat.messages.at(-1).results[0].text, '已保存正文');
     assert.equal(workerStarts, 0); assert.equal(databaseOpens, 0);
 });
 

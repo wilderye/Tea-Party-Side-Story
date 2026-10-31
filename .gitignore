@@ -70,6 +70,7 @@ tests/*
 !tests/play-ui-state.browser.cjs
 !tests/play-reading.browser.cjs
 !tests/play-opening.browser.cjs
+!tests/play-settings-performance.browser.cjs
 !tests/play-reading-storage.test.js
 !tests/play-reading-save.browser.cjs
 !tests/play-composer.browser.cjs

@@ -346,6 +346,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         getChatPreview: (id, options) => historyAction('读取历史记录预览', () => history.getChatPreview(id, options)),
         getChatSearch: (id, options) => historyAction('搜索聊天内容', () => history.getChatSearch(id, options)),
         async getChat(id, options) { return withLiveChat(await historyAction('读取分支聊天', () => history.getChat(id, options))); },
+        async getChatWindow(id, options) {
+            const window = await historyAction('读取分支聊天显示范围', () => history.getChatWindow(id, options));
+            window.chat = withLiveChat(window.chat);
+            return window;
+        },
         async finishUnfinishedChat(id) {
             assertIdleChat(id);
             const chat = await history.getChat(id);
