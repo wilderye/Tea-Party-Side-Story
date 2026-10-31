@@ -29,7 +29,7 @@ async function verify(page, url, viewport) {
         if (wait) await wait.promise;
         if (!page.isClosed()) await route.fulfill({ json: response });
     });
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const fields = panel.locator('.play-api-fields');
     const mode = panel.getByRole('combobox', { name: '生成使用的 API', exact: true });

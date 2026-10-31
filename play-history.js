@@ -137,7 +137,9 @@ function readFavorite(value) {
                 ...(typeof message.speakerName === 'string' ? { speakerName: message.speakerName } : {}),
                 ...(typeof message.speakerAvatar === 'string' ? { speakerAvatar: message.speakerAvatar } : {}) };
         });
-        return { format: 2, ...readFavoriteInfo(value), cache, messages, cleaned: true, updatedAt: value.updatedAt };
+        if (value.sourceRevision !== undefined) assert(isId(value.sourceRevision));
+        return { format: 2, ...readFavoriteInfo(value), cache, messages, cleaned: true, updatedAt: value.updatedAt,
+            ...(value.sourceRevision ? { sourceRevision: value.sourceRevision } : {}) };
     }
     assert(value?.format === 1 && isText(value.text) && isDate(value.updatedAt));
     const result = { format: 1, ...readFavoriteInfo(value), text: value.text, updatedAt: value.updatedAt };
@@ -392,8 +394,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             throw new PlayHistoryError('invalid_history', '聊天文件无法解析，未覆盖原文件', { cause });
         }
     }
-    async function readChatDirectoryContent(id, selectedResultId, search = false) {
-        const row = (await index()).rounds.find(item => item.id === id);
+    async function readChatDirectoryContent(id, selectedResultId, search = false, directory) {
+        const row = (directory ?? await index()).rounds.find(item => item.id === id);
         if (!row) throw new PlayHistoryError('chat_missing', '来源聊天已删除');
         const text = await readFile(playRoundFile(row.id, row.revision));
         if (text === null) {
@@ -462,12 +464,12 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         if (!chat.name && !chat.origin?.title) chat.name = row?.name || '未命名聊天';
         return { chat, start, end };
     }
-    async function readFavoriteFromRow(row, retry = true) {
+    async function readFavoriteFromRow(row, retry = true, { start = 0, end = Infinity, metadata = false } = {}) {
         if (!row) throw new PlayHistoryError('favorite_missing', '这份演出记录收藏已不存在');
         const text = await readFile(playFavoriteFile(row.id, row.revision));
         if (text === null && retry) {
             const current = (await index()).favorites.find(item => item.id === row.id);
-            if (current && current.revision !== row.revision) return readFavoriteFromRow(current, false);
+            if (current && current.revision !== row.revision) return readFavoriteFromRow(current, false, { start, end, metadata });
         }
         if (text === null) throw new PlayHistoryError('favorite_missing', '这份收藏的正文文件缺失，未覆盖原文件');
         let favorite;
@@ -475,11 +477,19 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         catch (cause) { throw new PlayHistoryError('invalid_favorite', '这份收藏无法解析，未覆盖原文件', { cause }); }
         assert(JSON.stringify(readFavoriteInfo(favorite)) === JSON.stringify(readFavoriteInfo(row)));
         if (favorite.format === 2) {
+            if (metadata) return { ...favorite, revision: row.revision };
             const cache = new Map(favorite.cache.map(entry => [favoriteCacheKey(entry), entry]));
             const messages = [];
-            for (const message of favorite.messages) {
+            for (const [ordinal, message] of favorite.messages.entries()) {
                 const entry = cache.get(favoriteCacheKey(message));
-                messages.push({ ...message, text: await readBody(entry.cacheId, entry.cacheRevision) });
+                try { messages.push(ordinal >= start && ordinal < end ? { ...message, text: await readBody(entry.cacheId, entry.cacheRevision) } : message); }
+                catch (error) {
+                    if (retry && error.code === 'body_missing') {
+                        const current = (await index()).favorites.find(item => item.id === row.id);
+                        if (current && current.revision !== row.revision) return readFavoriteFromRow(current, false, { start, end, metadata });
+                    }
+                    throw error;
+                }
             }
             return { ...favorite, messages, revision: row.revision };
         }
@@ -574,6 +584,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
 
     async function updateChatFavorite(directory, chat, favorite, entries, frozen = false) {
         const next = readFavorite(favorite);
+        next.sourceRevision = chat.revision;
         const supplied = new Map(entries.map(entry => [favoriteCacheKey(entry), entry]));
         const cached = new Map(next.cache.map(entry => [favoriteCacheKey(entry), entry]));
         const messages = [];
@@ -673,7 +684,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             throw new PlayHistoryError('chat_busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
         }
     }
-    async function changeChat(id, expectedRevision, run, { playSelection = false, bodyStored = false, allowPending = false } = {}) {
+    async function changeChat(id, expectedRevision, run, { playSelection = false, bodyStored = true, allowPending = false } = {}) {
         assert(isId(id));
         return serialize(async () => {
             const directory = await index();
@@ -742,7 +753,15 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
     const api = {
         getChatPreview(id, { selectedResultId } = {}) { assert(isId(id)); return readChatDirectoryContent(id, selectedResultId); },
         getChatSearch(id, { selectedResultId } = {}) { assert(isId(id)); return readChatDirectoryContent(id, selectedResultId, true); },
+        async createChatDirectoryReader() {
+            const directory = await index();
+            return (id, { selectedResultId, search = false } = {}) => readChatDirectoryContent(id, selectedResultId, search, directory);
+        },
         getChatWindow(id, options) { assert(isId(id)); return readChatWindow(id, options); },
+        async getChatMetadata(id) {
+            assert(isId(id)); return readChatFromRow((await index()).rounds.find(row => row.id === id), true, { bodyStored: true });
+        },
+        getMessageBody(id, revision) { return readBody(id, revision); },
         async listChats(characterId) {
             assert(isId(characterId));
             return (await index()).rounds.filter(row => row.characterId === characterId)
@@ -817,11 +836,12 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         },
         editMessage(id, messageId, { text, resultId, expectedText }) {
             assert(isId(messageId) && isText(text) && typeof expectedText === 'string', '消息正文不能为空。');
-            return changeChat(id, undefined, chat => {
+            return changeChat(id, undefined, async chat => {
                 const message = chat.messages.find(message => message.id === messageId);
                 const target = message?.role === 'user' ? message : message?.results.find(result => result.id === resultId);
                 if (!target) throw new PlayHistoryError('message_missing', '这条消息已删除，请保留草稿并重新读取。');
                 assertMessagesIdle([message]);
+                if (target.text === undefined) target.text = await readBody(target.id, target.bodyRevision);
                 if (target.text === text) return;
                 if (target.text !== expectedText) throw new PlayHistoryError('edit_conflict', '这条消息已在其他窗口修改，请保留草稿并重新读取。');
                 target.text = text; target.bodyRevision = uuid();
@@ -899,12 +919,19 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             assert(isId(id));
             return readRoundFromRow((await index()).rounds.find(round => round.id === id));
         },
+        async createRoundReader() {
+            const directory = await index();
+            return id => readRoundFromRow(directory.rounds.find(row => row.id === id));
+        },
         async listFavorites() {
             return (await index()).favorites.sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt) || b.id.localeCompare(a.id));
         },
         async getFavorite(id) {
             assert(isId(id));
             return readFavoriteFromRow((await index()).favorites.find(item => item.id === id));
+        },
+        async getFavoriteWindow(id, options = {}) {
+            assert(isId(id)); return readFavoriteFromRow((await index()).favorites.find(item => item.id === id), true, options);
         },
         addChatFavorite({ chatId, expectedRevision, entries = [] }) {
             assert(isId(chatId));
@@ -927,10 +954,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             assert(isId(id));
             return serialize(async () => {
                 const directory = await index();
-                const favorite = await readFavoriteFromRow(directory.favorites.find(row => row.id === id));
+                const favorite = await readFavoriteFromRow(directory.favorites.find(row => row.id === id), true, { metadata: true });
                 assert(favorite.format === 2);
                 if (favorite.frozen) return favorite;
-                const chat = await readChatFromRow(directory.rounds.find(row => row.id === favorite.source.chatId));
+                const chat = await readChatFromRow(directory.rounds.find(row => row.id === favorite.source.chatId), true, { bodyStored: true });
                 assertChatRevision(chat, chatRevision);
                 return updateChatFavorite(directory, chat, favorite, entries);
             });

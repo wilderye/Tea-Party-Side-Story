@@ -38,7 +38,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         if (source.type === 'chat') onGoToBranch(source.chatId);
         else void (async () => {
             try {
-                const chat = await playground.getChat(source.roundId);
+                if (source.messageId) { onGoToBranch(source.roundId, source.messageId); return; }
+                const chat = await playground.getChatMetadata(source.roundId);
                 const message = chat.messages.find(message => message.results?.some(result => result.id === source.resultId));
                 onGoToBranch(source.roundId, message?.id ?? source.messageId ?? 'missing');
             } catch (error) { notify(error.message); }
@@ -58,7 +59,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     });
     remove.classList.add('tea-star'); remove.setAttribute('aria-pressed', 'true');
     heading.append(title, character); head.append(heading, tools); article.append(head, goToBranch, sourceNotice, syncNotice, body); node.append(navigation, article);
-    let value, editor, signature, loadingId = 0, requestedRevision, removing = false, renderedMessages = 0;
+    let value, editor, signature, loadingId = 0, requestedRevision, removing = false, renderedMessages = 0, active = true, lastRow, needsRefresh = false, loadingRevision;
     const moreMessages = textButton('显示更多聊天内容', () => appendMessages());
     let canPrevious = false, canNext = false;
 
@@ -100,7 +101,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     }
 
     function render() {
-        if (!value || editor) return;
+        if (!active || !value || editor) return;
+        if (value.format === 2 && signature === value.revision) return;
         title.textContent = value.title; title.hidden = !value.title.trim();
         character.textContent = value.characterName;
         heading.replaceChildren(title, character); tools.replaceChildren(remove, ...(value.format === 2 ? [] : [edit, prompt]));
@@ -120,7 +122,19 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         signature = text;
     }
-    function appendMessages(count = 24) {
+    async function appendMessages(count = 24) {
+        if (!active || !value) return;
+        const current = value, end = Math.min(current.messages.length, renderedMessages + count), request = loadingId;
+        if (current.messages.slice(renderedMessages, end).some(message => message.text === undefined)) {
+            moreMessages.disabled = true;
+            try {
+                const next = await playground.getFavoriteWindow(value.id, { start: renderedMessages, end });
+                if (!active || request !== loadingId || value !== current) return;
+                value = { ...next, messages: next.messages.map((message, index) => message.text === undefined && index < renderedMessages ? current.messages[index] : message) };
+                if (next.revision !== current.revision) { signature = null; render(); return; }
+            } catch (error) { notify(error.message); return; }
+            finally { moreMessages.disabled = false; }
+        }
         moreMessages.remove();
         const fragment = document.createDocumentFragment();
         for (const message of value.messages.slice(renderedMessages, renderedMessages + count)) {
@@ -167,35 +181,50 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         body.replaceChildren(editor.titleInput, editor.body); editor.titleInput.focus({ preventScroll: true });
     }
     async function load(row, force = false) {
+        lastRow = row;
+        if (!active) { needsRefresh = true; return; }
         if (editor) return;
-        if (!force && row.revision === requestedRevision && row.source.type !== 'chat') { render(); return; }
+        if (!force && row.revision === loadingRevision) return;
+        const unchanged = !force && value?.id === row.id && row.revision === requestedRevision;
+        if (unchanged && (value?.format !== 2 || value.frozen || !playground.syncFavorite)) { render(); return; }
         const id = ++loadingId; requestedRevision = row.revision;
+        loadingRevision = row.revision;
         title.textContent = row.title; title.hidden = !row.title.trim(); character.textContent = row.characterName;
         if (!value) body.replaceChildren(element('p', '正在读取收藏…', 'play-result-empty'));
         try {
-            const next = await playground.getFavorite(row.id);
+            const options = { start: 0, end: Math.max(24, renderedMessages) };
+            const next = unchanged ? value : playground.getFavoriteWindow ? await playground.getFavoriteWindow(row.id, options) : await playground.getFavorite(row.id);
             if (!next.cleaned) await playground.display?.ensure?.({ avatar: next.characterAvatar, name: next.characterName });
-            if (id !== loadingId) return;
+            if (id !== loadingId || !active) return;
             if (value?.id !== next.id) renderedMessages = 0;
             value = next; requestedRevision = next.revision; render();
             if (next.format === 2 && !next.frozen && playground.syncFavorite) {
                 syncNotice.replaceChildren(element('span', '正在更新聊天收藏…')); syncNotice.hidden = false;
                 try {
-                    const updated = await playground.syncFavorite(row.id);
-                    if (id !== loadingId) return;
+                    const updated = await playground.syncFavorite(row.id, options);
+                    if (id !== loadingId || !active) return;
                     value = updated; requestedRevision = updated.revision; render(); syncNotice.hidden = true;
                 } catch (error) {
-                    if (id !== loadingId) return;
+                    if (id !== loadingId || !active) return;
                     syncNotice.replaceChildren(element('p', `聊天收藏更新失败，正在显示已保存的内容：${error.message}`),
                         textButton('重试更新收藏', () => void load(row, true)));
                 }
             } else syncNotice.hidden = true;
         } catch (error) {
-            if (id !== loadingId) return;
+            if (id !== loadingId || !active) return;
             requestedRevision = null; signature = null;
             const retry = iconButton('refresh', '重新读取收藏', () => void load(row, true));
             body.replaceChildren(element('p', error.message, 'play-result-error'), retry);
-        }
+        } finally { if (id === loadingId) loadingRevision = null; }
     }
-    return { node, load, setNavigation, canLeave: () => !removing && !editor?.saving, canNavigate: () => !removing && !editor };
+    return { node, load, setNavigation,
+        suspend() { if (!active) return; active = false; loadingId++; loadingRevision = null; needsRefresh = true; },
+        resume() {
+            if (active) return;
+            active = true;
+            if (needsRefresh && lastRow) { needsRefresh = false; void load(lastRow); } else render();
+        },
+        dispose() { this.suspend(); editor?.dispose(); editor = null; value = null; lastRow = null; node.remove(); },
+        get editing() { return !!editor; },
+        canLeave: () => !removing && !editor?.saving, canNavigate: () => !removing && !editor };
 }

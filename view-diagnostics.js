@@ -7,7 +7,7 @@ const clock = () => performance.now();
 const rounded = value => Math.round(value * 10) / 10;
 
 export function recordViewEvent(node, operation, values) {
-    const panel = node?.closest?.('#teahouse-panel');
+    const panel = node?.closest?.('#teahouse-panel-host') ?? node?.closest?.('#teahouse-panel');
     collectors.get(panel)?.event(operation, values);
 }
 
@@ -71,10 +71,12 @@ export function createViewDiagnostics(panel, diagnostics, getState) {
         if (!panel.isConnected || document.hidden || clock() > activeUntil) return;
         const sampleStarted = clock();
         const state = getState(), scope = state.scope;
-        const area = state.mode === 'settings' ? panel.querySelector('.tea-settings')
-            : scope === 'play' ? panel.querySelector('.play-workspace:not([hidden]) .play-feed')
-            : matchMedia('(max-width: 760px)').matches ? panel.querySelector('.tea-catalog:not([hidden]) .tea-list')
-            : panel.querySelector('.tea-workspace:not([hidden]) .tea-reading');
+        const surface = panel.querySelector('.tea-panel-surface[data-active=true]') ?? panel;
+        const area = state.mode === 'settings' ? surface.querySelector('.tea-settings')
+            : scope === 'play' ? surface.querySelector(state.route === 'history' ? '.play-history-list' : '.play-feed')
+            : surface.querySelector('.play-favorite-reading[data-active=true]:not([aria-hidden=true])')
+                ?? (matchMedia('(max-width: 760px)').matches ? surface.querySelector('.tea-catalog:not([hidden]) .tea-list')
+                : surface.querySelector('.tea-workspace:not([hidden]) .tea-reading'));
         const box = area?.getBoundingClientRect();
         // Probe only the visible reading surface; do not enumerate paragraphs or
         // force layout for the whole history. elementFromPoint returns one node.
@@ -94,10 +96,12 @@ export function createViewDiagnostics(panel, diagnostics, getState) {
             viewportWidth: innerWidth, viewportHeight: innerHeight, scale: window.visualViewport?.scale ?? 1,
             scrollTop: rounded(area?.scrollTop ?? 0), scrollHeight: area?.scrollHeight ?? 0, clientHeight: area?.clientHeight ?? 0,
             bottomDistance: rounded(area ? area.scrollHeight - area.clientHeight - area.scrollTop : 0),
-            record: hit?.closest('.play-record')?.dataset.record, loading: !!panel.querySelector('.play-empty:not([hidden])[data-state="loading"]'),
-            imagePending: [...panel.querySelectorAll('img')].filter(node => !node.complete).length,
-            framePending: [...panel.querySelectorAll('iframe.play-web-output')].filter(node => !completedFrames.has(node)).length,
-            shown: panel.querySelectorAll('.play-record:not([hidden])').length,
+            record: hit?.closest('.play-record')?.dataset.record, loading: !!surface.querySelector('.play-empty:not([hidden])[data-state="loading"]'),
+            imagePending: [...surface.querySelectorAll('img')].filter(node => !node.complete && !node.closest('[hidden],[aria-hidden=true]')).length,
+            framePending: [...surface.querySelectorAll('iframe.play-web-output')].filter(node => !completedFrames.has(node) && !node.closest('[hidden],[aria-hidden=true]')).length,
+            shown: scope === 'play' ? state.route === 'chat' ? surface.querySelectorAll('.play-branch-page [data-message-id]').length
+                : state.route === 'play' ? surface.querySelectorAll('.play-record:not([hidden])').length : 0
+                : surface.querySelectorAll('.play-favorite-reading[data-active=true] .play-favorite-content > .play-message').length,
             proseAdded: mutations.proseAdded ?? 0, proseRemoved: mutations.proseRemoved ?? 0, replaced: mutations.replaced ?? 0,
             textChanges: mutations.textChanges ?? 0, framesAdded: mutations.framesAdded ?? 0, framesRemoved: mutations.framesRemoved ?? 0 };
         const signature = JSON.stringify([values, samples]);
@@ -146,6 +150,7 @@ export function createViewDiagnostics(panel, diagnostics, getState) {
         for (const change of changes) {
             const parent = change.target.nodeType === 1 ? change.target : change.target.parentElement;
             if (parent?.closest('.tea-diagnostics')) continue;
+            if (parent?.closest('.tea-panel-surface[data-active=false],[aria-hidden=true]')) continue;
             changed = true;
             if (change.type === 'characterData' && parent?.closest('.tea-body,.play-prose')) mutations.textChanges = (mutations.textChanges ?? 0) + 1;
             if (change.type !== 'childList') continue;

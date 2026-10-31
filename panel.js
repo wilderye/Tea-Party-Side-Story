@@ -27,11 +27,12 @@ function createMobileNavigation(panel, media) {
     const listeners = new AbortController();
     const options = { passive: true, signal: listeners.signal };
     const scrollTops = new WeakMap();
-    let slot, nav, tools, heading, scope, readingScroll, endTimer, paintFrame = 0;
+    let slot, nav, tools, heading, scope, surfaceKey, readingScroll, endTimer, paintFrame = 0;
     let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0, suspended = false;
     const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
-    const isReading = () => !suspended && media.matches && scope !== 'community' && panel.dataset.mode === 'list' && slot?.isConnected;
-    const isEditingMessage = () => !!panel.querySelector('.play-reading-area .play-edit-form:not([hidden] *)');
+    const activeSurface = () => panel.querySelector('.tea-panel-surface[data-active=true]') ?? panel;
+    const isReading = () => !suspended && media.matches && scope !== 'community' && activeSurface().dataset.mode === 'list' && slot?.isConnected;
+    const isEditingMessage = () => !!activeSurface().querySelector('.play-reading-area .play-edit-form:not([hidden] *)');
     function paint() {
         paintFrame = 0;
         if (!slot) return;
@@ -44,7 +45,11 @@ function createMobileNavigation(panel, media) {
         if (slot.inert !== hidden) slot.inert = hidden;
         const ariaHidden = String(hidden);
         if (slot.getAttribute('aria-hidden') !== ariaHidden) slot.setAttribute('aria-hidden', ariaHidden);
-        panel.classList.toggle('tea-mobile-navigation-collapsed', hidden);
+        if (activeSurface().classList.contains('tea-mobile-navigation-collapsed') !== hidden) activeSurface().classList.toggle('tea-mobile-navigation-collapsed', hidden);
+        if (activeSurface().dataset.route === 'history' && media.matches) {
+            const search = activeSurface().querySelector('.play-history-search');
+            if (search) search.style.paddingTop = Math.max(0, tabsHeight - offset) + 14 + 'px';
+        }
     }
     function setOffset(value) {
         const next = Math.max(0, Math.min(height, value));
@@ -124,11 +129,12 @@ function createMobileNavigation(panel, media) {
     function sync(value, resetPosition = false) {
         if (suspended) return;
         cancelScroll(); cancelAnimationFrame(paintFrame); paintFrame = 0;
-        slot = panel.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
+        const surface = activeSurface(), nextKey = `${surface.dataset.surface}/${surface.dataset.mode}/${surface.dataset.route}/${surface.classList.contains('play-choosing-character')}`;
+        slot = surface.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
         nav = slot?.firstElementChild;
         tools = slot?.parentElement.querySelector('.tea-mobile-tools');
-        const nextHeading = media.matches && value === 'play' && panel.dataset.mode === 'list'
-            ? [...panel.querySelectorAll('.play-chat-heading')].find(node => node.getClientRects().length) : null;
+        const nextHeading = media.matches && value === 'play' && surface.dataset.mode === 'list' && surface.dataset.route === 'chat'
+            ? [...surface.querySelectorAll('.play-chat-heading')].find(node => node.getClientRects().length) : null;
         if (heading !== nextHeading) {
             if (heading) heading.style.transform = '';
             headingResize.disconnect(); heading = nextHeading;
@@ -136,12 +142,15 @@ function createMobileNavigation(panel, media) {
         }
         tabsHeight = nav && media.matches ? nav.offsetHeight || 44 : 44;
         height = tabsHeight + (heading?.offsetHeight ?? 0);
-        if (heading) heading.parentElement.style.setProperty('--play-chat-heading-height', heading.offsetHeight + 'px');
+        if (heading) {
+            const value = heading.offsetHeight + 'px', parent = heading.parentElement;
+            if (parent.style.getPropertyValue('--play-chat-heading-height') !== value) parent.style.setProperty('--play-chat-heading-height', value);
+        }
         const area = slot?.parentElement.querySelector('.tea-list');
         const shortCatalog = media.matches && area && area.scrollHeight <= area.clientHeight + 1;
-        if (scope !== value || value === 'community' || resetPosition || !isReading() || shortCatalog) offset = 0;
+        if (surfaceKey !== nextKey || scope !== value || value === 'community' || resetPosition || !isReading() || shortCatalog) offset = 0;
         else offset = Math.min(offset, height);
-        scope = value; paint();
+        scope = value; surfaceKey = nextKey; paint();
     }
     return {
         sync,
@@ -150,7 +159,7 @@ function createMobileNavigation(panel, media) {
         // The history view asks how much of its fixed viewport is covered.
         // It still owns paragraph capture/restoration and history persistence.
         getReadingInset() {
-            if (!media.matches || scope !== 'play' || panel.dataset.mode !== 'list' || !slot?.isConnected) return 0;
+            if (!media.matches || scope !== 'play' || activeSurface().dataset.mode !== 'list' || !slot?.isConnected) return 0;
             return isEditingMessage() ? (heading?.offsetHeight ?? 0) : height - paintedOffset;
         },
         ignoreScroll(area) {
@@ -161,7 +170,8 @@ function createMobileNavigation(panel, media) {
 }
 
 export function createTheatrePanel(ctx, state, actions) {
-    let panel, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
+    let panel, panelHost, popup, opening = false, observer, measureFrame, resizeViewport, media, appearance;
+    const surfaces = new Map();
     let mobileNavigation, viewDiagnostics;
     let scope = 'community', mode = 'list';
     let draft, originalDraft, busy = false, confirming = false, message = '', messageTimer;
@@ -170,11 +180,44 @@ export function createTheatrePanel(ctx, state, actions) {
     let chatView, chatCatalog, chatWorkspace, playRoute = 'play', chatActive = false;
     const chatReturns = [];
     let favoriteRows = new Map(), favoriteLoaded = false, favoriteLoadError = '', favoriteLoadId = 0;
-    let favoriteWorkspace, favoriteEmpty, settingsReturnMode = 'list';
+    let favoriteWorkspace, favoriteStack, favoriteEmpty, settingsReturnMode = 'list';
     let settingsLayer, settingsBackground, settingsRevision;
+    let characterBrowsing = false;
     let favoriteComposer, sentPromptViewer;
     const favoriteReaders = new Map();
     const catalogs = new Map();
+    const catalogRenders = new WeakMap();
+    function catalogRenderState() {
+        return {
+            signature: JSON.stringify({ scope, mode, mobile: media.matches, page: catalog.page, starts: catalog.desktopStarts,
+                type: catalog.type, query: catalog.query, searchOpen: catalog.mobileSearchOpen, selected: catalog.selectedId,
+                expanded: [...catalog.expanded], size: mobilePageSize(), enabled: state.settings.enabled, showGore: state.settings.showGore, sort: sortMode(),
+                order: randomOrders.get(orderKey()), favorites: state.settings.favorites, error: state.personalError }),
+            entries: [...(isRecordFavorites() ? recordEntries() : state.entries).values()].map(item =>
+                [item.id, item.title, item.type, item.body, item.author, item.gore, item.publishedAt, item.favorite?.revision]),
+        };
+    }
+    function selectSurface() {
+        const base = scope === 'play' ? playRoute === 'play' ? 'play' : 'chat' : scope === 'favorites' ? `favorites/${catalog.type}` : scope;
+        const key = ['settings', 'help', 'editor', 'favorite-editor'].includes(mode) ? `${base}/${mode}` : base;
+        let next = surfaces.get(key);
+        if (!next) {
+            next = element('div', undefined, 'tea-panel-surface');
+            next.dataset.surface = key; surfaces.set(key, next); panelHost.append(next);
+        }
+        if (panel === next) return false;
+        if (panel) {
+            if (playActive) { playView?.suspend(); playActive = false; }
+            if (chatActive) { chatView?.suspend(); chatActive = false; }
+            if (favoriteWorkspace && panel.contains(favoriteWorkspace)) for (const reader of favoriteReaders.values()) reader.suspend();
+            panel.setAttribute('aria-hidden', 'true'); panel.style.zIndex = '0';
+            panel.dataset.active = 'false';
+        }
+        panel = next; panel.removeAttribute('aria-hidden'); panel.style.zIndex = '1'; panel.dataset.active = 'true';
+        panel.dataset.appearance = panelHost.dataset.appearance;
+        if (panelHost.style.colorScheme) panel.style.colorScheme = panelHost.style.colorScheme;
+        return true;
+    }
     let catalog = catalogFor(scope);
     function catalogFor(value) {
         if (!catalogs.has(value)) catalogs.set(value, {
@@ -195,16 +238,28 @@ export function createTheatrePanel(ctx, state, actions) {
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
         { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
-            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt });
+            onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt,
+            onBrowsing: updateCharacterBrowsing });
     const getChatView = () => chatView ??= createPlayChatView(ctx, state.settings, actions.playground, actions.promptFavorites, {
         onInspectPrompt: inspectPrompt,
         notify: showMessage, onOpen: (id, messageId) => void enterBranch(id, messageId),
         getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
         onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area),
         onBranch: branch => void enterBranch(branch.id),
+        onBrowsing: updateCharacterBrowsing,
         onCharacter: () => { playRoute = 'history'; render(); },
         onClose: () => void closeChatPage(), onDelete: () => void closeChatPage(),
     });
+    function updateCharacterBrowsing(value) {
+        const next = media.matches && value, changed = characterBrowsing !== next;
+        characterBrowsing = next;
+        const catalogNode = playRoute === 'play' ? playCatalog : chatCatalog;
+        const workspace = playRoute === 'play' ? playWorkspace : chatWorkspace;
+        if (panel.classList.contains('play-choosing-character') !== characterBrowsing) panel.classList.toggle('play-choosing-character', characterBrowsing);
+        if (workspace && workspace.getAttribute('aria-hidden') !== String(characterBrowsing)) workspace.setAttribute('aria-hidden', String(characterBrowsing));
+        if (catalogNode) catalogNode.style.zIndex = characterBrowsing ? '3' : '';
+        mobileNavigation?.sync(scope, changed);
+    }
     async function enterBranch(id, messageId) {
         if (!await canLeave()) return;
         captureCatalogPosition();
@@ -213,8 +268,9 @@ export function createTheatrePanel(ctx, state, actions) {
             chatId: scope === 'play' && playRoute === 'chat' ? getChatView().chatId : null,
             character: scope === 'play' && playRoute === 'history' ? getChatView().selected : null });
         playView?.prepareLayout();
-        scope = 'play'; mode = 'list'; playRoute = 'chat'; render();
-        await getChatView().open(id, messageId);
+        scope = 'play'; mode = 'list'; playRoute = 'chat';
+        const opening = getChatView().open(id, messageId); render();
+        await opening;
         mobileNavigation?.sync(scope);
     }
     async function closeChatPage() {
@@ -223,9 +279,10 @@ export function createTheatrePanel(ctx, state, actions) {
         const destination = chatReturns.pop() ?? { scope: 'play', mode: 'list', route: 'history' };
         scope = destination.scope; mode = destination.mode; playRoute = destination.route;
         if (destination.catalog) catalog = destination.catalog;
-        if (scope === 'play' && playRoute === 'history') await getChatView().showDirectory(destination.character, false);
-        if (scope === 'play' && playRoute === 'chat') await getChatView().open(destination.chatId);
+        const pending = scope === 'play' && playRoute === 'history' ? getChatView().showDirectory(destination.character, false)
+            : scope === 'play' && playRoute === 'chat' ? getChatView().open(destination.chatId) : null;
         render();
+        await pending;
         mobileNavigation?.sync(scope);
         if (scope !== 'play') restoreCatalogPosition();
     }
@@ -236,8 +293,9 @@ export function createTheatrePanel(ctx, state, actions) {
         else {
             const character = playRoute === 'chat' ? getChatView().selected : getPlayView().getSelectedCharacter();
             chatReturns.length = 0;
-            playView?.prepareLayout(); playRoute = 'history'; render();
-            await getChatView().showDirectory(character);
+            playView?.prepareLayout(); playRoute = 'history';
+            const pending = getChatView().showDirectory(character); render();
+            await pending;
         }
     }
     const randomOrders = new Map();
@@ -273,7 +331,7 @@ export function createTheatrePanel(ctx, state, actions) {
         applyFontSource();
         const bodySize = `${bodyFontSize()}px`;
         if (panel.style.getPropertyValue('--tea-body-size') !== bodySize) panel.style.setProperty('--tea-body-size', bodySize);
-        panel.classList.toggle('tea-compact', state.settings.compact !== false);
+        if (panel.classList.contains('tea-compact') !== (state.settings.compact !== false)) panel.classList.toggle('tea-compact', state.settings.compact !== false);
     }
     const pageStart = () => media?.matches ? catalog.page * mobilePageSize() : catalog.desktopStarts[catalog.page] ?? 0;
     const pageCount = total => media?.matches ? Math.max(1, Math.ceil(total / mobilePageSize())) : catalog.desktopStarts.length;
@@ -283,7 +341,7 @@ export function createTheatrePanel(ctx, state, actions) {
         order: sortMode() === 'random' ? randomOrders.get(orderKey()) : undefined });
     function catalogReader() {
         return isRecordFavorites()
-            ? !favoriteWorkspace?.hidden && favoriteWorkspace?.querySelector('.play-favorite-reading:not([hidden])')
+            ? panel?.contains(favoriteWorkspace) && favoriteWorkspace?.querySelector('.play-favorite-reading[data-active=true]')
             : panel?.querySelector('.tea-reading');
     }
     function captureCatalogPosition() {
@@ -349,12 +407,8 @@ export function createTheatrePanel(ctx, state, actions) {
         disposeFavoriteComposer();
         const leavingSettings = mode === 'settings';
         mode = mode === 'help' ? 'settings' : leavingSettings ? settingsReturnMode : 'list';
-        if (leavingSettings && isRecordFavorites()) actions.playground?.display?.updateSettings();
+        if (leavingSettings && (isRecordFavorites() || scope === 'play')) actions.playground?.display?.updateSettings();
         message = ''; render();
-        if (leavingSettings && scope === 'play' && playRoute !== 'play') {
-            actions.playground?.display?.updateSettings();
-            void chatView?.refresh();
-        }
     }
     function showMessage(text) {
         clearTimeout(messageTimer);
@@ -411,7 +465,7 @@ export function createTheatrePanel(ctx, state, actions) {
             }
             for (const article of panel.querySelectorAll('.tea-feed-entry')) {
                 const body = article.querySelector('.tea-body'), toggle = article.querySelector('.tea-fold');
-                const long = body.scrollHeight > 320;
+                const long = article.dataset.previewClipped === 'true' || body.scrollHeight > 320;
                 article.classList.toggle('tea-long', long); toggle.hidden = !long;
                 const clipped = long && !catalog.expanded.has(article.dataset.id);
                 for (const node of body.querySelectorAll('a, [tabindex]')) {
@@ -472,9 +526,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (favoriteComposer) { disposeFavoriteComposer(); mode = 'list'; }
         settingsReturnMode = mode;
         actions.diagnostics?.info('打开插件设置');
-        if (scope === 'play' && mode === 'list') {
-            openSettingsLayer(); return;
-        }
+        if (scope === 'play' && mode === 'list') { openSettingsLayer(); return; }
         mode = 'settings'; message = ''; render();
     }
     function settingsHeader() {
@@ -553,7 +605,7 @@ export function createTheatrePanel(ctx, state, actions) {
         return nav;
     }
     function updateCatalogVisibility() {
-        panel.classList.toggle('tea-catalog-collapsed', catalogCollapsed);
+        if (panel.classList.contains('tea-catalog-collapsed') !== catalogCollapsed) panel.classList.toggle('tea-catalog-collapsed', catalogCollapsed);
         for (const button of panel.querySelectorAll('.tea-catalog-toggle')) {
             button.setAttribute('aria-expanded', String(!catalogCollapsed));
             button.title = catalogCollapsed ? '展开左侧栏' : '收起左侧栏';
@@ -616,9 +668,6 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function ensurePlayShell() {
         if (playCatalog) {
-            const header = topbar(); header.classList.add('play-topbar');
-            playWorkspace.querySelector('.tea-topbar')?.replaceWith(header);
-            playCatalog.querySelector('.tea-mobile-actions')?.replaceWith(Object.assign(topActions(true), { className: 'tea-actions tea-mobile-actions' }));
             return;
         }
         const view = getPlayView();
@@ -636,10 +685,6 @@ export function createTheatrePanel(ctx, state, actions) {
             chatWorkspace = element('section', undefined, 'tea-workspace play-workspace');
             const header = topbar(); header.classList.add('play-topbar');
             chatWorkspace.append(header, view.page); panel.append(chatCatalog, chatWorkspace);
-        } else {
-            const header = topbar(); header.classList.add('play-topbar');
-            chatWorkspace.querySelector('.tea-topbar')?.replaceWith(header);
-            chatCatalog.querySelector('.tea-mobile-actions')?.replaceWith(Object.assign(topActions(true), { className: 'tea-actions tea-mobile-actions' }));
         }
     }
     async function openRecordFavorite(id, direction) {
@@ -668,14 +713,20 @@ export function createTheatrePanel(ctx, state, actions) {
             const mobileHead = element('header', undefined, 'tea-view-title tea-back-title play-favorite-mobile-head');
             const name = element('div'); name.append(element('h2', '演出记录'));
             mobileHead.append(iconButton('left', '返回收藏目录', back), name, topActions());
-            favoriteEmpty = element('p', '', 'tea-empty'); favoriteWorkspace.append(topbar(), mobileHead, favoriteEmpty);
+            favoriteEmpty = element('p', '', 'tea-empty'); favoriteStack = element('div', undefined, 'play-favorite-stack');
+            favoriteWorkspace.append(topbar(), mobileHead, favoriteEmpty, favoriteStack);
         }
-        favoriteWorkspace.hidden = false;
-        favoriteWorkspace.querySelector('.tea-topbar').replaceWith(topbar());
-        favoriteWorkspace.querySelector('.play-favorite-mobile-head .tea-actions').replaceWith(topActions());
-        for (const reader of favoriteReaders.values()) reader.node.hidden = true;
         const item = visible.find(item => item.id === catalog.selectedId);
         const show = item && (!media.matches || mode === 'record');
+        for (const [id, reader] of favoriteReaders) {
+            const selected = show && id === item.id;
+            reader.node.dataset.active = String(!!selected);
+            reader.node.style.zIndex = selected ? '1' : '0';
+            reader.node.setAttribute('aria-hidden', String(!selected));
+            if (!selected) reader.suspend();
+        }
+        favoriteWorkspace.setAttribute('aria-hidden', String(media.matches && !show));
+        favoriteStack.setAttribute('aria-hidden', String(!show));
         if (show) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
@@ -685,7 +736,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
                     onRemove(id) {
                         favoriteLoadId++;
-                        favoriteRows.delete(id); favoriteReaders.get(id)?.node.remove(); favoriteReaders.delete(id);
+                        favoriteRows.delete(id); favoriteReaders.get(id)?.dispose(); favoriteReaders.delete(id);
                         catalog.selectedId = null; mode = 'list'; render();
                     },
                 });
@@ -694,8 +745,14 @@ export function createTheatrePanel(ctx, state, actions) {
             reader.node.dataset.id = item.id;
             const index = result.findIndex(entry => entry.id === item.id);
             reader.setNavigation({ previous: index > 0, next: index >= 0 && index + 1 < result.length });
-            if (reader.node.parentElement !== favoriteWorkspace) favoriteWorkspace.append(reader.node);
-            reader.node.hidden = false; void reader.load(item.favorite);
+            if (reader.node.parentElement !== favoriteStack) favoriteStack.append(reader.node);
+            reader.node.dataset.active = 'true'; reader.node.style.zIndex = '1'; reader.node.removeAttribute('aria-hidden');
+            favoriteReaders.delete(item.id); favoriteReaders.set(item.id, reader);
+            for (const [id, cached] of favoriteReaders) {
+                if (favoriteReaders.size <= 3) break;
+                if (id !== item.id && !cached.editing) { cached.dispose(); favoriteReaders.delete(id); }
+            }
+            reader.resume(); void reader.load(item.favorite);
         }
         favoriteEmpty.hidden = !!show; favoriteEmpty.textContent = emptyText();
         return favoriteWorkspace;
@@ -705,7 +762,10 @@ export function createTheatrePanel(ctx, state, actions) {
         status.setAttribute('role', 'status'); panel.append(status); updateStatus();
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
-        if (!panel || searchComposing) return;
+        if (!panelHost || searchComposing) return;
+        if (settingsLayer && mode !== 'settings') {
+            const nextMode = mode; closeSettingsLayer({ resume: false }); mode = nextMode;
+        }
         if (settingsLayer) {
             if (mode === 'settings') {
                 applyReadingAppearance();
@@ -718,6 +778,29 @@ export function createTheatrePanel(ctx, state, actions) {
             }
             const nextMode = mode; closeSettingsLayer({ resume: false }); mode = nextMode;
         }
+        const changedSurface = selectSurface();
+        updateCatalogVisibility();
+        if (scope === 'play' && mode === 'list' && panel.dataset.mode === mode && panel.dataset.route === playRoute) {
+            applyReadingAppearance();
+            const view = playRoute === 'play' ? getPlayView() : getChatView();
+            if (view.suspended) view.resume(panel, { checkData: changedSurface });
+            else view.activate(panel);
+            if (playRoute === 'play') playActive = true; else chatActive = true;
+            mobileNavigation?.sync(scope, resetPosition); updateStatus(); return;
+        }
+        const catalogState = scope !== 'play' && ['list', 'record'].includes(mode) ? catalogRenderState() : null;
+        const previousCatalog = catalogRenders.get(panel);
+        if (catalogState && previousCatalog?.signature === catalogState.signature && previousCatalog.entries.length === catalogState.entries.length
+            && previousCatalog.entries.every((entry, index) => entry.every((value, field) => value === catalogState.entries[index][field]))) {
+            applyReadingAppearance(); updateStatus(); mobileNavigation?.sync(scope, resetPosition);
+            if (isRecordFavorites()) {
+                const reader = favoriteReaders.get(catalog.selectedId);
+                if (mode === 'record' || !media.matches) { reader?.resume(); if (reader) void reader.load(favoriteRows.get(catalog.selectedId)); }
+                else reader?.suspend();
+            }
+            restoreCatalogPosition(); return;
+        }
+        if (catalogState) catalogRenders.set(panel, catalogState); else catalogRenders.delete(panel);
         viewDiagnostics?.activate('render');
         sentPromptViewer?.dispose(); sentPromptViewer = null;
         if (mode !== 'favorite-editor') disposeFavoriteComposer();
@@ -748,28 +831,37 @@ export function createTheatrePanel(ctx, state, actions) {
         for (const child of [...panel.children]) {
             if (child !== playCatalog && child !== playWorkspace && child !== chatCatalog && child !== chatWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings) child.remove();
         }
-        if (playCatalog) { playCatalog.hidden = true; playWorkspace.hidden = true; }
-        if (favoriteWorkspace) favoriteWorkspace.hidden = true;
-        if (chatCatalog) { chatCatalog.hidden = true; chatWorkspace.hidden = true; }
+        if (playCatalog && panel.contains(playCatalog)) playCatalog.hidden = false;
+        if (chatCatalog && panel.contains(chatCatalog)) chatCatalog.hidden = false;
         if (panel.dataset.mode !== mode) panel.dataset.mode = mode;
         applyReadingAppearance();
-        panel.classList.toggle('tea-searching', scope !== 'play' && media.matches && (catalog.mobileSearchOpen || !!catalog.query));
-        panel.classList.toggle('tea-play-mode', scope === 'play');
-        panel.classList.toggle('tea-record-favorites', isRecordFavorites());
-        panel.classList.toggle('tea-has-play', !!actions.playground);
+        for (const [name, enabled] of [['tea-searching', scope !== 'play' && media.matches && (catalog.mobileSearchOpen || !!catalog.query)],
+            ['tea-play-mode', scope === 'play'], ['tea-record-favorites', isRecordFavorites()], ['tea-has-play', !!actions.playground]]) {
+            if (panel.classList.contains(name) !== enabled) panel.classList.toggle(name, enabled);
+        }
+        panel.dataset.route = playRoute;
         updateCatalogVisibility();
-        if (scope === 'play') {
+        if (scope === 'play' && mode === 'list') {
             if (playRoute === 'play') { ensurePlayShell(); playCatalog.hidden = false; }
             else { ensureChatShell(); chatCatalog.hidden = false; }
             if (mode === 'list') {
+                for (const button of panel.querySelectorAll('.tea-history-toggle')) button.setAttribute('aria-pressed', String(playRoute === 'history'));
                 if (playRoute !== 'play') {
-                    chatWorkspace.hidden = false; appendStatus(); getChatView().activate(panel); chatActive = true;
+                    getChatView().prepareActivation();
+                    if (chatWorkspace.hidden) chatWorkspace.hidden = false;
+                    appendStatus();
+                    if (getChatView().suspended) getChatView().resume(panel, { checkData: changedSurface });
+                    else getChatView().activate(panel);
+                    chatActive = true;
                     mobileNavigation?.sync(scope, resetPosition); return;
                 }
-                getPlayView().prepareActivation();
-                playWorkspace.hidden = false; appendStatus();
+                if (!getPlayView().suspended) getPlayView().prepareActivation();
+                if (playWorkspace.hidden) playWorkspace.hidden = false;
+                appendStatus();
                 mobileNavigation?.sync(scope, resetPosition);
-                getPlayView().activate(panel); playActive = true; return;
+                if (getPlayView().suspended) getPlayView().resume(panel, { checkData: changedSurface });
+                else getPlayView().activate(panel);
+                playActive = true; return;
             }
         }
         const result = scope === 'play' ? [] : matches();
@@ -778,7 +870,9 @@ export function createTheatrePanel(ctx, state, actions) {
             catalog.page = Math.max(0, Math.min(catalog.page, pageCount(result.length) - 1));
             visible = result.slice(pageStart(), media.matches ? pageStart() + mobilePageSize() : catalog.desktopStarts[catalog.page + 1] ?? result.length);
             if (!visible.some(item => item.id === catalog.selectedId)) catalog.selectedId = visible[0]?.id ?? null;
-            panel.insertBefore(renderCatalog(visible, result.length), favoriteWorkspace ?? keptSettings ?? null);
+            if (catalogState) catalogRenders.set(panel, catalogRenderState());
+            const anchor = [favoriteWorkspace, keptSettings].find(node => node?.parentElement === panel);
+            panel.insertBefore(renderCatalog(visible, result.length), anchor ?? null);
         }
         let workspace = keptSettings;
         if (mode === 'favorite-editor' && favoriteComposer) workspace = favoriteComposer.node;
@@ -790,7 +884,7 @@ export function createTheatrePanel(ctx, state, actions) {
             }
             if (mode === 'list') {
                 if (!state.settings.enabled) workspace.append(element('p', '插件已停用，请在酒馆扩展设置中重新启用。', 'tea-empty'));
-                else if (catalog.selectedId) renderReader(workspace, visible.find(item => item.id === catalog.selectedId));
+                else if (catalog.selectedId) { if (!media.matches) renderReader(workspace, visible.find(item => item.id === catalog.selectedId)); }
                 else workspace.append(art(), element('h2', '下一场故事，等你入座', 'tea-empty-title'), element('p', emptyText(), 'tea-empty'));
             } else {
                 if (mode !== 'settings' || media.matches) {
@@ -1034,10 +1128,18 @@ export function createTheatrePanel(ctx, state, actions) {
     function renderFeedEntry(item, number) {
         const article = element('article', undefined, 'tea-feed-entry'); article.dataset.id = item.id; article.setAttribute('aria-label', item.title);
         article.classList.toggle('tea-expanded', catalog.expanded.has(item.id)); article.append(articleHeader(item, number, number === 1));
-        const excerpt = element('div', undefined, 'tea-excerpt'); excerpt.id = `tea-body-${item.id.replaceAll(':', '-')}`; excerpt.append(markdownBody(item)); article.append(excerpt);
+        const excerpt = element('div', undefined, 'tea-excerpt'); excerpt.id = `tea-body-${item.id.replaceAll(':', '-')}`;
+        const preview = item.body.length > 2048 ? item.body.slice(0, 2048) : item.body;
+        let full;
+        const shortened = markdownBody({ ...item, body: preview });
+        if (catalog.expanded.has(item.id)) { full = preview === item.body ? shortened : markdownBody(item); excerpt.append(full); }
+        else excerpt.append(shortened);
+        article.dataset.previewClipped = String(preview !== item.body); article.append(excerpt);
         const fold = iconButton(catalog.expanded.has(item.id) ? 'up' : 'down', `${catalog.expanded.has(item.id) ? '收起' : '展开全文'}：${item.title}`, () => {
             const list = panel.querySelector('.tea-list'), closing = catalog.expanded.has(item.id), above = article.getBoundingClientRect().top < list.getBoundingClientRect().top;
             if (closing) catalog.expanded.delete(item.id); else catalog.expanded.add(item.id);
+            if (!closing && !full) full = preview === item.body ? shortened : markdownBody(item);
+            excerpt.replaceChildren(closing ? shortened : full);
             article.classList.toggle('tea-expanded', !closing); fold.replaceChildren(glyph(closing ? 'down' : 'up'));
             if (!closing) fold.append(element('span', '收起'));
             fold.title = `${closing ? '展开全文' : '收起'}：${item.title}`; fold.setAttribute('aria-label', fold.title); fold.setAttribute('aria-expanded', String(!closing));
@@ -1226,29 +1328,56 @@ export function createTheatrePanel(ctx, state, actions) {
                 media = matchMedia('(max-width: 760px)'); media.addEventListener('change', onBreakpoint);
                 observer = new ResizeObserver(measureBodies);
                 mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
-                message = ''; panel = element('div'); panel.id = 'teahouse-panel';
-                viewDiagnostics = createViewDiagnostics(panel, actions.diagnostics, () => ({ scope, mode, route: playRoute,
+                message = ''; panelHost = element('div'); panelHost.id = 'teahouse-panel-host'; panel = null; surfaces.clear(); selectSurface();
+                viewDiagnostics = createViewDiagnostics(panelHost, actions.diagnostics, () => ({ scope, mode, route: playRoute,
                     appearance: state.settings.appearance === 'tavern' ? 'tavern' : 'default',
                     fontSource: state.settings.fontSource === 'tavern' ? 'tavern' : 'default' }));
-                mobileNavigation = createMobileNavigation(panel, media);
-                panel.addEventListener('focusin', event => {
+                mobileNavigation = createMobileNavigation(panelHost, media);
+                panelHost.addEventListener('focusin', event => {
+                    const surface = event.target.closest('.tea-panel-surface');
+                    if (surface && surface !== panel) {
+                        event.stopImmediatePropagation(); panel.querySelector('button')?.focus({ preventScroll: true }); return;
+                    }
+                    if (characterBrowsing && event.target.closest('.play-workspace')) {
+                        event.stopImmediatePropagation(); panel.querySelector('.play-character-browser button')?.focus({ preventScroll: true }); return;
+                    }
+                    if (event.target.closest('.play-branch-page[aria-hidden="true"],.play-favorite-workspace[aria-hidden="true"],.play-favorite-reading[aria-hidden="true"]')) {
+                        event.stopImmediatePropagation(); panel.querySelector('.play-history-open,.tea-topbar button,.play-favorite-mobile-head button')?.focus({ preventScroll: true }); return;
+                    }
                     if (!settingsLayer || settingsLayer.contains(event.target)
                         || !media.matches && event.target.closest('.tea-catalog')) return;
                     event.stopImmediatePropagation();
                     settingsLayer.querySelector('button')?.focus({ preventScroll: true });
                 }, true);
-                panel.addEventListener('keydown', event => {
+                panelHost.addEventListener('keydown', event => {
+                    if (event.key === 'Tab' && !settingsLayer) {
+                        const controls = [...panel.querySelectorAll('button,input,textarea,select,summary,a[href],[tabindex]')]
+                            .filter(node => !node.disabled && node.tabIndex >= 0 && node.checkVisibility() && !node.closest('[hidden],[inert],[aria-hidden="true"]'));
+                        if (controls.length) {
+                            const current = controls.indexOf(document.activeElement);
+                            event.preventDefault(); controls[(current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
+                        }
+                        return;
+                    }
                     if (!settingsLayer || event.key !== 'Tab') return;
                     const regions = [settingsLayer, ...(!media.matches ? [...panel.querySelectorAll(':scope > .tea-catalog:not([hidden])')] : [])];
                     const controls = regions.flatMap(node => [...node.querySelectorAll('button, input, textarea, select, summary, a[href], [tabindex]')])
-                        .filter(node => !node.disabled && node.tabIndex >= 0 && node.checkVisibility() && !node.closest('[hidden], [inert]'));
+                        .filter(node => !node.disabled && node.tabIndex >= 0 && node.checkVisibility() && !node.closest('[hidden], [inert], [aria-hidden="true"]'));
                     if (!controls.length) return;
                     const current = controls.indexOf(document.activeElement);
                     const next = (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
                     event.preventDefault(); controls[next].focus();
                 }, true);
-                appearance = createAppearance(panel, actions.diagnostics); appearance.apply(state.settings.appearance);
-                panel.addEventListener('pointerdown', event => {
+                const hostAppearance = createAppearance(panelHost, actions.diagnostics);
+                appearance = { apply(value) {
+                    hostAppearance.apply(value);
+                    for (const surface of surfaces.values()) {
+                        surface.dataset.appearance = panelHost.dataset.appearance;
+                        surface.style.colorScheme = panelHost.style.colorScheme || 'light';
+                    }
+                }, dispose() { hostAppearance.dispose(); } };
+                appearance.apply(state.settings.appearance);
+                panelHost.addEventListener('pointerdown', event => {
                     for (const menu of panel.querySelectorAll('.tea-sort[open], .tea-page-jump[open], .play-chat-menu[open]')) {
                         if (!menu.contains(event.target)) menu.open = false;
                     }
@@ -1256,7 +1385,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 render();
                 if (isRecordFavorites()) void refreshFavoriteCatalog();
                 const context = ctx();
-                popup = new context.Popup(panel, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false,
+                popup = new context.Popup(panelHost, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false,
                     onClosing: async () => {
                         if (!await canLeave()) return false;
                         if (scope === 'play') playView?.prepareLayout();
@@ -1286,17 +1415,18 @@ export function createTheatrePanel(ctx, state, actions) {
                 apiSettings?.cancel();
                 diagnosticsView?.dispose(); diagnosticsView = null; settingsView = null;
                 clearTimeout(messageTimer);
-                if (playActive) {
-                    playView?.deactivate();
-                    playActive = false;
+                playView?.close(); playActive = false;
+                chatView?.close(); chatActive = false;
+                for (const reader of favoriteReaders.values()) reader.suspend();
+                for (const [id, reader] of favoriteReaders) {
+                    if (!reader.editing) { reader.dispose(); favoriteReaders.delete(id); } else reader.node.remove();
                 }
-                if (chatActive) { chatView?.deactivate(); chatActive = false; }
-                playCatalog = null; playWorkspace = null; favoriteWorkspace = null;
+                playCatalog = null; playWorkspace = null; favoriteWorkspace = null; favoriteStack = null;
                 chatCatalog = null; chatWorkspace = null;
                 mobileNavigation?.dispose(); mobileNavigation = null;
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
-                appearance?.dispose(); appearance = null; popup = null; panel = null; opening = false;
+                appearance?.dispose(); appearance = null; popup = null; panel = null; panelHost = null; surfaces.clear(); opening = false;
                 viewDiagnostics?.dispose(); viewDiagnostics = null;
                 searchComposing = false;
                 restoringCatalog = false;

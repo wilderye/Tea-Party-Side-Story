@@ -58,7 +58,7 @@ async function releaseFavoriteRead(page) {
 }
 
 async function verifyFavoriteReads(page, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click();
     const id = await page.evaluate(() => seed.a), record = panel.locator(`[data-record="${id}"]`);
@@ -84,7 +84,7 @@ async function verifyFavoriteReads(page, viewport) {
     const favoriteId = await page.evaluate(async () => (await testHistory.listFavorites())[0].id);
     const row = panel.locator(`.tea-story[data-id="${favoriteId}"]`);
     await row.click();
-    const reader = panel.locator('.play-favorite-reading:visible');
+    const reader = panel.locator('.play-favorite-reading[data-active=true]:visible');
     await reader.getByRole('button', { name: '编辑演出记录收藏', exact: true }).waitFor();
 
     await holdFavoriteRead(page, true);
@@ -102,12 +102,12 @@ async function verifyFavoriteReads(page, viewport) {
     await page.waitForFunction(async () => (await testHistory.listFavorites()).length === 0);
     await releaseFavoriteRead(page);
     assert.equal(await row.count(), 0, '旧读取不能让已取消的收藏重新出现在目录');
-    assert.equal(await panel.locator('.play-favorite-reading:visible').count(), 0);
+    assert.equal(await panel.locator('.play-favorite-reading[data-active=true]:visible').count(), 0);
     assert.equal(await page.evaluate(() => captured.length), 0, '收藏操作没有发送模型请求');
 }
 
 async function verifySettingsRefresh(page, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('茶会选集').click();
     await button('设置').click();
@@ -194,9 +194,9 @@ async function verifySettingsRefresh(page, viewport) {
             await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
             await verifyFavoriteReads(page, viewport);
             await verifySettingsRefresh(page, viewport);
-            assert.ok((await page.locator('#teahouse-panel').innerText()).includes('小剧场生成'));
+            assert.ok((await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').innerText()).includes('小剧场生成'));
             assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0);
-            assert.ok(await page.locator('#teahouse-panel').evaluate(node => node.scrollWidth - node.clientWidth <= 1));
+            assert.ok(await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').evaluate(node => node.scrollWidth - node.clientWidth <= 1));
             assert.deepEqual(errors, []);
             console.log(JSON.stringify({ url, viewport, checks: '收藏与取消、改名与删除、迟到目录、更新进度、设置焦点和输入法文字、选区与滚动、存储一致', errors }));
             await context.close();

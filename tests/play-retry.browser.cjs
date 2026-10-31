@@ -56,7 +56,7 @@ async function verifyStreaming(page, url, viewport) {
     await page.goto(`${url}?stream-ui`); await page.waitForFunction(() => window.ready);
     assert.equal(page.url(), `${url}?stream-ui`); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await button('剧场演出').click();
@@ -139,7 +139,7 @@ async function verify(page, url, viewport) {
         const next = responses.shift() || { status: 429, json: { error: { message: 'synthetic rate limit', code: 429 } } };
         await route.fulfill(next);
     });
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const retry = panel.locator('.play-retry-settings');
     const rateLimit = retry.getByRole('checkbox', { name: '429 时重试', exact: true });

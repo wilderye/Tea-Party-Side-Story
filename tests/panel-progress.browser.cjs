@@ -48,7 +48,7 @@ async function seed(page) {
 }
 
 async function snapshot(page) {
-    return page.locator('#teahouse-panel').evaluate(panel => ({
+    return page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').evaluate(panel => ({
         page: panel.querySelector('#tea-catalog .tea-page-current').textContent,
         ids: [...panel.querySelectorAll('.tea-story[data-id], .tea-feed-entry')].map(node => node.dataset.id),
         selected: panel.querySelector('.tea-reading')?.dataset.id,
@@ -67,7 +67,7 @@ function expectSnapshot(actual, expected, label) {
 }
 
 async function jump(page, number) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     await panel.getByRole('button', { name: '跳转到某页', exact: true }).filter({ visible: true }).click();
     await panel.getByRole('textbox', { name: '跳转页码', exact: true }).fill(String(number));
     await panel.getByRole('button', { name: '确认跳转', exact: true }).click();
@@ -75,7 +75,7 @@ async function jump(page, number) {
 }
 
 async function read(page, mobile) {
-    await page.locator('#teahouse-panel').evaluate((panel, mobile) => {
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').evaluate((panel, mobile) => {
         if (mobile) for (const entry of [...panel.querySelectorAll('.tea-feed-entry')].slice(0, 2)) {
             if (!entry.classList.contains('tea-expanded')) entry.querySelector('.tea-fold').click();
         }
@@ -96,7 +96,7 @@ async function screenshot(page, name) {
 }
 
 async function verifyProgress(page, mobile) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('独立剧场').click();
     await jump(page, 3);
@@ -157,7 +157,7 @@ async function verifyProgress(page, mobile) {
     await button('我的收藏').click();
     await button('演出记录').click();
     await panel.locator('.tea-story').first().click();
-    const favoriteReader = panel.locator('.play-favorite-reading:visible');
+    const favoriteReader = panel.locator('.play-favorite-reading[data-active=true]:visible');
     await favoriteReader.getByText('阅读位置验证第24段。', { exact: true }).waitFor();
     await settle(page);
     await favoriteReader.evaluate(node => { node.scrollTop = 420; });
@@ -212,7 +212,7 @@ async function measurePerformance(page) {
     return page.evaluate(async () => {
         const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         const samples = { close: [], switch: [], playClose: [] };
-        const tab = name => [...document.querySelectorAll('#teahouse-panel .tea-tabs button')].find(node => node.textContent === name && node.getClientRects().length);
+        const tab = name => [...document.querySelectorAll(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-tabs button')].find(node => node.textContent === name && node.getClientRects().length);
         for (let index = 0; index < 10; index++) {
             let started = performance.now();
             await ui.close();
@@ -232,7 +232,7 @@ async function measurePerformance(page) {
         }
         tab('茶会选集').click(); await frame();
         // A catalog close must not persist data or inspect the conversation geometry.
-        const panel = document.querySelector('#teahouse-panel');
+        const panel = document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
         const originalQuery = panel.querySelector;
         const originalRect = Element.prototype.getBoundingClientRect;
         const originalWrite = Storage.prototype.setItem;

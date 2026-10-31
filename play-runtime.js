@@ -123,9 +123,15 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         },
         getChatPreview: (id, options) => playground.getChatPreview(id, legacySelection(id, options)),
         getChatSearch: (id, options) => playground.getChatSearch(id, legacySelection(id, options)),
+        async createChatDirectoryReader() {
+            const read = await history.createChatDirectoryReader();
+            return (id, options) => read(id, legacySelection(id, options));
+        },
         getFavorite: id => chatFavorites.read(id),
-        async syncFavorite(id) {
-            try { return await chatFavorites.sync(id); }
+        getFavoriteWindow: (id, options) => chatFavorites.read(id, options),
+        getChatMetadata: id => history.getChatMetadata(id),
+        async syncFavorite(id, options) {
+            try { return await chatFavorites.sync(id, options); }
             catch (error) { diagnostics?.error('更新聊天收藏', error); throw error; }
         },
         favoriteChat: id => chatFavorites.add(id),

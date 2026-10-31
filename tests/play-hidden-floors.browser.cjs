@@ -83,7 +83,7 @@ async function verify(page, url, viewport) {
     await page.goto(url); await page.waitForFunction(() => window.ready);
     assert.match(await page.title(), /小剧场/);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click(); await panel.locator('[data-record]').first().waitFor();
     await button('历史记录').click(); await panel.locator(`[data-chat-id]`).first().waitFor();
@@ -206,6 +206,7 @@ async function verify(page, url, viewport) {
     await button('关闭聊天页面').click(); await button('历史记录').click();
     const record = panel.locator(`[data-record="${seedId}"]`);
     await record.waitFor();
+    await record.locator('.play-continue').waitFor({ state: 'hidden' });
     assert.equal(await record.locator('.play-continue').isVisible(), false, '演出记录只收起已在分支隐藏的原回复续写按钮');
     assert.equal(await record.locator('.play-hidden-mark,.is-hidden-floor').count(), 0, '演出记录不显示楼层隐藏状态');
     assert.match(await record.locator('.play-results').innerText(), /阅读位置验证第1段/);
@@ -226,14 +227,14 @@ async function verify(page, url, viewport) {
             document.body.style.setProperty('--SmartThemeBlurTintColor', palette.paper);
             document.body.style.setProperty('--SmartThemeBorderColor', palette.accent);
             document.body.style.setProperty('--SmartThemeUnderlineColor', palette.accent);
-            window.testAppearance ??= createAppearance(document.querySelector('#teahouse-panel'));
+            window.testAppearance ??= createAppearance(document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'));
             window.testAppearance.apply(theme === 'default' ? 'default' : 'tavern');
         }, theme);
         await verifyFloorHeader(user, viewport);
         await screenshot(page, `floor-header-a-${theme}-${viewport.width}.png`);
         await button('聊天操作').click(); await button('隐藏楼层管理').click(); await dialog.waitFor();
         const colors = await dialog.evaluate(node => {
-            const styles = getComputedStyle(node), panel = getComputedStyle(document.querySelector('#teahouse-panel'));
+            const styles = getComputedStyle(node), panel = getComputedStyle(document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'));
             const properties = ['--tea-paper', '--tea-ink', '--tea-heading', '--tea-muted', '--tea-line', '--tea-accent', '--tea-field-paper', '--tea-control-paper', '--tea-control-ink', 'color-scheme'];
             return { copied: properties.every(name => styles.getPropertyValue(name).trim() === panel.getPropertyValue(name).trim()),
                 paper: styles.backgroundColor, ink: styles.color,

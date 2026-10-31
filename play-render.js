@@ -13,7 +13,8 @@ const frameSizes = new WeakMap();
 // No Tavern helpers, variables, slash commands or reply events are exposed.
 globalThis.addEventListener?.('message', event => {
     if (event.data?.type !== 'teahouse-output-height') return;
-    for (const frame of document.querySelectorAll('#teahouse-panel iframe.play-web-output')) {
+    for (const frame of document.querySelectorAll('.tea-panel-surface[data-active=true] iframe.play-web-output, #teahouse-panel iframe.play-web-output')) {
+        if (frame.closest('[hidden],[aria-hidden=true]')) continue;
         if (frame.contentWindow !== event.source || frameSizes.get(frame) !== event.data.token) continue;
         const height = event.data.height;
         if (typeof height === 'number' && Number.isFinite(height) && height > 0 && height <= 100000) {
@@ -86,6 +87,7 @@ function firstHtmlLine(source) {
 
 /** Read a short preview without creating an iframe or loading document assets. */
 export function playTextPreview(source, firstLine = false) {
+    if (source.length > 16384 && !/<|```|~~~/.test(source)) source = source.trimStart().slice(0, 16384);
     const compact = text => text.replace(/\s+/g, ' ').trim();
     const htmlText = html => {
         const template = document.createElement('template'); template.innerHTML = html;

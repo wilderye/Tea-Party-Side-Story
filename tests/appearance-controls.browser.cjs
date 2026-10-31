@@ -61,7 +61,7 @@ async function verifyControls(page, label) {
         const props = ['color', 'backgroundColor', 'backgroundImage', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
             'borderTopColor', 'borderBottomColor', 'borderBottomStyle', 'borderRadius', 'padding', 'margin', 'width', 'height', 'fontFamily', 'fontSize', 'fontWeight',
             'lineHeight', 'boxShadow', 'textShadow', 'opacity', 'appearance', 'transform', 'whiteSpace'];
-        const panel = document.getElementById('teahouse-panel');
+        const panel = document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
         const following = panel.dataset.appearance === 'tavern';
         function snapshot() {
             const controls = [...panel.querySelectorAll('button,input,textarea,select,h3,.tea-macro code,.tea-log-entry')]
@@ -125,7 +125,7 @@ async function verify(page, url, theme, viewport) {
         }
     }, sample);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const check = stage => verifyControls(page, `${theme.name} ${viewport.width} ${stage}`);
     await page.evaluate(() => document.fonts.ready);
@@ -152,7 +152,7 @@ async function verify(page, url, theme, viewport) {
     await page.evaluate(async () => {
         const diagnostics = (await import('/diagnostics.js')).createDiagnostics({ storage: null });
         diagnostics.info('合成日志：默认外观显示检查');
-        const view = (await import('/diagnostics-view.js')).renderDiagnostics(document.querySelector('#teahouse-panel .tea-settings'), diagnostics, { open: true });
+        const view = (await import('/diagnostics-view.js')).renderDiagnostics(document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-settings'), diagnostics, { open: true });
         view.dispose();
     });
     await check('settings fields, log text and disabled model controls');
@@ -184,7 +184,7 @@ async function verify(page, url, theme, viewport) {
                 value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
                 .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
             const track = parse(getComputedStyle(node).backgroundColor);
-            const surface = parse(getComputedStyle(node.closest('#teahouse-panel')).getPropertyValue('--tea-theme-surface'));
+            const surface = parse(getComputedStyle(node.closest(':is(#teahouse-panel,.tea-panel-surface[data-active=true])')).getPropertyValue('--tea-theme-surface'));
             return { track, thumb: getComputedStyle(node, '::after').backgroundColor,
                 left: getComputedStyle(node, '::after').left,
                 contrast: (Math.max(luminance(track), luminance(surface)) + .05)
@@ -251,6 +251,8 @@ async function verify(page, url, theme, viewport) {
     const favorite = record.getByRole('button', { name: '收藏演出记录', exact: true });
     await favorite.click(); await page.waitForFunction(() => document.querySelector('.play-header-actions .tea-star[aria-pressed=true]'));
     await check('favorite selected');
+    const userMore = record.getByRole('button', { name: '更多消息操作', exact: true });
+    if (await userMore.isVisible()) await userMore.click();
     await record.locator('.play-delete').first().hover(); await check('delete hover');
     await record.getByRole('button', { name: '编辑回复原文', exact: true }).click();
     const editor = record.getByRole('textbox', { name: '回复原文', exact: true });

@@ -491,5 +491,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             const round = await historyAction('读取演出记录', () => history.getRound(roundId));
             return withLiveResults(round);
         },
+        async createRoundReader() {
+            const read = await historyAction('读取演出记录', () => history.createRoundReader());
+            return async id => withLiveResults(await historyAction('读取演出记录', () => read(id)));
+        },
     };
 }

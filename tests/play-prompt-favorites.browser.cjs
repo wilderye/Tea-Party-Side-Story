@@ -39,7 +39,7 @@ async function verify(page, url, viewport) {
         await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
     }
     await open();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const record = id => panel.locator(`[data-record="${id}"]`);
     const user = id => record(id).locator('.play-user-message');

@@ -35,7 +35,7 @@ async function screenshot(page, name) {
             await page.goto(url); await page.waitForFunction(() => window.ready);
             assert.equal(page.url(), url); assert.equal(await page.title(), '手动收藏与 Enter 发送验证');
             await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-            const panel = page.locator('#teahouse-panel');
+            const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
             const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
             const plus = () => panel.locator('.tea-topbar .tea-actions button, .tea-brand .tea-actions button, .play-favorite-mobile-head .tea-actions button')
                 .filter({ has: page.locator('svg path[d="M12 4v16M4 12h16"]') }).filter({ visible: true });
@@ -43,7 +43,7 @@ async function screenshot(page, name) {
             await button('亲笔手稿').click(); assert.equal(await button('新建手稿').count(), 1);
             await button('新建手稿').click(); assert.equal(await plus().count(), 0, '手稿编辑不显示加号');
             await button('关闭编辑，返回列表').click();
-            await button('设置').click(); await page.waitForFunction(() => document.querySelector('#teahouse-panel').dataset.mode === 'settings');
+            await button('设置').click(); await page.waitForFunction(() => document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').dataset.mode === 'settings');
             assert.equal(await plus().count(), 0, '设置页不显示加号');
             await button(viewport.width <= 760 ? '返回列表' : '设置').click();
             await button('我的收藏').click(); assert.equal(await plus().count(), 0);
@@ -121,7 +121,7 @@ async function screenshot(page, name) {
             await composer.getByRole('button', { name: '选择角色', exact: true }).click();
             await search.fill('同名角色'); await picker.getByRole('button', { name: '同名角色', exact: true }).click();
             await composer.getByRole('button', { name: '保存', exact: true }).click();
-            const reader = panel.locator('.play-favorite-reading:visible');
+            const reader = panel.locator('.play-favorite-reading[data-active=true]:visible');
             await reader.getByText('手动正文', { exact: true }).waitFor();
             const saved = await page.evaluate(async () => { const row = (await runtime.listFavorites())[0]; return runtime.getFavorite(row.id); });
             assert.equal(saved.source.characterAvatar, 'same-one.png'); assert.equal(saved.source.type, 'manual');

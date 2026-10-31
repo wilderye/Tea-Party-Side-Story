@@ -28,7 +28,7 @@ const server = http.createServer(async (request, response) => {
 
 async function open(page) {
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    await page.locator('#teahouse-panel').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
     await page.locator('.play-record:visible').first().waitFor();
     await page.waitForTimeout(500);
 }
@@ -81,7 +81,7 @@ async function verifyScrolling(page, viewport) {
     const finalPosition = await position(page);
     assert.equal(await page.evaluate(() => sharedWrites.length), 0, '仅滚动没有安排保存酒馆全部设置');
     assert.equal(await page.evaluate(key => localStorage.getItem(key), sharedKey), legacy, '旧账号数据没有因滚动被改写');
-    await page.locator('#teahouse-panel').getByRole('button', { name: '关闭面板', exact: true }).filter({ visible: true }).click();
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '关闭面板', exact: true }).filter({ visible: true }).click();
     await page.waitForTimeout(400);
     assert.equal(await page.evaluate(() => sharedWrites.length), 0, '关闭面板也不会无故保存全部设置');
     await open(page);
@@ -94,7 +94,7 @@ async function verifyScrolling(page, viewport) {
     assert.equal(await page.evaluate(() => sharedWrites.length), 0);
 
     const choose = async name => {
-        const panel = page.locator('#teahouse-panel');
+        const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
         if (viewport.width <= 760) await panel.getByRole('button', { name: '选择角色', exact: true }).filter({ visible: true }).click();
         await panel.locator('.play-people').getByRole('button', { name, exact: true }).click();
         await page.waitForTimeout(450);

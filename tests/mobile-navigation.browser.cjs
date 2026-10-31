@@ -29,7 +29,7 @@ async function screenshot(page, name) {
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
 async function offset(page) {
-    return page.locator('.tea-catalog:not([hidden]) .tea-mobile-tabs').evaluate(node => {
+    return page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-catalog:not([hidden]) .tea-mobile-tabs').evaluate(node => {
         const transform = getComputedStyle(node).transform;
         return transform === 'none' ? 0 : -new DOMMatrixReadOnly(transform).m42 || 0;
     });
@@ -65,7 +65,7 @@ async function nativeTouchScroll(page, selector, pixels) {
     const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
     const before = await offset(page);
     await page.locator(selector).evaluate(area => {
-        const nav = document.querySelector('.tea-catalog:not([hidden]) .tea-mobile-tabs');
+        const nav = document.querySelector('.tea-panel-surface[data-active=true] .tea-catalog:not([hidden]) .tea-mobile-tabs');
         const currentOffset = () => -new DOMMatrixReadOnly(getComputedStyle(nav).transform).m42 || 0;
         window.nativeProof = { top: area.scrollTop, expected: currentOffset(), samples: [], finished: false, touchEnded: false };
         const track = () => {
@@ -88,7 +88,7 @@ async function nativeTouchScroll(page, selector, pixels) {
     await page.waitForFunction(() => nativeProof.finished);
     await settle(page);
     const proof = await page.evaluate(() => nativeProof);
-    const enabled = await page.locator('.tea-catalog:not([hidden])').evaluate(catalog => catalog.dataset.scope !== 'community' && matchMedia('(max-width:760px)').matches);
+    const enabled = await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-catalog:not([hidden])').evaluate(catalog => catalog.dataset.scope !== 'community' && matchMedia('(max-width:760px)').matches);
     assert.ok(Math.abs(await offset(page) - (enabled ? proof.expected : 0)) < 1,
         '原生触摸按实际正文滚动距离跟随，包括松手滑行；选集保持固定');
     await session.detach(); return { before, ...proof };
@@ -173,10 +173,10 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
             }
         });
         await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await settle(page);
-        const panel = page.locator('#teahouse-panel');
+        const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
         const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
         const slot = panel.locator('.tea-catalog:not([hidden]) .tea-mobile-tab-slot');
-        const list = '.tea-catalog:not([hidden]) .tea-list';
+        const list = ':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-catalog:not([hidden]) .tea-list';
         if (viewport.width > 760) {
             await touchScroll(page, list, 180); assert.equal(await offset(page), 0);
             await screenshot(page, 'navigation-desktop.png'); assert.deepEqual(errors, []); return;
@@ -294,8 +294,8 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
         await touchScroll(page, list, 22); assert.equal(await offset(page), 22, '亲笔手稿也按正文实际距离收起');
         await touchScroll(page, list, -10); assert.equal(await offset(page), 12);
         await button('剧场演出').click(); await panel.locator('.play-prose').first().waitFor(); await settle(page);
-        const feed = '.play-feed';
-        await panel.locator(feed).evaluate(node => node.scrollTop = 200); await settle(page);
+        const feed = ':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-feed';
+        await panel.locator('.play-feed').evaluate(node => node.scrollTop = 200); await settle(page);
         await touchScroll(page, feed, 22); assert.equal(await offset(page), 22);
         await touchScroll(page, feed, -10); assert.equal(await offset(page), 12);
         await screenshot(page, 'navigation-play-half-' + viewport.width + '.png');
@@ -305,7 +305,7 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
         await button('返回演出记录').click(); await settle(page);
         assert.equal(await offset(page), 0, '角色目录返回按钮不被栏目遮住');
         // Content resizing during a gesture must not cancel responsive motion.
-        await panel.locator(feed).evaluate(area => {
+        await panel.locator('.play-feed').evaluate(area => {
             const point = y => new Touch({ identifier: 1, target: area, clientX: 180, clientY: y });
             area.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [point(400)] }));
             const paragraph = document.createElement('p'); paragraph.textContent = '新增合成段落';
@@ -315,7 +315,7 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
             area.dispatchEvent(new TouchEvent('touchend', { bubbles: true }));
         });
         await settle(page); assert.equal(await offset(page), 20, '内容高度变化不取消跟随');
-        await panel.locator(feed).evaluate(area => area.dispatchEvent(new Event('scrollend')));
+        await panel.locator('.play-feed').evaluate(area => area.dispatchEvent(new Event('scrollend')));
         const input = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
         await input.fill('合成生成请求'); await settle(page); assert.equal(await offset(page), 0);
         await touchScroll(page, feed, 22); assert.equal(await offset(page), 22, '输入框仍有焦点也可阅读');
@@ -333,19 +333,19 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
         assert.equal(await offset(page), generationOffset, '生成自动滚动不改变栏目');
         await page.evaluate(() => finishGeneration('生成正文。\n\n'.repeat(40))); await settle(page);
         // Programmatic reading restoration during a touch only re-bases scrolling.
-        await panel.locator(feed).evaluate(area => area.scrollTop = area.scrollHeight); await settle(page);
-        await panel.locator(feed).evaluate(area => {
+        await panel.locator('.play-feed').evaluate(area => area.scrollTop = area.scrollHeight); await settle(page);
+        await panel.locator('.play-feed').evaluate(area => {
             area.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [new Touch({ identifier: 1, target: area, clientX: 180, clientY: 400 })] }));
             area.scrollTop -= 10;
         }); await settle(page);
         const beforeResize = await offset(page);
         await input.evaluate(node => { node.value = '合成输入。\n'.repeat(6); node.dispatchEvent(new InputEvent('input', { bubbles: true })); }); await settle(page);
         assert.equal(await offset(page), beforeResize, '阅读触摸期间输入框变高，程序恢复正文位置不移动栏目');
-        await panel.locator(feed).evaluate(area => area.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] })));
-        await panel.locator(feed).evaluate(area => area.dispatchEvent(new Event('scrollend')));
+        await panel.locator('.play-feed').evaluate(area => area.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] })));
+        await panel.locator('.play-feed').evaluate(area => area.dispatchEvent(new Event('scrollend')));
         await input.fill(''); await settle(page);
         await page.evaluate(() => document.activeElement.blur());
-        await panel.locator(feed).evaluate(node => node.scrollTop = 200); await settle(page);
+        await panel.locator('.play-feed').evaluate(node => node.scrollTop = 200); await settle(page);
         await touchScroll(page, feed, -44); assert.equal(await offset(page), 0);
         await touchScroll(page, feed, 22); assert.equal(await offset(page), 22);
         await page.setViewportSize({ width: 1000, height: 844 }); await settle(page);
@@ -355,10 +355,10 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
         await button('关闭面板').click(); await settle(page);
         await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await settle(page);
         assert.equal(await offset(page), 0);
-        await panel.locator(feed).evaluate(area => area.scrollTop = 200); await settle(page);
+        await panel.locator('.play-feed').evaluate(area => area.scrollTop = 200); await settle(page);
         await touchScroll(page, feed, 22); assert.equal(await offset(page), 22);
-        const captureReading = () => panel.locator(feed).evaluate(area => {
-            const nav = document.querySelector('.play-catalog:not([hidden]) .tea-mobile-tabs');
+        const captureReading = () => panel.locator('.play-feed').evaluate(area => {
+            const nav = document.querySelector('.tea-panel-surface[data-active=true] .play-catalog:not([hidden]) .tea-mobile-tabs');
             const top = Math.max(area.getBoundingClientRect().top, nav.getBoundingClientRect().bottom);
             const anchor = [...area.querySelectorAll('[data-read-anchor]')].find(node => node.getClientRects().length
                 && node.getBoundingClientRect().height && node.getBoundingClientRect().bottom > top + 1);

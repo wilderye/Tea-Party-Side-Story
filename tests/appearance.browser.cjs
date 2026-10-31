@@ -47,11 +47,11 @@ async function snapshot(panel) {
             '.play-reading-area', '.play-prose', '.play-speaker', '.play-message-time', '.play-compose-input', '.play-send',
             '.play-header-actions .tea-icon', '.tea-settings-group>h3', '.play-person[aria-pressed=true]'];
         return Object.fromEntries(selectors.flatMap(selector => {
-            const element = node.querySelector(selector);
+            const element = node.querySelector(selector) ?? (node.dataset.mode === 'settings'
+                ? node.closest('#teahouse-panel-host')?.querySelector('.tea-panel-surface[data-surface=play]')?.querySelector(selector) : null);
             // The mobile settings view unmounts the performance-only person selector.
             // It has no style to compare there; all shared controls remain required.
-            if (!element && selector === '.play-person[aria-pressed=true]'
-                && matchMedia('(max-width: 760px)').matches && node.dataset.mode === 'settings') return [];
+            if (!element && selector === '.play-person[aria-pressed=true]' && matchMedia('(max-width: 760px)').matches) return [];
             const style = getComputedStyle(element);
             return [[selector, Object.fromEntries(['color', 'backgroundColor', 'borderTopColor', 'fontFamily', 'fontSize', 'lineHeight', 'padding', 'borderRadius']
                 .map(property => [property, style[property]]))]];
@@ -68,11 +68,17 @@ async function verifyPalette(page, url, viewport) {
             '<div>独立网页回复</div><button id="step">继续</button><span id="count">0</span><script>document.getElementById("step").onclick=()=>document.getElementById("count").textContent=Number(document.getElementById("count").textContent)+1;</script>', round.results[0].text);
     });
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click(); await panel.locator('.play-record:visible').first().waitFor();
     const webpage = panel.frameLocator('iframe.play-web-output');
+    await webpage.locator('#step').waitFor();
+    await webpage.locator('#step').evaluate(node => new Promise(resolve => {
+        if (node.ownerDocument.readyState === 'complete') resolve();
+        else node.ownerDocument.defaultView.addEventListener('load', resolve, { once: true });
+    }));
     await webpage.getByRole('button', { name: '继续', exact: true }).click();
+    assert.equal(await webpage.locator('#count').textContent(), '1');
     await panel.locator('iframe.play-web-output').evaluate(node => { window.originalThemeFrame = node; });
     const composer = panel.getByRole('textbox', { name: '小剧场提示词', exact: true });
     await composer.fill('换主题后仍然保留的草稿');
@@ -338,7 +344,7 @@ async function verifyBodyTheme(page, url, viewport, theme, css, nativeCss) {
         document.body.append(reference);
     }, sample);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('剧场演出').click(); await panel.locator('.play-record:visible').first().waitFor();
     const data = await page.evaluate(() => ({ chat: ctx.chat, files: localStorage.getItem('historyFiles'), requests: captured.length }));

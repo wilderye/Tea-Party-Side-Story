@@ -30,7 +30,7 @@ async function openPanel(page, url) {
     await page.goto(url); await page.waitForFunction(() => window.ready);
     assert.match(await page.title(), /小剧场/);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     assert.match(await panel.innerText(), /茶话会/);
     return panel;
 }

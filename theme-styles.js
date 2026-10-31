@@ -1,4 +1,4 @@
-const panelScope = '#teahouse-panel[data-appearance="tavern"]';
+const panelScope = ':is(#teahouse-panel,.tea-panel-surface)[data-appearance="tavern"]';
 const prose = ':is(.tea-body,.play-prose)';
 const neutralAncestors = new Set(['#chat', '.mes', '.mes_block']);
 const proseTags = /^(?:p|q|em|i|b|strong|u|s|del|a|h[1-6]|blockquote|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|pre|code|kbd|samp|hr|img|ruby|rt|rp)(?=[.#[:\s>+~]|$)/;

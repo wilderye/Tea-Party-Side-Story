@@ -35,11 +35,11 @@ async function settle(page) {
  }));
 }
 async function verifyLayout(page,mobile) {
- const panel=page.locator('#teahouse-panel');
+ const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
  const button=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});
  async function assertHeight(label) {
   await settle(page);
-  const boxes=await page.evaluate(()=>['.teahouse-dialog','.popup-body','.popup-content','#teahouse-panel'].map(selector=>{
+  const boxes=await page.evaluate(()=>['.teahouse-dialog','.popup-body','.popup-content',':is(#teahouse-panel,.tea-panel-surface[data-active=true])'].map(selector=>{
    const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,height:r.height};
   }));
   const expected=mobile?page.viewportSize().height:Math.min(832,page.viewportSize().height-64);
@@ -102,7 +102,7 @@ async function verifyLayout(page,mobile) {
     await route.fulfill({contentType:relative.endsWith('.css')?'text/css':relative.endsWith('.svg')?'image/svg+xml':relative.endsWith('.woff2')?'font/woff2':'text/javascript',body:await fs.readFile(path.join(root,relative))});
    });
    await page.goto('http://tea.test/');
-   const panel=page.locator('#teahouse-panel');
+   const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
    await panel.waitFor(); assert.equal(await page.title(),'茶话会操作回归');
    assert.equal(page.url(),'http://tea.test/');
    await verifyLayout(page,mobile);
@@ -193,27 +193,27 @@ async function verifyLayout(page,mobile) {
    // Keep the original input connected while the IME owns its composition session.
    await panel.getByRole('searchbox').focus();
    await page.evaluate(()=>{
-    const input=document.querySelector('input[type=search]');window.composingInput=input;
+    const input=document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) input[type=search]');window.composingInput=input;
     input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
     input.value='chazhao';input.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true,data:'chazhao'}));
     window.ui.refresh();
    });
-   assert.equal(await page.evaluate(()=>window.composingInput===document.querySelector('input[type=search]')&&window.composingInput.isConnected),true);
+   assert.equal(await page.evaluate(()=>window.composingInput===document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) input[type=search]')&&window.composingInput.isConnected),true);
    assert.equal(await panel.getByRole('searchbox').inputValue(),'chazhao');
    assert.equal(await panel.locator('.tea-empty').count(),0,'拼音阶段不执行搜索');
    await page.evaluate(()=>{
     const input=window.composingInput;input.value='查找手稿 1';input.setSelectionRange(6,6);
     input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'查找手稿 1'}));
-    document.querySelector('input[type=search]').dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:false}));
+    document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) input[type=search]').dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:false}));
    });
    assert.equal(await panel.getByRole('searchbox').inputValue(),'查找手稿 1');
    assert.ok((await panel.locator('.tea-list').innerText()).includes('查找手稿 1'));
    // Cancel a second composition, then edit in the middle without moving the caret.
    await page.evaluate(()=>{
-    const input=document.querySelector('input[type=search]');input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
+    const input=document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) input[type=search]');input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
     input.value='查找手稿 1p';input.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true}));
     input.value='查找手稿 1';input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:''}));
-    const next=document.querySelector('input[type=search]');next.value='查找X手稿 1';next.setSelectionRange(3,3);next.dispatchEvent(new InputEvent('input',{bubbles:true}));
+    const next=document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) input[type=search]');next.value='查找X手稿 1';next.setSelectionRange(3,3);next.dispatchEvent(new InputEvent('input',{bubbles:true}));
    });
    assert.equal(await panel.getByRole('searchbox').evaluate(n=>n.selectionStart),3);
    assert.equal(await panel.getByRole('searchbox').inputValue(),'查找X手稿 1');

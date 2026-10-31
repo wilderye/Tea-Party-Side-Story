@@ -15,7 +15,8 @@ export function createPlayChatFavorites(history, display) {
             if (result.status === 'unfinished') continue;
             const identity = { messageId: message.id, resultId: message.role === 'user' ? null : result.id, bodyRevision: result.bodyRevision };
             if (!cached.has(favoriteCacheKey(identity))) {
-                entries.push({ ...identity, text: display?.process(result.text, character, result.context, message.role, depths.get(message)) ?? result.text });
+                const text = result.text ?? await history.getMessageBody(result.id, result.bodyRevision);
+                entries.push({ ...identity, text: display?.process(text, character, result.context, message.role, depths.get(message)) ?? text });
                 if (++processed % 12 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             }
             // Long transcripts yield between small batches; no work is done
@@ -29,23 +30,24 @@ export function createPlayChatFavorites(history, display) {
             const entries = await prepare(chat);
             return history.addChatFavorite({ chatId, expectedRevision: chat.revision, entries });
         },
-        read: id => history.getFavorite(id),
-        async sync(id) {
+        read: (id, options) => options ? history.getFavoriteWindow(id, options) : history.getFavorite(id),
+        async sync(id, options) {
             for (let attempt = 0; attempt < 3; attempt++) {
-                const favorite = await history.getFavorite(id);
-                if (favorite.format !== 2 || favorite.frozen) return favorite;
+                const favorite = await history.getFavoriteWindow(id, { metadata: true });
+                if (favorite.format !== 2 || favorite.frozen) return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);
                 let chat;
-                try { chat = await history.getChat(favorite.source.chatId); }
+                try { chat = await history.getChatMetadata(favorite.source.chatId); }
                 catch (error) {
                     if (error.code !== 'chat_missing') throw error;
-                    const current = await history.getFavorite(id);
+                    const current = options ? await history.getFavoriteWindow(id, options) : await history.getFavorite(id);
                     if (current.frozen) return current;
                     throw error;
                 }
+                if (favorite.sourceRevision === chat.revision) return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);
                 const entries = await prepare(chat, favorite);
                 try {
                     await history.syncChatFavorite(id, { chatRevision: chat.revision, entries });
-                    return history.getFavorite(id);
+                    return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);
                 } catch (error) { if (error.code !== 'chat_conflict' || attempt === 2) throw error; }
             }
         },

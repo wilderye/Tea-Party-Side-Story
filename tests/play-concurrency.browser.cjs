@@ -51,7 +51,7 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             assert.equal(page.url(), url);
             await page.waitForFunction(() => window.ready);
             await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-            const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+            const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
             await button('剧场演出').click();
             const send = panel.locator('.play-send');
             const aId = await page.evaluate(() => seed.a), a = panel.locator(`[data-record="${aId}"]`);
@@ -133,11 +133,11 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await page.evaluate(() => {
                 document.documentElement.style.setProperty('--SmartThemeBodyColor', '#e6e0d8');
                 document.documentElement.style.setProperty('--SmartThemeUnderlineColor', '#deae79');
-                document.querySelector('#teahouse-panel').dataset.appearance = 'tavern';
+                document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').dataset.appearance = 'tavern';
             });
             const themedPalette = await palette(); assert.deepEqual(themedPalette.single, themedPalette.all);
             assert.notDeepEqual(themedPalette.single, originalPalette.single, '跟随酒馆外观时两种停止颜色一起变化');
-            await page.evaluate(() => { document.querySelector('#teahouse-panel').dataset.appearance = 'default'; });
+            await page.evaluate(() => { document.querySelector(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').dataset.appearance = 'default'; });
             if (process.env.TEA_QA_DIR) {
                 await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
                 await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `stop-controls-${viewport.width}.png`) });

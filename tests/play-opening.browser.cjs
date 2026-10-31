@@ -60,7 +60,7 @@ async function snapshot(page) {
     });
 }
 async function check(page, mode) {
-    const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await seed(page);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await button('剧场演出').click();
     await page.waitForFunction(() => started.length === 4); await settle(page);
@@ -139,8 +139,8 @@ async function checkObservations(page) {
     assert.ok(entries.some(entry => entry.operation === '显示观察：资源耗时' && entry.view.resourceKind === 'font'));
     assert.equal(await page.evaluate(() => originalBody.isConnected), true);
     assert.doesNotMatch(await page.evaluate(() => diagnostics.export()), /private-catalog-text|不可写入日志的对白|private-title|private-author|data:image|tea-conversation-serif/);
-    await page.locator('#teahouse-panel').getByRole('button', { name: '关闭面板', exact: true }).click();
-    await page.locator('#teahouse-panel').waitFor({ state: 'detached' });
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '关闭面板', exact: true }).click();
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').waitFor({ state: 'detached' });
     const before = await page.evaluate(() => diagnostics.export());
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => diagnostics.export()), before, '关闭面板后移除定时器和观察器，不继续写日志');

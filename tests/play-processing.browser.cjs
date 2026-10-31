@@ -100,7 +100,7 @@ async function screenshot(page,name) {
 }
 
 async function verifyEntryFill(page) {
- const panel=page.locator('#teahouse-panel');
+ const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
  const button=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});
  const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true,includeHidden:true});
  const requestCount=await page.evaluate(()=>captured.length);
@@ -131,7 +131,7 @@ async function verifyEntryFill(page) {
 }
 
 async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
- const panel=page.locator('#teahouse-panel'),record=panel.locator('.play-record:visible').last();
+ const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'),record=panel.locator('.play-record:visible').last();
  const id=await record.getAttribute('data-record');
  const original=await page.evaluate(id=>runtime.getRound(id),id),requests=await page.evaluate(()=>captured.length);
  const mainChat=await page.evaluate(()=>structuredClone(ctx.chat));
@@ -231,7 +231,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
 }
 
 async function verifyUnsavedPromptEdit(page,viewport) {
- const panel=page.locator('#teahouse-panel');
+ const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
  await panel.getByRole('textbox',{name:'小剧场提示词',exact:true}).fill('检查回复保存失败时修改用户消息');
  await panel.getByRole('button',{name:'发送小剧场',exact:true}).click();
  await page.waitForFunction(()=>runtime.getState().phase==='generating');
@@ -266,7 +266,7 @@ async function verifyUnsavedPromptEdit(page,viewport) {
 }
 
 async function verifyFontSource(page,viewport,openSettings,closeSettings) {
- const panel=page.locator('#teahouse-panel');
+ const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
  const typography=()=>panel.evaluate(node=>[
   node,node.querySelector('.play-user-text .play-prose'),node.querySelector('.play-results .play-prose'),
   node.querySelector('.play-speaker'),node.querySelector('.play-compose-input'),node.querySelector('.tea-settings-group>h3'),
@@ -297,7 +297,7 @@ async function verifyFontSource(page,viewport,openSettings,closeSettings) {
  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('processingSettings')).fontSource),'tavern','字体选择自动保存');
  assert.ok(Math.abs(await dialog.locator('.tea-settings').evaluate(node=>node.scrollTop)-settingTop)<2,'切换字体不重新打开设置或跳回顶部');
  assert.ok(await font.evaluate(node=>{
-  const field=node.getBoundingClientRect(),panel=node.closest('#teahouse-panel').getBoundingClientRect();
+  const field=node.getBoundingClientRect(),panel=node.closest(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getBoundingClientRect();
   return field.left>=panel.left&&field.right<=panel.right;
  }),'电脑和手机都能完整显示字体选项');
  await screenshot(page,`font-settings-${viewport.width}.png`);
@@ -363,7 +363,7 @@ if (require.main === module) (async()=>{
    await page.addStyleTag({content:'textarea:not([type="search"]){border:1px solid #d7ded7!important;background-color:#d7ded7!important} textarea:not([type="search"]):focus{border:1px solid #68917b!important}'});
    assert.equal(await page.title(),'小剧场设置与原文编辑验证');assert.equal(page.url(),url);
    await page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
-   let panel=page.locator('#teahouse-panel');
+   let panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
    const shellMetrics=()=>panel.evaluate(root=>{
     const visible=nodes=>[...nodes].find(node=>node.getClientRects().length);
     const catalog=visible(root.querySelectorAll('.tea-catalog'));

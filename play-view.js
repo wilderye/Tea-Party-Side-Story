@@ -29,11 +29,12 @@ function recentTime(value) {
 
 /** A persistent conversation view. History and generation stay in playground. */
 export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites,
-    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch, onInspectPrompt } = {}) {
+    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch, onInspectPrompt, onBrowsing } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
-        onBack: () => setBrowsing(false), backLabel: '返回演出记录', isVisible: () => !mobile.matches || !!browsing,
+        onBack: () => setBrowsing(false), backLabel: '返回演出记录',
+        isVisible: () => visible && (!mobile.matches || !!browsing) || !mobile.matches && suspended && root?.dataset.active === 'true',
         emptyText: () => loaded ? '酒馆里还没有角色' : '正在读取角色…',
         renderMeta(character) {
             const time = element('time', undefined, 'play-person-time');
@@ -167,7 +168,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         });
     }
     function updateUserMessage(round, view) {
-        view.user.hidden = round.prompt === null && !view.userEditor;
+        const userHidden = round.prompt === null && !view.userEditor;
+        if (view.user.hidden !== userHidden) view.user.hidden = userHidden;
         const context = selectedResult(round)?.context;
         const identity = context?.userName ? { name: context.userName, avatar: context.userAvatar || null } : user;
         const signature = JSON.stringify(identity);
@@ -270,9 +272,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const renderPeople = resetScroll => characterPicker.render(resetScroll);
     function updateBrowser() {
         if (!root) return;
-        root.classList.toggle('play-choosing-character', !!browsing);
+        if (root.classList.contains('play-choosing-character') !== !!browsing) root.classList.toggle('play-choosing-character', !!browsing);
         chooseButton.setAttribute('aria-expanded', String(!!browsing));
         browserBack.hidden = !selected;
+        onBrowsing?.(!!browsing);
     }
     function setBrowsing(value) {
         if (!value && !selected) return;
@@ -280,7 +283,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         browsing = value; updateBrowser();
         if (browsing) { renderPeople(); characterPicker.focus(); }
         else { chooseButton.focus({ preventScroll: true }); restorePosition(positions.get(characterKey(selected))); }
-        layout();
+        if (!browsing) { if (resumeNeedsRefresh) { resumeNeedsRefresh = false; void refresh(); } layout(); }
     }
     function capturePosition(followBottom = true) {
         if (!visible || restoringPosition || !feed.clientHeight || !selected || displayedCharacter !== characterKey(selected)) return null;
@@ -420,12 +423,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function layout() {
         cancelAnimationFrame(layoutFrame);
-        if (!visible) return;
+        if (!visible || mobile.matches && browsing) return;
         if (lastMobile !== mobile.matches) { lastMobile = mobile.matches; renderPeople(); updateBrowser(); updateControls(); }
         // ResizeObserver runs before paint; do not defer catalog pagination by a frame.
         characterPicker.layout();
         layoutFrame = requestAnimationFrame(() => {
-            if (!visible) return;
+            if (!visible || mobile.matches && browsing) return;
             // A user scroll can arrive before its scroll event. Never restore
             // an older anchor over a new position from the browser compositor.
             if (!restoringPosition && cachedPosition?.key === characterKey(selected)
@@ -846,7 +849,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (!ids.has(id)) { output.box.remove(); view.outputs.delete(id); }
         }
         const result = selectedResult(round), index = round.results.indexOf(result);
-        view.assistant.hidden = !result;
+        if (view.assistant.hidden !== !result) view.assistant.hidden = !result;
         if (!result) return;
         view.time.textContent = messageTime(result.startedAt); view.time.dateTime = result.startedAt;
         const name = roundCharacter(round).name;
@@ -854,7 +857,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (!view.outputs.has(result.id)) {
             const output = createOutput(round, result); view.outputs.set(result.id, output); view.results.append(output.box);
         }
-        for (const [id, output] of view.outputs) output.box.hidden = id !== result.id;
+        for (const [id, output] of view.outputs) if (output.box.hidden !== (id !== result.id)) output.box.hidden = id !== result.id;
         const output = view.outputs.get(result.id);
         view.editReply.hidden = !canEditResult(result) || isEditing(round.id);
         updateFavoriteStar(round, view);
@@ -905,6 +908,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     }
     async function readHistoryRows(rows, isCurrent, show) {
+        const read = rows.length ? await playground.createRoundReader?.() : null;
         let next = 0, frame = 0;
         const batch = ++batchNumber, started = performance.now();
         observe('开始读取一批记录', { batch, count: rows.length });
@@ -920,7 +924,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                     const details = { batch, record: row.id, ordinal: directory.findIndex(item => item.id === row.id) + 1, total: directory.length };
                     observe('开始读取记录', details);
                     try {
-                        const round = await playground.getRound(row.id);
+                        const round = read ? await read(row.id) : await playground.getRound(row.id);
                         observe('记录读取完成', { ...details, durationMs: Math.round(performance.now() - readStarted), reason: isCurrent() ? 'current' : 'stale' });
                         if (isCurrent()) records.set(row.id, { round, revision: row.revision });
                     } catch {
@@ -961,18 +965,26 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     }
     function renderHistory() {
-        if (!visible) return;
+        if (!visible || mobile.matches && browsing) return;
         const ready = rowsByCharacter.has(selected?.id);
         const rows = rowsByCharacter.get(selected?.id) ?? [];
         const key = characterKey(selected);
         const { start, end } = historyRange(rows, key);
         const visibleRows = rows.slice(start, end);
         const visibleIds = new Set(visibleRows.map(row => row.id));
+        let retainedFrames = 0;
         for (const [id, view] of views) {
+            const retainFrame = !visibleIds.has(id) && !!view.item.querySelector('iframe') && retainedFrames++ < historyPageSize;
             if (!visibleIds.has(id) && !isEditing(id) && !roundBusy(id) && !view.removing && !view.favoriting
-                && !view.item.querySelector('iframe')) {
+                && !retainFrame) {
                 view.item.remove(); views.delete(id);
             } else if (view.item.hidden !== !visibleIds.has(id)) view.item.hidden = !visibleIds.has(id);
+        }
+        const recordSize = cached => (cached?.round?.prompt?.length ?? 0) + (cached?.round?.results ?? []).reduce((size, result) => size + (result.text?.length ?? 0), 0);
+        let retainedCharacters = [...records.values()].reduce((size, cached) => size + recordSize(cached), 0);
+        for (const [id, cached] of records) {
+            if (records.size <= 160 && retainedCharacters <= 4 * 1024 * 1024) break;
+            if (!visibleIds.has(id) && !views.has(id) && !roundBusy(id)) { records.delete(id); retainedCharacters -= recordSize(cached); }
         }
         const savedTarget = pendingReveal?.key === key ? pendingReveal.roundId : positions.get(key)?.anchor?.split('/')[0];
         const targetId = visibleIds.has(savedTarget) ? savedTarget : visibleRows.at(-1)?.id;
@@ -1077,20 +1089,31 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         latestRequest = null; pendingReveal = null;
         closeResults(false); rememberPosition(); selected = character;
         displayedCharacter = '';
+        if (!visible) { renderPeople(); resumeNeedsRefresh = true; return; }
         displayLoad = null; void refreshDisplay(character);
         if (mobile.matches) setBrowsing(false);
         renderPeople(); renderHistory(); updateComposer(); restorePosition(positions.get(characterKey(selected)));
         await refresh();
     }
     async function refresh() {
-        if (suspended) { resumeNeedsRefresh = true; return; }
+        if (suspended || !visible) { resumeNeedsRefresh = true; return; }
+        if (mobile.matches && browsing) {
+            const saved = await playground.listCharacters();
+            if (visible && browsing) {
+                characters = mergePlayCharacters(saved, ctx().characters);
+                selected = characters.find(character => character.id === selected?.id) ?? selected;
+                renderPeople();
+            }
+            resumeNeedsRefresh = true; return;
+        }
         const id = ++refreshId;
         historyLoad = null;
         readError.hidden = true;
         syncCurrent();
+        const isCurrent = () => id === refreshId && visible && !(mobile.matches && browsing);
         try {
             if (id !== refreshId) return;
-            const savedCharacters = await playground.listCharacters(); if (id !== refreshId) return;
+            const savedCharacters = await playground.listCharacters(); if (!isCurrent()) return;
             const previous = selected, previousKey = characterKey(previous);
             characters = mergePlayCharacters(savedCharacters, ctx().characters);
             const currentRow = current && (characters.find(item => item.avatar === current.avatar) ?? { ...current, lastPlayedAt: null });
@@ -1107,7 +1130,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             if (visible) { renderPeople(); updateBrowser(); updateComposer(); }
             const characterId = selected?.id;
-            const rows = characterId ? await playground.listRounds(characterId) : []; if (id !== refreshId) return;
+            const rows = characterId ? await playground.listRounds(characterId) : []; if (!isCurrent()) return;
             const previousRows = rowsByCharacter.get(characterId) ?? [];
             const previousRange = historyRange(previousRows, key);
             rowsByCharacter.set(characterId, rows);
@@ -1147,7 +1170,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 return positions.get(key)?.bottom !== false ? rows.indexOf(b) - rows.indexOf(a) : rows.indexOf(a) - rows.indexOf(b);
             });
             showBatch();
-            if (pending.length) await readHistoryRows(pending, () => id === refreshId, showBatch);
+            if (pending.length) await readHistoryRows(pending, isCurrent, showBatch);
         } catch (error) {
             if (id !== refreshId) return;
             loaded = true; showReadError(error.message || '演出记录暂时无法读取。');
@@ -1200,7 +1223,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             scheduleSave();
         }
         changedJobs.set(job.resultId, job);
-        if (!streamFrame && !suspended) streamFrame = requestAnimationFrame(renderChangedJobs);
+        if (!streamFrame && visible && !(mobile.matches && browsing)) streamFrame = requestAnimationFrame(renderChangedJobs);
         if (job.roundId && (!previous?.roundId || job.phase === 'idle' || job.phase === 'save-failed')) void refresh();
     });
     const events = ctx().eventTypes ?? {};
@@ -1217,6 +1240,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
 
     return {
         browser, chooseButton, page,
+        get suspended() { return suspended; },
         prepareActivation() {
             if (visible) return;
             resetHistoryWindow(rowsByCharacter.get(selected?.id) ?? []);
@@ -1260,14 +1284,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
             cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0; inputComposing = false;
         },
+        close() { this.deactivate(); root = null; page.remove(); browser.remove(); },
         suspend() {
             const rows = rowsByCharacter.get(selected?.id) ?? [], { start, end } = historyRange(rows);
             resumeNeedsRefresh ||= !!historyLoad || !loaded || !displayReady() || rows.slice(start, end).some(row => records.get(row.id)?.revision !== row.revision);
             this.deactivate(); suspended = true;
         },
-        resume(container, { displayChanged = false } = {}) {
+        resume(container, { displayChanged = false, checkData = false } = {}) {
             root = container; visible = true; suspended = false;
-            const refreshNeeded = resumeNeedsRefresh || displayedCharacter !== characterKey(selected); resumeNeedsRefresh = false;
+            const refreshNeeded = checkData || resumeNeedsRefresh || displayedCharacter !== characterKey(selected); resumeNeedsRefresh = false;
             restorePosition(positions.get(characterKey(selected)));
             if (displayChanged || changedJobs.size) keepReading(() => { renderChangedJobs(); renderHistory(); });
             if (refreshNeeded) void refresh();

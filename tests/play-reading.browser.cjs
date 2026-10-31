@@ -40,6 +40,7 @@ async function seedLongHistory(page, mode) {
     const rows = [...records.values()].map(round => ({ id: round.id, revision: round.id, characterId: round.characterId,
       createdAt: round.createdAt, lastPlayedAt: round.createdAt }));
     const list = runtime.listRounds, read = runtime.getRound;
+    runtime.createRoundReader = undefined;
     runtime.listRounds = id => id === original.characterId ? Promise.resolve(rows) : list(id);
     runtime.getRound = async id => {
       if (!records.has(id)) return read(id);
@@ -58,7 +59,7 @@ async function seedLongHistory(page, mode) {
 async function checkHistory(page, mode, viewport) {
   const ids = await seedLongHistory(page, mode);
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-  const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+  const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   await button('剧场演出').click();
   const targetId = ids.at(-1);
   const target = panel.locator(`[data-record="${targetId}"]`);
@@ -163,7 +164,7 @@ async function checkFavorite(page) {
     } }, { onChange() {}, onRemove() {}, notify() {} });
     document.body.append(reader.node); await reader.load(favoriteCurrent);
   });
-  const favorite = page.locator('.play-favorite-reading');
+  const favorite = page.locator('body > .play-favorite-reading');
   await favorite.frameLocator('iframe').getByRole('button', { name: '继续', exact: true }).click();
   await page.evaluate(async () => { favoriteCurrent.title = '修改标题'; favoriteCurrent.revision = 'two'; await reader.load(favoriteCurrent); });
   assert.equal(await favorite.locator('h2').innerText(), '修改标题');
@@ -178,15 +179,15 @@ async function checkFavorite(page) {
 async function checkReopen(page, mode) {
   const ids = await seedLongHistory(page, mode);
   const open = () => page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-  const button = name => page.locator('#teahouse-panel').getByRole('button', { name, exact: true }).filter({ visible: true });
+  const button = name => page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name, exact: true }).filter({ visible: true });
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const capture = () => page.locator('.play-feed').evaluate(readingPosition);
   await open(); await button('剧场演出').click();
   await page.waitForFunction(count => document.querySelectorAll('.play-record:not([hidden])').length === count, mode === 'reopen-loading' ? 9 : 10);
   if (mode !== 'reopen-loading') {
     await page.evaluate(() => resumeHistoryReads());
-    while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
-      await page.locator('#teahouse-panel .play-earlier-bar').evaluate(node => node.click());
+    while (await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-earlier-bar:visible').count() > 0) {
+      await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-earlier-bar').evaluate(node => node.click());
       await page.waitForTimeout(40);
     }
     await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 180);
@@ -208,13 +209,13 @@ async function checkReopen(page, mode) {
       await button('茶会选集').click(); await button('剧场演出').click(); await settle();
     }
     await button('关闭面板').click();
-    await page.locator('#teahouse-panel').waitFor({ state: 'detached' });
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').waitFor({ state: 'detached' });
     await open(); await settle();
     await page.waitForTimeout(100);
     if (mode === 'reopen-loading' && repeat === 1) {
       await page.evaluate(() => resumeHistoryReads());
-      while (await page.locator('#teahouse-panel .play-earlier-bar:visible').count() > 0) {
-        await page.locator('#teahouse-panel .play-earlier-bar').evaluate(node => node.click());
+      while (await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-earlier-bar:visible').count() > 0) {
+        await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-earlier-bar').evaluate(node => node.click());
         await page.waitForTimeout(40);
       }
       await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 180);
@@ -231,7 +232,7 @@ async function checkReopen(page, mode) {
 
 async function checkStreaming(page) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-  await page.locator('#teahouse-panel').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
+  await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 2);
   await page.evaluate(() => { window.streamingTask = runtime.send({ prompt: '大段流式正文的位置验证' }); });
   await page.waitForFunction(() => typeof emitGeneration === 'function' && document.querySelectorAll('.play-record:not([hidden])').length === 3);
@@ -267,7 +268,7 @@ async function checkContinuationPosition(page, mode) {
     await runtime.editResult(round.id, result.id, continueBase, result.text);
     return round.id;
   });
-  const panel = page.locator('#teahouse-panel');
+  const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
   const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
   const capture = () => page.locator('.play-feed').evaluate(readingPosition);
@@ -281,7 +282,7 @@ async function checkContinuationPosition(page, mode) {
   await settle();
   if (mode === 'continue-reopen' || mode === 'continue-stop') {
     await button('关闭面板').click();
-    await page.locator('#teahouse-panel').waitFor({ state: 'detached' });
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').waitFor({ state: 'detached' });
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   } else if (mode === 'continue-tab') {
     await button('茶会选集').click();
@@ -329,7 +330,7 @@ async function checkFavoriteProcessing(page, viewport) {
     return round.id;
   });
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-  const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+  const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   await button('剧场演出').click();
   const record = panel.locator(`[data-record="${id}"]`);
   await record.getByText('AA', { exact: true }).waitFor();
@@ -344,7 +345,7 @@ async function checkFavoriteProcessing(page, viewport) {
   if (viewport.width <= 760) await button('返回演出记录').click();
   await button('我的收藏').click(); await button('演出记录').click();
   await panel.locator(`.tea-story[data-id="${saved.id}"]`).getByText('AA', { exact: true }).click();
-  const reader = panel.locator('.play-favorite-reading');
+  const reader = panel.locator('.play-favorite-reading[data-active=true]');
   await reader.getByRole('button', { name: '编辑演出记录收藏', exact: true }).click();
   await reader.getByRole('textbox', { name: '收藏内容', exact: true }).fill('AAA');
   await reader.getByRole('button', { name: '保存', exact: true }).click();

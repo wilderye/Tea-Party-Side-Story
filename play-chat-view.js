@@ -19,7 +19,7 @@ export function playRecentTime(value) {
 
 /** Directory owns its list; only one branch transcript is mounted at a time. */
 export function createPlayChatView(ctx, settings, playground, promptFavorites, {
-    notify, onOpen, onBranch, onCharacter, onClose, onDelete, onInspectPrompt, getReadingInset = () => 0, onProgrammaticScroll = () => {},
+    notify, onOpen, onBranch, onCharacter, onClose, onDelete, onInspectPrompt, onBrowsing, getReadingInset = () => 0, onProgrammaticScroll = () => {},
 }) {
     const mobile = matchMedia('(max-width: 760px)');
     const page = element('div', undefined, 'play-page play-history-page');
@@ -146,9 +146,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function setBrowsing(value) {
         browsing = value; page.classList.toggle('is-browsing-characters', mobile.matches && browsing);
-        panel?.classList.toggle('play-choosing-character', mobile.matches && browsing);
+        if (panel && panel.classList.contains('play-choosing-character') !== (mobile.matches && browsing)) panel.classList.toggle('play-choosing-character', mobile.matches && browsing);
         picker.node.classList.toggle('is-mobile-open', browsing); chooseButton.setAttribute('aria-pressed', String(browsing));
         picker.render();
+        onBrowsing?.(browsing);
+        if (!browsing && resumeNeedsRender && visible) { resumeNeedsRender = false; void (route === 'history' ? refreshDirectory(false) : reload()); }
     }
     function updateSearch() {
         searchBox.hidden = mobile.matches && !searchOpen && !search.value;
@@ -162,7 +164,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (!canLeave()) return;
         saveDirectory(); remember(); openId++; queryId++; directoryId++; loading = false; closeVersions(); editor = null; selected = character; chat = null;
         deletingFrom = null;
-        route = 'history'; branchPage.hidden = true; directory.hidden = false; setBrowsing(false);
+        route = 'history'; showRoute(); setBrowsing(false);
         const saved = directories.get(playCharacterKey(character));
         rows = saved?.rows ?? []; search.value = saved?.query ?? ''; searchOpen = saved?.searchOpen ?? false; limit = saved?.limit ?? 24;
         updateSearch(); picker.render(); onCharacter?.(character);
@@ -186,6 +188,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         return true;
     }
     async function refreshDirectory(sort = true) {
+        if (!visible) { resumeNeedsRender = true; return; }
         const id = ++directoryId;
         try {
             if (!await refreshCharacters(sort, () => id === directoryId && route === 'history')) return;
@@ -197,9 +200,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 rows = next.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
             }
             await playground.display?.ensure(selected);
-            if (id !== directoryId || route !== 'history') return;
+            if (id !== directoryId || route !== 'history' || !visible) return;
             await renderDirectory();
-        } catch (error) { if (id === directoryId) showError(list, error, () => refreshDirectory(sort)); }
+        } catch (error) { if (id === directoryId && visible && route === 'history') showError(list, error, () => refreshDirectory(sort)); else resumeNeedsRender = true; }
     }
     function showError(container, error, retry) {
         container.replaceChildren(element('p', error.message, 'play-result-error'), textButton('重新读取', () => void retry()));
@@ -208,16 +211,30 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const id = ++queryId, term = search.value.trim().toLocaleLowerCase(), matching = [];
         updateSearch();
         const count = term ? rows.length : Math.min(rows.length, limit);
+        if (!visible || mobile.matches && browsing) { resumeNeedsRender = true; return; }
+        const placeholders = rows.slice(0, count).map(row => ({ ...row, name: row.name || '未命名聊天', preview: rowViews.get(row.id)?.row.preview ?? '' }));
+        if (!term) publishDirectory(placeholders, term, count);
+        const read = await playground.createChatDirectoryReader?.();
+        const pending = new Map();
+        let requested = 0;
+        const prepare = () => {
+            if (id !== queryId || !visible || route !== 'history' || mobile.matches && browsing) return;
+            while (requested < count && pending.size < 4) {
+                const index = requested++, row = rows[index], key = `${row.id}/${!!term}`, cached = directoryRecords.get(key);
+                const result = cached?.revision === row.revision ? Promise.resolve(cached)
+                    : read ? read(row.id, { search: !!term }) : term ? playground.getChatSearch(row.id) : playground.getChatPreview(row.id);
+                pending.set(index, result.then(record => ({ record }), error => ({ error })));
+            }
+        };
+        prepare();
         for (let index = 0; index < count; index++) {
-            if (id !== queryId || route !== 'history') return;
+            if (id !== queryId || route !== 'history' || !visible || mobile.matches && browsing) return;
             const row = rows[index];
             try {
                 const recordKey = `${row.id}/${!!term}`;
-                let record = directoryRecords.get(recordKey);
-                if (record?.revision !== row.revision) {
-                    record = await (term ? playground.getChatSearch(row.id) : playground.getChatPreview(row.id));
-                    cacheEntry(directoryRecords, recordKey, record);
-                }
+                const result = await pending.get(index); pending.delete(index); prepare();
+                if (result.error) throw result.error;
+                const record = result.record; cacheEntry(directoryRecords, recordKey, record);
                 if (id !== queryId) return;
                 const name = record.name, ai = [...record.messages].reverse().find(message => message.role === 'assistant');
                 const character = selected;
@@ -241,9 +258,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 }
                 matching.push({ ...row, name, preview, matchMessageId });
             } catch (error) { matching.push({ ...row, name: row.name || '聊天读取失败', preview: error.message }); }
-            if (index % 8 === 7) await new Promise(resolve => setTimeout(resolve, 0));
+            if (id !== queryId || !visible || route !== 'history') return;
+            if (!term || index % 4 === 3) publishDirectory(term ? matching : [...matching, ...placeholders.slice(index + 1)], term, count);
+            if (index % 4 === 3) await new Promise(resolve => setTimeout(resolve, 0));
         }
         if (id !== queryId) return;
+        publishDirectory(matching, term, count);
+    }
+    function publishDirectory(matching, term, count) {
         const nodes = matching.map(row => {
             let view = rowViews.get(row.id);
             if (!view) {
@@ -278,8 +300,23 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     search.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); void renderDirectory(); } });
     function position() {
         const bottom = feed.scrollHeight - feed.clientHeight - feed.scrollTop < 32;
+        if (bottom) return { bottom: true };
         const top = feed.getBoundingClientRect().top + getReadingInset();
-        const anchor = [...content.querySelectorAll('[data-read-anchor], [data-message-id]')].find(node => node.getBoundingClientRect().bottom > top + 1);
+        const messages = [...content.querySelectorAll(':scope > [data-message-id]')];
+        let low = 0, high = messages.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            if (messages[middle].getBoundingClientRect().bottom > top + 1) high = middle;
+            else low = middle + 1;
+        }
+        const message = messages[low], anchors = message ? [...message.querySelectorAll('[data-read-anchor]')] : [];
+        low = 0; high = anchors.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            if (anchors[middle].getBoundingClientRect().bottom > top + 1) high = middle;
+            else low = middle + 1;
+        }
+        const anchor = anchors[low] ?? message;
         return { bottom, anchor: anchor?.dataset.readAnchor ?? anchor?.dataset.messageId,
             messageId: anchor?.closest('[data-message-id]')?.dataset.messageId,
             offset: anchor ? anchor.getBoundingClientRect().top - top : 0 };
@@ -369,16 +406,38 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         head.append(heading); return head;
     }
     function renderMessage(message) {
-        const result = currentResult(message), last = chat.messages.at(-1)?.id === message.id;
+        let result = currentResult(message);
+        const last = chat.messages.at(-1)?.id === message.id;
         let view = messageViews.get(message.id);
         if (!view) {
             const node = element('section', undefined, `play-message play-${message.role === 'user' ? 'user' : 'assistant'}-message`);
             node.dataset.messageId = message.id;
             const body = element('div', undefined, message.role === 'user' ? 'play-user-text' : 'play-results');
             const error = element('p', undefined, 'play-result-error'); error.hidden = true;
-            view = { node, body, error, output: { box: body } }; node.append(body); messageViews.set(message.id, view);
+            view = { node, body, error, output: { box: body }, message }; node.append(body); messageViews.set(message.id, view);
         }
         const { node, body, output, error } = view;
+        const signature = JSON.stringify({ message: { ...message, text: undefined,
+            results: message.results?.map(result => ({ ...result, text: undefined })) }, depth: messageDepths.get(message), last, deletingFrom,
+            index: chat.messages.indexOf(message), display: playground.display?.revision,
+            favorite: message.role === 'user' ? promptFavorites?.isFavorite({ prompt: message.text, origin: message.origin })
+                : favorites.has(favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt })),
+            jobs: ownJobs().map(job => [job.resultId, job.phase]), editing: editingSessions.get(chat.id)?.messageId,
+            userName: ctx().name1, character: { id: owner()?.id, name: owner()?.name, avatar: owner()?.avatar } });
+        if (view.signature === signature) {
+            const messageIndex = chat.messages.indexOf(message), depth = messageDepths.get(message);
+            for (const key of Object.keys(view.message)) if (!Object.hasOwn(message, key)) delete view.message[key];
+            Object.assign(view.message, message); message = view.message; result = currentResult(message);
+            chat.messages[messageIndex] = message; messageDepths.set(message, depth);
+            if (message.role === 'assistant') renderPlayReply(output, result, { displayText: processed(message, result),
+                job: playground.getState(result.id), error, anchor: `${chat.id}/${message.id}` });
+            else if (!editingSessions.has(chat.id)) {
+                const text = processed(message);
+                if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true); view.userText = text; }
+            }
+            return node;
+        }
+        view.signature = signature; view.message = message;
         node.classList.toggle('is-hidden-floor', !!message.hidden);
         node.querySelector('.play-message-meta')?.remove();
         node.querySelector(':scope > .play-message-actions')?.remove();
@@ -464,7 +523,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     let messageDepths = new Map();
     function renderChat(saved = positions.get(chat?.id), targetId) {
-        if (!chat) return;
+        if (!chat || !visible || route !== 'chat' || mobile.matches && browsing) { resumeNeedsRender = true; return; }
         closeVersions(false);
         messageDepths = playMessageDepths(chat.messages);
         editor = null;
@@ -549,10 +608,21 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         chatFavorite = rows.find(row => row.source.type === 'chat' && row.source.chatId === chat?.id);
     }
     async function open(id, targetId) {
+        if (chat?.id === id && !editingSessions.has(id)) {
+            const request = ++openId, metadata = await playground.getChatMetadata(id);
+            if (request !== openId || chat?.id !== id) return;
+            const targetIndex = chat.messages.findIndex(message => message.id === targetId);
+            if (metadata.revision === chat.revision && (!targetId || targetIndex >= start && targetIndex < end)) {
+                route = 'chat'; showRoute(); loading = false; resumeNeedsRender = false;
+                if (visible) renderChat(positions.get(id), targetId);
+                if (visible) { restore(positions.get(id), targetId); updateInput(); syncPermissions(); }
+                return;
+            }
+        }
         remember(); saveDirectory(); closeVersions(); queryId++; directoryId++; const request = ++openId; loading = true;
         editor = null; deletingFrom = null; chat = null; messageViews.clear(); content.replaceChildren(element('p', '正在读取聊天…'));
         deleteControls.hidden = true; menu.open = false;
-        route = 'chat'; branchPage.hidden = false; directory.hidden = true; input.value = drafts.get(id) ?? '';
+        route = 'chat'; showRoute(); input.value = drafts.get(id) ?? '';
         try {
             const saved = positions.get(id), editingMessageId = editingSessions.get(id)?.messageId;
             const window = await playground.getChatWindow(id, { anchorId: editingMessageId ?? targetId ?? saved?.messageId,
@@ -576,27 +646,28 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             else if (suspended) resumeNeedsRender = true;
             if (visible) { resize.observe(content); resize.observe(feed); resize.observe(branchPage); }
             if (targetId && index < 0) notify('原回复已删除');
-        } catch (error) { if (request === openId) showError(content, error, () => open(id, targetId)); }
+        } catch (error) { if (request === openId && visible) showError(content, error, () => open(id, targetId)); else resumeNeedsRender = true; }
         finally { if (request === openId) { loading = false; updateInput(); } }
     }
-    async function reload() {
+    async function reload(render = true) {
         if (!chat) return;
+        if (!visible || mobile.matches && browsing) { resumeNeedsRender = true; return; }
         const id = chat.id, request = openId, refresh = ++reloadId, saved = positions.get(id);
         const editingMessageId = editingSessions.get(id)?.messageId;
-        const window = await playground.getChatWindow(id, { start, end, latest: !editingMessageId && !!saved?.bottom,
+        const window = await playground.getChatWindow(id, { start, end: Math.max(end, start + 24), latest: !editingMessageId && !!saved?.bottom,
             anchorId: editingMessageId });
         const next = window.chat;
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
         chat = next; await loadFavorites(() => request === openId && refresh === reloadId && chat?.id === id);
         if (request !== openId || refresh !== reloadId || chat?.id !== id) return;
         start = window.start; end = window.end;
-        if (visible && route === 'chat') renderChat(saved);
+        if (render && visible && route === 'chat') renderChat(saved);
         else if (suspended) resumeNeedsRender = true;
     }
     async function run(action) {
         if (mutating) return;
         remember(); mutating = true; updateInput(); syncPermissions(); menu.open = false;
-        try { await action(); deletingFrom = null; await reload(); }
+        try { await action(); deletingFrom = null; await reload(false); }
         catch (error) { notify(error.message); }
         finally { mutating = false; if (chat && visible) renderChat(positions.get(chat.id)); }
     }
@@ -661,7 +732,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         await ctx().callGenericPopup(area, ctx().POPUP_TYPE.TEXT, '', { okButton: false, onClosing: () => !mutating,
             onOpen: popup => {
                 dialogPopup = popup; popup.dlg.classList.add('tea-hidden-dialog'); popup.dlg.setAttribute('aria-label', '隐藏楼层管理');
-                const source = getComputedStyle(page.closest('#teahouse-panel'));
+                const source = getComputedStyle(page.closest('.tea-panel-surface'));
                 for (const name of ['--tea-paper', '--tea-ink', '--tea-heading', '--tea-muted', '--tea-line', '--tea-accent', '--tea-field-paper', '--tea-control-paper', '--tea-control-ink', '--tea-error', '--tea-ui', '--play-prose-font', '--tea-popup-shadow', 'color-scheme']) {
                     const value = source.getPropertyValue(name); if (value.trim()) popup.dlg.style.setProperty(name, value);
                 }
@@ -730,13 +801,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const finish = () => {
             session.editor.dispose(); editingSessions.delete(id);
             const view = messageViews.get(message.id);
-            if (view) { view.userText = undefined; view.output.signature = undefined; }
+            if (view) { view.signature = null; view.userText = undefined; view.output.signature = undefined; }
             if (chat?.id === id) { editor = null; renderChat(positions.get(id)); }
         };
         session.editor = createPlayEditor({ text, label: message.role === 'user' ? '用户消息原文' : '回复原文', onCancel: finish,
             async onSave({ text }) {
-                const updated = await playground.editMessage(id, message.id, { text, expectedText: result?.text ?? message.text, resultId: result?.id });
-                if (chat?.id === id) chat = updated;
+                await playground.editMessage(id, message.id, { text, expectedText: result?.text ?? message.text, resultId: result?.id });
+                if (chat?.id === id) await reload(false);
                 finish();
             } });
         editingSessions.set(id, session); editor = session.editor;
@@ -772,7 +843,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         try {
             await action();
             if (inDirectory && route === 'history' && selected?.id === characterId) { await refreshDirectory(false); list.scrollTop = scroll; }
-            else if (chat?.id === record.id && route === 'chat') await reload();
+            else if (chat?.id === record.id && route === 'chat') await reload(false);
         } catch (error) { notify(error.message); }
         finally {
             mutating = false;
@@ -827,9 +898,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const result = message?.results.find(result => result.id === job.resultId);
         if (result) { result.text = job.text; result.status = job.phase; result.error = job.error; }
         if (suspended && result) resumeNeedsRender = true;
-        if (!visible || renderFrame) return;
+        if (!visible || mobile.matches && browsing || renderFrame) return;
         renderFrame = requestAnimationFrame(() => {
-            renderFrame = 0; if (!visible || !chat) return;
+            renderFrame = 0; if (!visible || !chat || mobile.matches && browsing) return;
             const saved = positions.get(chat.id), node = content.querySelector(`[data-message-id="${CSS.escape(message?.id ?? '')}"]`);
             const latest = chat.messages.find(item => item.id === message?.id);
             const view = replyViews.get(node);
@@ -843,11 +914,19 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         });
     });
     window.addEventListener('pagehide', saveDrafts);
+    function showRoute() {
+        page.dataset.route = route;
+        if (route === 'chat' && branchPage.hidden) branchPage.hidden = false;
+        branchPage.style.zIndex = route === 'chat' ? '1' : '0';
+        branchPage.setAttribute('aria-hidden', String(route !== 'chat'));
+        directory.hidden = route === 'chat';
+    }
     return {
         page, browser: picker.node, chooseButton, open, get route() { return route; }, get selected() { return selected; }, get chatId() { return chat?.id; },
+        get suspended() { return suspended; },
         async showDirectory(character, sort = true) {
             closeVersions(false);
-            remember(); openId++; loading = false; route = 'history'; branchPage.hidden = true; directory.hidden = false; editor = null; menu.open = false; deletingFrom = null;
+            remember(); openId++; loading = false; route = 'history'; showRoute(); editor = null; menu.open = false; deletingFrom = null;
             deleteControls.hidden = true;
             if (character) selected = character;
             const saved = directories.get(playCharacterKey(selected));
@@ -858,24 +937,38 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         activate(container) {
             panel = container; visible = true; suspended = false; setBrowsing(browsing); updateSearch(); picker.render();
             if (route === 'chat') { resize.observe(content); resize.observe(feed); resize.observe(branchPage); scheduleInputSizing(); restore(positions.get(chat?.id)); }
+            if (resumeNeedsRender) { resumeNeedsRender = false; void this.refresh(); }
+        },
+        prepareActivation() {
+            if (visible || suspended || !chat) return;
+            const saved = positions.get(chat.id), index = chat.messages.findIndex(message => message.id === saved?.messageId);
+            const nextStart = saved?.bottom || index < 0 ? Math.max(0, chat.messages.length - 24) : Math.max(0, index - 12);
+            const nextEnd = Math.min(chat.messages.length, nextStart + 24);
+            for (const [id, view] of messageViews) if (!chat.messages.slice(nextStart, nextEnd).some(message => message.id === id) && !view.node.querySelector('iframe,.play-edit-form')) { view.node.remove(); messageViews.delete(id); }
+            start = nextStart; end = nextEnd; resumeNeedsRender = true;
         },
         suspend() {
             remember(); saveDirectory(); closeVersions(false); visible = false; suspended = true;
+            if (route === 'history') { resumeNeedsRender = true; directoryId++; queryId++; }
             cancelAnimationFrame(inputFrame); inputFrame = 0; cancelAnimationFrame(renderFrame); renderFrame = 0;
             resize.disconnect(); picker.suspend();
         },
-        resume(container, { displayChanged = false } = {}) {
+        resume(container, { displayChanged = false, checkData = false } = {}) {
             panel = container; visible = true; suspended = false; picker.render();
             if (route === 'chat') {
                 resize.observe(content); resize.observe(feed); resize.observe(branchPage);
-                if (displayChanged || resumeNeedsRender) renderChat(positions.get(chat?.id));
+                if (resumeNeedsRender || checkData) void reload();
+                else if (displayChanged) renderChat(positions.get(chat?.id));
                 else { scheduleInputSizing(); restore(positions.get(chat?.id)); updateInput(); syncPermissions(); }
-            } else if (displayChanged) void renderDirectory();
+            } else if (displayChanged || resumeNeedsRender || checkData) void refreshDirectory(false);
             resumeNeedsRender = false;
         },
         deactivate() { remember(); saveDirectory(); saveDrafts(); closeVersions(); visible = false; suspended = false;
+            directoryId++; queryId++;
             cancelAnimationFrame(inputFrame); inputFrame = 0; cancelAnimationFrame(renderFrame); renderFrame = 0; resize.disconnect(); picker.suspend(); },
+        close() { this.deactivate(); panel = null; page.remove(); picker.node.remove(); },
         async refresh() {
+            if (!visible || mobile.matches && browsing) { resumeNeedsRender = true; return; }
             if (route === 'history') await refreshDirectory(false);
             else {
                 await playground.display?.ensure(owner());

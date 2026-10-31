@@ -29,7 +29,7 @@ async function verify(page, url, viewport) {
   await page.goto(url); await page.waitForFunction(() => window.ready);
   assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-  const panel = page.locator('#teahouse-panel'), button = name => panel.getByRole('button', { name, exact: true });
+  const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true });
   await button('剧场演出').click();
   await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 2);
   await page.waitForTimeout(150); await settle(page);

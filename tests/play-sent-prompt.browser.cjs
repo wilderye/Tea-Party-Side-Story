@@ -47,12 +47,13 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             const page = await context.newPage(), errors = [];
             page.on('pageerror', error => errors.push(error.message));
             page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
-            const panel = page.locator('#teahouse-panel');
+            const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
             const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
             const ai = () => panel.locator('.play-record:visible .play-assistant-message').last();
             const inspect = message => message.getByRole('button', { name: '查看实际提示词', exact: true });
             const expandReplyTools = async message => {
                 const more = message.getByRole('button', { name: '更多回复操作', exact: true });
+                await more.waitFor({ state: 'attached' });
                 if (await more.isVisible()) await more.click();
             };
             const openPrompt = async message => { await expandReplyTools(message); await inspect(message).click(); };

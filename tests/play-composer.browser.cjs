@@ -46,7 +46,7 @@ async function open(page, url) {
     assert.equal(await page.title(), '小剧场设置与原文编辑验证');
     await page.waitForFunction(() => window.ready);
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    await page.locator('#teahouse-panel').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
+    await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
     await page.locator('.play-record:visible').first().waitFor();
     await settle(page);
 }
@@ -56,7 +56,7 @@ async function verify(page, viewport, fallback, url) {
         CSS.supports = (property, value) => property === 'field-sizing' ? false : supports(property, value);
     });
     await open(page, url);
-    const panel = page.locator('#teahouse-panel'), input = panel.locator('.play-compose-input'), feed = panel.locator('.play-feed');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), input = panel.locator('.play-compose-input'), feed = panel.locator('.play-feed');
     const send = panel.locator('.play-send'), cap = viewport.width > 760 ? 20 : 8;
     assert.equal(await input.evaluate(node => node.classList.contains('is-native-sized')), !fallback);
     assert.equal(await input.getAttribute('data-max-lines'), String(cap));

@@ -52,9 +52,9 @@ async function verify(page, viewport) {
     const original = await page.evaluate(async () => ({ rows: await runtime.listFavorites(), chat: ctx.chat,
         round: await runtime.getRound(seed.a), settings: JSON.stringify(fixture.settings) }));
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
-    const reader = panel.locator('.play-favorite-reading:visible');
+    const reader = panel.locator('.play-favorite-reading[data-active=true]:visible');
     const previous = () => reader.getByRole('button', { name: '上一条收藏', exact: true });
     const next = () => reader.getByRole('button', { name: '下一条收藏', exact: true });
     const mobile = viewport.width <= 760;
@@ -66,7 +66,7 @@ async function verify(page, viewport) {
     const selected = () => reader.getAttribute('data-id');
     const turn = async (direction, id) => {
         await (direction > 0 ? next() : previous()).click();
-        await page.waitForFunction(id => document.querySelector('.play-favorite-reading:not([hidden])')?.dataset.id === id, id);
+        await page.waitForFunction(id => document.querySelector('.tea-panel-surface[data-active=true] .play-favorite-reading[data-active=true]')?.dataset.id === id, id);
         await reader.locator('.play-prose').waitFor(); await settle(page);
     };
     await button('我的收藏').click();

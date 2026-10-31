@@ -89,7 +89,8 @@ async function seed(f) {
     const second = await f.begin({ roundId: round.id, startedAt: time(2) });
     await f.store.saveResult(round.id, second.results[1].id, { text: '开头二', status: 'complete', finishedAt: time(3) });
     const chat = await f.store.getChat(round.id);
-    return f.store.setMessageVersion(chat.id, chat.messages[1].id, round.results[0].id);
+    await f.store.setMessageVersion(chat.id, chat.messages[1].id, round.results[0].id);
+    return f.store.getChat(chat.id);
 }
 
 function useLegacyRound(f, round) {
@@ -553,4 +554,70 @@ test('读取已保存收藏不读取来源或上传；同步失败后仍可读�
     assert.equal((await coordinator.read(favorite.id)).messages[0].text, chat.messages[0].text);
     f.io.beforeWrite = null;
     assert.equal((await coordinator.sync(favorite.id)).messages[0].text, '更新的用户消息');
+});
+
+test('局部聊天修改只读目标正文，其他版本损坏不阻挡修改', async () => {
+    const f = memoryFiles(), chat = await seed(f), ai = chat.messages[1], user = chat.messages[0], reads = [];
+    f.io.beforeRead = name => reads.push(name);
+    const cold = f.createStore();
+    await cold.setMessageVersion(chat.id, ai.id, ai.results[1].id, ai.selectedResultId);
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 0);
+    reads.length = 0;
+    f.files.delete(playBodyFile(ai.results[0].id, ai.results[0].bodyRevision));
+    const edited = await cold.editMessage(chat.id, user.id, { text: '只改用户正文', expectedText: user.text });
+    assert.deepEqual(reads.filter(name => name.startsWith('teahouse-play-body-')), [playBodyFile(user.id, user.bodyRevision)]);
+    reads.length = 0;
+    await cold.removeMessage(chat.id, ai.id, edited.revision);
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 0);
+});
+
+test('收藏范围读取和未变化同步不展开整条聊天', async () => {
+    const f = memoryFiles(), initial = await seed(f);
+    const chat = (await append(f, initial, '收藏用户', '收藏回复')).chat;
+    const coordinator = createPlayChatFavorites(f.store, { ensure: async () => {}, process: text => text });
+    const favorite = await coordinator.add(chat.id), reads = [];
+    f.io.beforeRead = name => reads.push(name);
+    const cold = f.createStore(), reader = createPlayChatFavorites(cold, { ensure: async () => {}, process: text => text });
+    const window = await reader.read(favorite.id, { start: 2, end: 4 });
+    assert.equal(window.messages.length, 4);
+    assert.equal(window.messages[0].text, undefined);
+    assert.equal(window.messages[3].text, '收藏回复');
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 2);
+    reads.length = 0;
+    const writes = f.writes.length;
+    await reader.sync(favorite.id, { start: 2, end: 4 });
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 0);
+    assert.equal(f.writes.length, writes);
+});
+
+test('收藏范围正文缺失时保留原错误，来源改动后只读取缺少的当前版本', async () => {
+    const f = memoryFiles(), chat = await seed(f);
+    const favorites = createPlayChatFavorites(f.store, { ensure: async () => {}, process: text => text });
+    const favorite = await favorites.add(chat.id), entry = favorite.cache[0];
+    const file = playBodyFile(entry.cacheId, entry.cacheRevision), original = f.files.get(file);
+    f.files.delete(file);
+    await assert.rejects(f.createStore().getFavoriteWindow(favorite.id, { start: 0, end: 1 }), { code: 'body_missing' });
+    f.files.set(file, original);
+    await f.store.editMessage(chat.id, chat.messages[0].id, { text: '更新后的用户消息', expectedText: chat.messages[0].text });
+    const reads = []; f.io.beforeRead = name => reads.push(name);
+    const cold = f.createStore(), coordinator = createPlayChatFavorites(cold, { ensure: async () => {}, process: text => text });
+    const updated = await coordinator.sync(favorite.id, { start: 0, end: 1 });
+    assert.equal(updated.messages[0].text, '更新后的用户消息');
+    assert.equal(updated.messages[1].text, undefined);
+    assert.equal(reads.filter(name => name.startsWith('teahouse-play-body-')).length, 2);
+});
+
+test('同批演出和历史预览共用索引，下一批读取新修订', async () => {
+    const f = memoryFiles(), chat = await seed(f), reads = [];
+    f.io.beforeRead = name => reads.push(name);
+    const roundReader = await f.createStore().createRoundReader();
+    await roundReader(chat.id); await roundReader(chat.id);
+    assert.equal(reads.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+    reads.length = 0;
+    const previewReader = await f.createStore().createChatDirectoryReader();
+    await previewReader(chat.id); await previewReader(chat.id);
+    assert.equal(reads.filter(name => name === PLAY_HISTORY_INDEX).length, 1);
+    await f.store.renameChat(chat.id, '下一批的新名称', chat.revision);
+    const nextReader = await f.createStore().createChatDirectoryReader();
+    assert.equal((await nextReader(chat.id)).name, '下一批的新名称');
 });

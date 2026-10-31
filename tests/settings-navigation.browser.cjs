@@ -29,7 +29,7 @@ async function screenshot(page, name) {
 }
 
 async function verifyDesktop(page, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const settings = panel.locator('.tea-settings');
     const settingsButton = button('设置');
@@ -135,11 +135,11 @@ async function verifyDesktop(page, viewport) {
     await expectSettings(favoriteState);
     await settingsButton.click();
     const favorite = await page.evaluate(id => runtime.getFavorite(id), favoriteId);
-    await panel.locator('.play-favorite-reading:visible').waitFor();
+    await panel.locator('.play-favorite-reading[data-active=true]:visible').waitFor();
     assert.equal(await selectedStory(), favoriteId);
-    assert.equal(await panel.locator('.play-favorite-reading:visible .play-favorite-character').innerText(), favorite.characterName);
+    assert.equal(await panel.locator('.play-favorite-reading[data-active=true]:visible .play-favorite-character').innerText(), favorite.characterName);
     const expectedText = favorite.characterName === '测试乙' ? '乙的旧记录' : '小剧场正文';
-    await panel.locator('.play-favorite-reading:visible .play-favorite-content').getByText(expectedText, { exact: false }).waitFor();
+    await panel.locator('.play-favorite-reading[data-active=true]:visible .play-favorite-content').getByText(expectedText, { exact: false }).waitFor();
     await settingsButton.click();
     await button('剧场演出').click();
     assert.equal(await panel.getAttribute('data-mode'), 'list');
@@ -151,7 +151,7 @@ async function verifyDesktop(page, viewport) {
 }
 
 async function verifyMobile(page, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     await button('设置').click();
     assert.equal(await panel.getAttribute('data-mode'), 'settings');
@@ -190,7 +190,7 @@ async function verifyMobile(page, viewport) {
                 }
             });
             await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-            await page.locator('#teahouse-panel .tea-list').waitFor();
+            await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-list').waitFor();
             await settle(page);
             if (viewport.width > 760) await verifyDesktop(page, viewport); else await verifyMobile(page, viewport);
             assert.deepEqual(await page.evaluate(() => ({ characterId: ctx.characterId, chatId: ctx.chatId, requests: captured.length })),

@@ -74,7 +74,7 @@ async function verifySections(page, viewport) {
 }
 
 async function verifyTags(page, viewport, fallback) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const settings = panel.locator('.tea-settings');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const tags = settings.getByRole('textbox', { name: '隐藏标签', exact: true });
@@ -149,7 +149,7 @@ async function verifyTags(page, viewport, fallback) {
                 if (fallback) await page.addStyleTag({ content: '.play-hidden-tags { field-sizing:fixed!important; }' });
                 assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
                 await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-                await page.locator('#teahouse-panel').getByRole('button', { name: '设置', exact: true }).filter({ visible: true }).click();
+                await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '设置', exact: true }).filter({ visible: true }).click();
                 await settle(page);
                 assert.ok((await page.locator('.tea-settings').innerText()).includes('正则与隐藏标签'));
                 assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0);

@@ -26,7 +26,7 @@ async function screenshot(page, name) {
 }
 
 async function verify(page, url, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
     const select = panel.getByRole('combobox', { name: '自定义小剧场提示词', exact: true });
     const position = panel.getByRole('combobox', { name: '提示词插入位置', exact: true });

@@ -31,7 +31,7 @@ async function verify(page, url, viewport, nativeSizing) {
     await page.goto(url); await page.waitForFunction(() => window.ready);
     assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
     await button(page, '打开小剧场面板').click();
-    const panel = page.locator('#teahouse-panel'); assert.match(await panel.innerText(), /茶话会/);
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'); assert.match(await panel.innerText(), /茶话会/);
     await button(panel, '剧场演出').click();
     const id = await page.evaluate(async () => {
         const source = await runtime.getChat(seed.a), branch = await runtime.createBranch(source.id, source.messages[1].id);
@@ -131,7 +131,7 @@ async function verify(page, url, viewport, nativeSizing) {
 async function verifyOperations(page, url, viewport) {
     await page.goto(url); await page.waitForFunction(() => window.ready);
     await button(page, '打开小剧场面板').click();
-    const panel = page.locator('#teahouse-panel'); await button(panel, '剧场演出').click();
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'); await button(panel, '剧场演出').click();
     const id = await page.evaluate(async () => {
         const source = await runtime.getChat(seed.a), resultId = crypto.randomUUID(), stamp = new Date().toISOString();
         await testHistory.begin({ roundId: source.id, chatMode: true, operation: 'another', messageId: source.messages[1].id,

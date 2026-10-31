@@ -21,7 +21,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 async function verify(page, url, viewport) {
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     const mode = panel.getByRole('combobox', { name: '续写方式', exact: true });
     const input = panel.getByRole('textbox', { name: '续写提示词', exact: true });
     const sendReasoning = panel.getByRole('switch', { name: '续写时发回原生思维链', exact: true });

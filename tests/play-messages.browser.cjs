@@ -25,7 +25,7 @@ async function openPlay(page, url) {
     assert.equal(page.url(), url);
     assert.equal(await page.title(), '小剧场设置与原文编辑验证');
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
-    const panel = page.locator('#teahouse-panel');
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
     await panel.getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
     await panel.locator('.play-record').filter({ visible: true }).first().waitFor();
     await page.evaluate(() => {
