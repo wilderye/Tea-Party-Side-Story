@@ -1178,7 +1178,6 @@ export function createTheatrePanel(ctx, state, actions) {
     function renderFontSourceSetting(area) {
         const row = element('label', undefined, 'tea-setting-row'), font = element('select');
         font.setAttribute('aria-label', '字体');
-        const label = element('span'); label.append(element('strong', '字体'), element('small', '应用于正文和界面文字'));
         for (const [value, name] of [['default', '默认字体'], ['tavern', '跟随酒馆字体']]) {
             const option = element('option', name); option.value = value; font.append(option);
         }
@@ -1191,7 +1190,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 requestAnimationFrame(() => { if (settingsArea.isConnected) settingsArea.scrollTop = scrollTop; });
             }
         });
-        row.append(label, font); area.append(row);
+        row.append(element('strong', '字体'), font); area.append(row);
     }
     function renderFontSizeSetting(area, onChange = render) {
         const row = element('label', undefined, 'tea-setting-row'), font = element('select');
