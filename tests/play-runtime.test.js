@@ -119,17 +119,6 @@ test('当前角色和接口范围明确；无关的扩展回调不会阻止生�
     assert.equal(capturePlayEnvironment(ctx, {}).character.avatar, 'A.png');
 });
 
-test('用户名字和头像读取当前酒馆人设，不写入历史或修改聊天', async () => {
-    const ctx = context(), f = memoryFiles(), persona = { user_avatar: '茶客.png' };
-    ctx.name1 = '茶客';
-    const runtime = createPlayRuntime(() => ctx, {}, f.store, { loadPersona: async () => persona });
-    assert.deepEqual(await runtime.getUserIdentity(), { name: '茶客', avatar: '茶客.png' });
-    ctx.name1 = '旅人'; persona.user_avatar = '旅人.png';
-    assert.deepEqual(await runtime.getUserIdentity(), { name: '旅人', avatar: '旅人.png' });
-    assert.equal(f.files.size, 0);
-    assert.equal(ctx.chat[0].mes, '主聊天正文');
-});
-
 test('运行入口默认接入原生准备函数；加载插件不读历史、不发模型请求', async () => {
     const f = memoryFiles(), ctx = context();
     let reads = 0;

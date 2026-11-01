@@ -1,5 +1,5 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
-import { playMessageDepths, playHiddenRanges, playMessageIsPending } from './play-message-context.js';
+import { playMessageDepths, playHiddenRanges, playMessageIsPending, playMessageIdentity } from './play-message-context.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText, playTextPreview } from './play-render.js';
@@ -387,10 +387,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         // changes already have a measurable layout and must restore before paint.
         if (immediate) apply(); else requestAnimationFrame(apply);
     }
-    function messageHeader(message, result) {
+    function messageHeader(message) {
         const index = chat.messages.findIndex(item => item.id === message.id);
-        const userContext = currentResult(chat.messages.slice(index + 1).find(item => item.role === 'assistant') ?? {})?.context;
-        const identity = message.role === 'user' ? { name: userContext?.userName ?? ctx().name1 ?? 'User', avatar: userContext?.userAvatar || null } : owner();
+        const identity = message.role === 'user' ? playMessageIdentity(message) : owner();
         const head = element('header', undefined, `play-message-meta play-${message.role === 'user' ? 'user' : 'assistant'}-meta`);
         head.append(createCharacterAvatar(ctx, identity ?? { name: '角色', avatar: null }, 'play-message-avatar', message.role === 'user' ? 'persona' : 'avatar'));
         const heading = element('div', undefined, 'play-message-identity');
@@ -423,7 +422,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             favorite: message.role === 'user' ? promptFavorites?.isFavorite({ prompt: message.text, origin: message.origin })
                 : favorites.has(favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt })),
             jobs: ownJobs().map(job => [job.resultId, job.phase]), editing: editingSessions.get(chat.id)?.messageId,
-            userName: ctx().name1, character: { id: owner()?.id, name: owner()?.name, avatar: owner()?.avatar } });
+            character: { id: owner()?.id, name: owner()?.name, avatar: owner()?.avatar } });
         if (view.signature === signature) {
             const messageIndex = chat.messages.indexOf(message), depth = messageDepths.get(message);
             for (const key of Object.keys(view.message)) if (!Object.hasOwn(message, key)) delete view.message[key];
@@ -443,7 +442,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         node.querySelector(':scope > .play-message-actions')?.remove();
         node.querySelector(':scope > .play-delete-checkbox')?.remove();
         node.onclick = null;
-        const head = messageHeader(message, result), tools = element('div', undefined, 'play-header-actions');
+        const head = messageHeader(message), tools = element('div', undefined, 'play-header-actions');
         const session = editingSessions.get(chat.id), editing = session?.messageId === message.id;
         if (message.role === 'user' && !editing) {
             const text = processed(message);
@@ -891,18 +890,22 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (route !== 'chat' || !chat) return;
         if (visible) { updateReplyStops(); updateInput(); syncPermissions(); }
         if ((job.roundId ?? job.requestedRoundId) !== chat.id) return;
+        const user = chat.messages.find(message => message.id === job.userMessageId && message.role === 'user');
+        if (user && job.userIdentity) user.userIdentity = job.userIdentity;
         if (job.phase === 'idle' || job.phase === 'save-failed' || job.phase === 'preparing' && job.roundId) {
             void reload().catch(error => notify(error.message)); return;
         }
         const message = chat.messages.find(message => message.results?.some(result => result.id === job.resultId));
         const result = message?.results.find(result => result.id === job.resultId);
-        if (result) { result.text = job.text; result.status = job.phase; result.error = job.error; }
+        if (result) { result.text = job.text; result.status = job.phase; result.error = job.error; if (job.context) result.context = job.context; }
         if (suspended && result) resumeNeedsRender = true;
         if (!visible || mobile.matches && browsing || renderFrame) return;
         renderFrame = requestAnimationFrame(() => {
             renderFrame = 0; if (!visible || !chat || mobile.matches && browsing) return;
             const saved = positions.get(chat.id), node = content.querySelector(`[data-message-id="${CSS.escape(message?.id ?? '')}"]`);
             const latest = chat.messages.find(item => item.id === message?.id);
+            const latestUser = chat.messages.find(item => item.id === job.userMessageId && item.role === 'user');
+            if (latestUser && messageViews.has(latestUser.id)) renderMessage(latestUser);
             const view = replyViews.get(node);
             if (view && latest) {
                 const current = currentResult(latest);

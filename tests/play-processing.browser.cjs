@@ -50,13 +50,13 @@ runRegexScript:(rule,text)=>text.replace(new RegExp(rule.findRegex,'g'),rule.rep
 window.rules={globalRules,presetRules,characterRules};
 const settings=JSON.parse(localStorage.getItem('processingSettings')||'null')||{enabled:true,pageSize:5,favorites:{}};
 window.captured=[];window.capturedPrompts=[];
-const runtime=window.runtime=createPlayRuntime(()=>ctx,settings,history,{loadRegex:async()=>engine,loadPersona:async()=>persona,
-prepareRequest:async request=>{window.captured.push(request.environment);window.capturedPrompts.push(request.prompt);return{send:({onText,signal})=>new Promise((resolve,reject)=>{
+const runtime=window.runtime=createPlayRuntime(()=>ctx,settings,history,{loadRegex:async()=>engine,
+prepareRequest:async request=>{window.captured.push(request.environment);window.capturedPrompts.push(request.prompt);const identity={userName:ctx.name1,userAvatar:persona.user_avatar};await request.onPersonaResolved?.(identity);return{context:identity,send:({onText,signal})=>new Promise((resolve,reject)=>{
 window.emitGeneration=onText;window.finishGeneration=resolve;
 signal.addEventListener('abort',()=>reject(signal.reason),{once:true});})}}});
 if(!files.has(PLAY_HISTORY_INDEX)){
 const seed=async(character,text,offset)=>{const startedAt=new Date(Date.UTC(2026,0,1,0,0,offset)).toISOString();
-const round=await history.begin({character,prompt:'测试小剧场',resultId:crypto.randomUUID(),startedAt,context:{chatId:character.avatar+'-main',apiMode:'tavern',characterName:character.name,presetName:'生成时预设'}});
+const round=await history.begin({character,prompt:'测试小剧场',resultId:crypto.randomUUID(),startedAt,context:{chatId:character.avatar+'-main',apiMode:'tavern',characterName:character.name,presetName:'生成时预设',userName:ctx.name1,userAvatar:persona.user_avatar}});
 return history.saveResult(round.id,round.results[0].id,{text,status:'complete',finishedAt:startedAt});};
 const a=await seed(ctx.characters[0],'<think>默认隐藏的思考</think><thinking>默认隐藏的思考</thinking>\n<content>\n<内容>\n**小剧场正文** 全局标记 角色标记\n<status>默认隐藏状态</status><update>默认隐藏更新</update>\n\n'+Array.from({length:24},(_,i)=>'阅读位置验证第'+(i+1)+'段。').join('\n\n')+'\n</内容>\n</content>',0);
 const hidden=await seed(ctx.characters[0],'<thinking>找回整段小剧场</thinking>',1);

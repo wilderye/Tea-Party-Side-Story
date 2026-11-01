@@ -211,6 +211,22 @@ test('楼层显隐命令通过后台通道传递完整范围和冲突版本', as
     assert.deepEqual(messages[0].args, args);
 });
 
+test('用户身份保存接入后台和局域网接口，只传递指定消息的身份', async t => {
+    const calls = [], identity = { name: '测试用户', avatar: '测试.png' };
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: data => {
+                calls.push(data);
+                queueMicrotask(() => this.port.onmessage({ data: { id: data.id, value: identity } }));
+            } };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    const args = [randomUUID(), randomUUID(), randomUUID(), identity];
+    assert.deepEqual(await createBrowserPlayHistory(context).setUserIdentity(...args), identity);
+    assert.equal(calls[0].method, 'setUserIdentity'); assert.deepEqual(calls[0].args, args);
+});
+
 test('取消通过编号通知后台，尚未收到后台确认前不丢弃可能已保存的记录', async t => {
     let worker;
     const messages = [];

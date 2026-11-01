@@ -1,5 +1,5 @@
 import { favoriteCacheKey } from './play-history.js';
-import { playMessageDepths } from './play-message-context.js';
+import { playMessageDepths, playMessageIdentity } from './play-message-context.js';
 
 /** Resolve only missing processed bodies, outside the storage write lock. */
 export function createPlayChatFavorites(history, display) {
@@ -43,7 +43,15 @@ export function createPlayChatFavorites(history, display) {
                     if (current.frozen) return current;
                     throw error;
                 }
-                if (favorite.sourceRevision === chat.revision) return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);
+                const sourceMessages = new Map(chat.messages.map(message => [message.id, message]));
+                const identitiesMatch = favorite.messages.every(message => {
+                    if (message.role !== 'user') return true;
+                    const source = sourceMessages.get(message.messageId);
+                    if (!source) return false;
+                    const identity = playMessageIdentity(source);
+                    return message.speakerName === identity.name && (message.speakerAvatar || null) === identity.avatar;
+                });
+                if (favorite.sourceRevision === chat.revision && identitiesMatch) return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);
                 const entries = await prepare(chat, favorite);
                 try {
                     await history.syncChatFavorite(id, { chatRevision: chat.revision, entries });

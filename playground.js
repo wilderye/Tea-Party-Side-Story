@@ -1,6 +1,6 @@
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
-import { playRequestMessages, playMessageIsPending } from './play-message-context.js';
+import { playRequestMessages, playMessageIsPending, playUserIdentity } from './play-message-context.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
@@ -72,6 +72,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             text: job.text, error: clone(job.saveError ?? job.error ?? null),
             retry: clone(job.retry ?? null),
             context: clone(job.context),
+            userMessageId: job.userMessageId ?? null, userIdentity: clone(job.userIdentity ?? null),
             unsaved: !!job.pendingUpdate };
     }
     function getState(resultId) {
@@ -90,6 +91,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (job.extra) result.extra = clone(job.extra);
                 result.status = job.phase;
                 if (job.context) result.context = clone(job.context);
+                if (job.userIdentity && round.initialUserId === job.userMessageId) round.userIdentity = clone(job.userIdentity);
                 if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
             }
         }
@@ -102,6 +104,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             result.text = job.text; result.status = job.phase;
             if (job.extra) result.extra = clone(job.extra);
             if (job.context) result.context = clone(job.context);
+            const user = chat.messages.find(message => message.id === job.userMessageId && message.role === 'user');
+            if (user && job.userIdentity) user.userIdentity = clone(job.userIdentity);
             if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
         }
         return chat;
@@ -220,19 +224,30 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             } else if (job.round.initialUserId) {
                 environment.requestUser = { id: job.round.initialUserId, hidden: job.round.initialUserHidden };
             }
+            if (!roundId || chatMode && operation === 'send') job.userMessageId = environment.requestUser?.id;
             notify(job);
             job.controller.signal.throwIfAborted();
             assertCurrent(environment);
+            const recordUserIdentity = async context => {
+                if (!job.userMessageId || job.userIdentity) return;
+                const identity = playUserIdentity(context);
+                if (!identity) return;
+                job.controller.signal.throwIfAborted();
+                job.userIdentity = await history.setUserIdentity(job.round.id, job.userMessageId, job.resultId, identity);
+                if (!job.closed) notify(job);
+            };
             const request = await abortable(() => prepareRequest({
                 generationId: job.resultId, prompt: requestPrompt, environment,
                 continueMessage: continueResultId ? baseText : undefined,
                 ...(continueResultId ? { continueExtra } : {}),
                 signal: job.controller.signal,
+                onPersonaResolved: recordUserIdentity,
             }), job.controller.signal);
             if (typeof request?.send !== 'function') throw new PlaygroundError('invalid_prepared_request', '提示词处理没有返回可发送的请求，本次没有发送到模型。');
             if (request.context) resultContext = readPlayContext({ ...context, ...request.context,
                 ...(environment.independent ? {} : { chatId: context.chatId }), apiMode: context.apiMode, characterName: context.characterName });
             job.context = resultContext;
+            await recordUserIdentity(resultContext);
             assertCurrent(environment);
             while (true) {
                 job.controller.signal.throwIfAborted();

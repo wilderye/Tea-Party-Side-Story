@@ -42,3 +42,13 @@ export function playRoundDepth(round, role = 'assistant') {
     const message = messages.find(message => message.role === role);
     return playMessageDepths(messages).get(message);
 }
+
+export function playUserIdentity(context) {
+    if (typeof context?.userName !== 'string' && typeof context?.userAvatar !== 'string') return null;
+    return { name: typeof context.userName === 'string' && context.userName.trim() ? context.userName : '用户',
+        avatar: typeof context.userAvatar === 'string' && context.userAvatar.trim() ? context.userAvatar : null };
+}
+
+export function playMessageIdentity(message) {
+    return message.userIdentity ?? { name: '用户', avatar: null };
+}

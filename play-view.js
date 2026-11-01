@@ -2,10 +2,10 @@ import { element, textButton, glyph, iconButton } from './ui.js';
 import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { recordViewEvent } from './view-diagnostics.js';
-import { playRoundDepth } from './play-message-context.js';
+import { playRoundDepth, playMessageIdentity } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
-import { createPlayCharacterPicker, mergePlayCharacters } from './play-character-picker.js';
+import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters } from './play-character-picker.js';
 import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu } from './play-message-ui.js';
 
 const pad = value => String(value).padStart(2, '0');
@@ -85,7 +85,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const resultMenu = createPlayResultMenu();
     let browsing = null, lastMobile = mobile.matches;
     let inputSizingFrame, inputComposing = false;
-    let user = { name: ctx().name1 || 'User', avatar: null }, userRefreshId = 0;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
     const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
@@ -144,39 +143,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         try { current = readPlayTarget(ctx()).character; currentError = ''; }
         catch (error) { current = null; currentError = error.message; }
     }
-    function avatar(character, className, type = 'avatar') {
-        const fallback = element('span', character.name.slice(0, 1), `${className} play-avatar-fallback`);
-        fallback.setAttribute('aria-hidden', 'true');
-        if (!character.avatar) return fallback;
-        const image = element('img', undefined, className); image.alt = ''; image.draggable = false;
-        image.loading = 'lazy'; image.decoding = 'async';
-        image.src = ctx().getThumbnailUrl?.(type, character.avatar) ?? `/thumbnail?type=${type}&file=${encodeURIComponent(character.avatar)}`;
-        image.addEventListener('error', () => image.replaceWith(fallback), { once: true });
-        return image;
-    }
-    async function refreshUser() {
-        const id = ++userRefreshId;
-        let identity;
-        try { identity = await playground.getUserIdentity?.(); } catch { /* Keep the name and initials if the host avatar cannot be read. */ }
-        if (id !== userRefreshId) return;
-        user = identity ?? { name: ctx().name1 || 'User', avatar: null };
-        keepReading(() => {
-            for (const [roundId, view] of views) {
-                const round = records.get(roundId)?.round;
-                if (round) updateUserMessage(round, view);
-            }
-        });
-    }
     function updateUserMessage(round, view) {
         const userHidden = round.prompt === null && !view.userEditor;
         if (view.user.hidden !== userHidden) view.user.hidden = userHidden;
-        const context = selectedResult(round)?.context;
-        const identity = context?.userName ? { name: context.userName, avatar: context.userAvatar || null } : user;
+        const identity = playMessageIdentity(round);
+        const context = { userName: identity.name };
         const signature = JSON.stringify(identity);
         if (view.userSignature !== signature) {
             view.userSignature = signature;
             view.userHeader.speaker.textContent = identity.name; view.userHeader.speaker.title = identity.name;
-            view.userHead.querySelector('.play-message-avatar').replaceWith(avatar(identity, 'play-message-avatar', 'persona'));
+            view.userHead.querySelector('.play-message-avatar').replaceWith(createCharacterAvatar(ctx, identity, 'play-message-avatar', 'persona'));
             view.user.setAttribute('aria-label', `${identity.name} 发送的小剧场提示词`);
         }
         const tools = view.userEditor ? [] : [view.userFavorite, view.edit, view.removePrompt, view.userMore];
@@ -754,7 +730,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         head.dataset.readAnchor = anchor;
         const identity = element('span', undefined, 'play-message-identity'), speaker = element('strong', character.name, 'play-speaker'); speaker.title = character.name;
         const date = element('time', messageTime(time), 'play-message-time'); date.dateTime = time;
-        const portrait = avatar(character, 'play-message-avatar', role === 'user' ? 'persona' : 'avatar');
+        const portrait = createCharacterAvatar(ctx, character, 'play-message-avatar', role === 'user' ? 'persona' : 'avatar');
         identity.append(speaker, date);
         head.append(portrait, identity);
         return { head, date, speaker };
@@ -764,6 +740,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function createRecord(round) {
         const owner = roundCharacter(round);
+        const user = playMessageIdentity(round);
         const item = element('article', undefined, 'play-record'); item.dataset.record = round.id;
         item.setAttribute('aria-label', `${messageTime(round.createdAt)} 的小剧场`);
         const userMessage = element('section', undefined, 'play-message play-user-message'); userMessage.setAttribute('aria-label', `${user.name} 发送的小剧场提示词`);
@@ -1181,6 +1158,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function applyJob(job) {
         const round = records.get(job.roundId)?.round;
+        if (round && job.userIdentity && round.initialUserId === job.userMessageId) round.userIdentity = job.userIdentity;
         const result = round?.results.find(item => item.id === job.resultId);
         if (result && job.phase !== 'idle') { result.text = job.text; result.status = job.phase; result.error = job.error ?? undefined; if (job.context) result.context = job.context; }
     }
@@ -1230,12 +1208,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     if (events.CHAT_CHANGED) ctx().eventSource.on(events.CHAT_CHANGED, () => {
         if (visible) rememberPosition();
         void refresh();
-        if (visible) void refreshUser();
     });
-    if (events.PERSONA_CHANGED) ctx().eventSource.on(events.PERSONA_CHANGED, () => { if (visible) void refreshUser(); });
     window.addEventListener('pagehide', () => { rememberPosition(true, true); void saveViewState(); });
     window.addEventListener('focus', () => {
-        if (visible) { rememberPosition(); void refresh(); void refreshUser(); void refreshFavorites(); }
+        if (visible) { rememberPosition(); void refresh(); void refreshFavorites(); }
     });
 
     return {
@@ -1265,7 +1241,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             activationFrame = requestAnimationFrame(() => {
                 activationTimer = setTimeout(() => {
                     if (!visible) return;
-                    renderPeople(); layout(); void refreshUser(); void refreshFavorites();
+                    renderPeople(); layout(); void refreshFavorites();
                     void refreshDisplay(); void refresh();
                     if (playground.initialize) void playground.initialize().then(() => {
                         if (visible) updateControls();

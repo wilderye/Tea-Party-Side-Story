@@ -1,6 +1,6 @@
 // The directory is committed after a complete round file. A failed upload
 // therefore never replaces a readable round with half of a new version.
-import { playMessageDepths, playMessageIsPending } from './play-message-context.js';
+import { playMessageDepths, playMessageIsPending, playUserIdentity, playMessageIdentity } from './play-message-context.js';
 
 export const PLAY_HISTORY_INDEX = 'teahouse-play-index.json';
 const idPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -32,20 +32,36 @@ export function playBodyFile(id, revision) {
     return `teahouse-play-body-${id}-${revision}.json`;
 }
 
+function readUserIdentity(value) {
+    if (value == null) return null;
+    assert(isText(value.name) && (value.avatar === null || typeof value.avatar === 'string'));
+    return { name: value.name, avatar: value.avatar?.trim() ? value.avatar : null };
+}
+
+function legacyUserIdentity(results, createdAt) {
+    const result = results?.find(result => result.startedAt === createdAt);
+    return playUserIdentity(result?.context);
+}
+
 export function readPlayChat(value, { bodyStored = false } = {}) {
     assert(value?.format === 2 && isId(value.id) && isId(value.characterId)
         && isDate(value.createdAt) && typeof value.name === 'string' && value.name.length <= 100
         && Array.isArray(value.messages) && Array.isArray(value.startMessageIds));
     const ids = new Set();
-    const messages = value.messages.map(message => {
+    const messages = value.messages.map((message, index) => {
         assert(isId(message?.id) && !ids.has(message.id) && isDate(message.createdAt));
         ids.add(message.id);
         assert(message.hidden === undefined || typeof message.hidden === 'boolean');
         const visibility = message.hidden === true ? { hidden: true } : {};
         if (message.role === 'user') {
             assert((bodyStored || typeof message.text === 'string') && isId(message.bodyRevision));
+            const following = value.messages[index + 1];
+            const paired = following?.role === 'assistant' && (following.createdAt === message.createdAt
+                || value.startMessageIds.includes(message.id) && value.startMessageIds.includes(following.id));
+            const userIdentity = Object.hasOwn(message, 'userIdentity') ? readUserIdentity(message.userIdentity)
+                : paired ? legacyUserIdentity(following.results, message.createdAt) : null;
             return { id: message.id, role: 'user', createdAt: message.createdAt, ...visibility,
-                ...(message.text !== undefined ? { text: message.text } : {}), bodyRevision: message.bodyRevision, origin: readPlayOrigin(message.origin) };
+                ...(message.text !== undefined ? { text: message.text } : {}), bodyRevision: message.bodyRevision, origin: readPlayOrigin(message.origin), userIdentity };
         }
         assert(message.role === 'assistant' && Array.isArray(message.results) && message.results.length > 0);
         const results = message.results.map(result => {
@@ -84,6 +100,7 @@ function startRound(chat) {
     const messages = chat.startMessageIds.map(id => chat.messages.find(message => message.id === id)).filter(Boolean);
     return { format: 1, id: chat.id, characterId: chat.characterId, createdAt: chat.createdAt,
         origin: chat.origin, prompt: messages.find(message => message.role === 'user')?.text ?? null,
+        userIdentity: messages.find(message => message.role === 'user')?.userIdentity ?? null,
         results: (messages.find(message => message.role === 'assistant')?.results ?? []).map(({ bodyRevision, ...result }) => result),
         selectedResultId: messages.find(message => message.role === 'assistant')?.selectedResultId ?? null,
         initialAssistantId: messages.find(message => message.role === 'assistant')?.id ?? null,
@@ -222,6 +239,7 @@ export function readPlayRound(value) {
     assert(new Set(results.map(result => result.id)).size === results.length);
     return {
         format: 1, id: value.id, characterId: value.characterId, prompt: value.prompt,
+        userIdentity: Object.hasOwn(value, 'userIdentity') ? readUserIdentity(value.userIdentity) : legacyUserIdentity(results, value.createdAt),
         origin: readPlayOrigin(value.origin), createdAt: value.createdAt, results,
     };
 }
@@ -310,7 +328,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
     function convertRound(round, selectedResultId) {
         const messages = [];
         if (round.prompt !== null) messages.push({ id: uuid(), role: 'user', text: round.prompt,
-            origin: round.origin, createdAt: round.createdAt, bodyRevision: uuid() });
+            origin: round.origin, createdAt: round.createdAt, bodyRevision: uuid(), userIdentity: round.userIdentity });
         if (round.results.length) messages.push({ id: uuid(), role: 'assistant', createdAt: round.createdAt,
             selectedResultId: round.results.some(result => result.id === selectedResultId) ? selectedResultId : round.results.at(-1).id,
             results: round.results.map(result => ({ ...result, bodyRevision: uuid() })) });
@@ -361,7 +379,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         try {
             const value = JSON.parse(text);
             if (value.format === 2) {
-                round = startRound(await expandChat(value, true));
+                round = startRound(await expandChat(readPlayChat(value, { bodyStored: true }), true));
                 const initial = value.messages.find(message => value.startMessageIds.includes(message.id) && message.role === 'assistant');
                 round.initialIsLast = !initial || value.messages.at(-1)?.id === initial.id;
             } else round = readPlayRound(value);
@@ -605,11 +623,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 cacheBody(file, suppliedEntry.text);
                 cached.set(key, entry); next.cache.push(entry);
             }
-            const following = message.role === 'user' ? chat.messages.slice(chat.messages.indexOf(message) + 1).find(item => item.role === 'assistant') : null;
-            const userContext = following?.results.find(result => result.id === following.selectedResultId)?.context;
+            const userIdentity = playMessageIdentity(message);
             messages.push({ ...identity, role: message.role, createdAt: message.createdAt,
-                speakerName: message.role === 'user' ? userContext?.userName ?? '用户' : character?.name ?? favorite.characterName,
-                speakerAvatar: message.role === 'user' ? userContext?.userAvatar ?? '' : character?.avatar ?? '' });
+                speakerName: message.role === 'user' ? userIdentity.name : character?.name ?? favorite.characterName,
+                speakerAvatar: message.role === 'user' ? userIdentity.avatar ?? '' : character?.avatar ?? '' });
         }
         next.messages = messages; next.title = playChatTitle(chat).slice(0, 100); next.frozen = frozen;
         const last = [...messages].reverse().find(message => message.role === 'assistant') ?? messages.at(-1);
@@ -717,7 +734,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             let assistant;
             if (input.operation === 'send') {
                 const user = { id: uuid(), role: 'user', text: input.prompt, origin: readPlayOrigin(input.origin),
-                    createdAt: input.startedAt, bodyRevision: uuid() };
+                    createdAt: input.startedAt, bodyRevision: uuid(), userIdentity: playUserIdentity(input.context) };
                 assistant = { id: uuid(), role: 'assistant', createdAt: input.startedAt,
                     results: [result], selectedResultId: result.id };
                 chat.messages.push(user, assistant);
@@ -814,6 +831,20 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 return commitChat(directory, { ...source, id: uuid(), name, createdAt: now,
                     source: { chatId: id, messageId }, startMessageIds: source.startMessageIds.map(id => ids.get(id)).filter(Boolean), messages }, now);
             });
+        },
+        async setUserIdentity(id, messageId, resultId, identity) {
+            assert(isId(messageId) && isId(resultId));
+            const userIdentity = readUserIdentity(identity);
+            assert(userIdentity);
+            const chat = await changeChat(id, undefined, chat => {
+                const message = chat.messages.find(message => message.id === messageId && message.role === 'user');
+                if (!message || message.userIdentity) return;
+                const index = chat.messages.indexOf(message), result = chat.messages[index + 1]?.results?.find(result => result.id === resultId);
+                if (!result) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+                assert(result.status === 'unfinished' && result.startedAt === message.createdAt);
+                message.userIdentity = userIdentity;
+            }, { allowPending: true });
+            return chat.messages.find(message => message.id === messageId)?.userIdentity ?? null;
         },
         setMessageVersion(id, messageId, resultId, expectedResultId, { playSelection = false } = {}) {
             assert(isId(messageId) && isId(resultId));
@@ -1075,7 +1106,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                         directory.characters.push(owner);
                     }
                     round = { format: 1, id: uuid(), characterId: owner.id, prompt: input.prompt,
-                        origin: readPlayOrigin(input.origin), createdAt: input.startedAt, results: [] };
+                        origin: readPlayOrigin(input.origin), createdAt: input.startedAt, results: [], userIdentity: playUserIdentity(input.context) };
                 }
                 owner.name = input.character.name;
                 if (input.continueResultId) {

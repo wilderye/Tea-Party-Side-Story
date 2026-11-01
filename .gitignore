@@ -85,3 +85,5 @@ tests/*
 !tests/play-manual-favorites.browser.cjs
 README.md
 !tests/play-render.browser.cjs
+!tests/play-identity.test.js
+!tests/play-identity.browser.cjs

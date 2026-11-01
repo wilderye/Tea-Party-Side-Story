@@ -69,6 +69,7 @@ export async function createIndependentPlayScope(context, modules, options) {
     environment.tavern.name2 = environment.character.name;
     environment.tavern.power = resolved.persona.power;
     environment.context = { ...environment.context, chatId: resolved.chatId, userName: resolved.persona.name, userAvatar: resolved.persona.id ?? '' };
+    await options.onPersonaResolved?.(environment.context);
     if (!options.forceIndependent && canUseNativePlayScope(context, environment, resolved)) {
         return { native: true, resolved, dispose() {} };
     }

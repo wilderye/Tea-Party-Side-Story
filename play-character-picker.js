@@ -15,7 +15,7 @@ export function mergePlayCharacters(saved, cards) {
 }
 
 export function createCharacterAvatar(ctx, character, className, type = 'avatar') {
-    const fallback = element('span', character.name.slice(0, 1), `${className} play-avatar-fallback`);
+    const fallback = element('span', Array.from(character.name)[0] ?? '', `${className} play-avatar-fallback`);
     fallback.setAttribute('aria-hidden', 'true');
     if (!character.avatar) return fallback;
     const image = element('img', undefined, className); image.alt = ''; image.draggable = false;

@@ -65,7 +65,7 @@ export function capturePlayEnvironment(context, settings, requested = {}) {
 
 /** Wire native prompt preparation, independent storage and chat identity. */
 export function createPlayRuntime(ctx, settings, history, { prepareRequest = createNativePlayPreparer(ctx), loadRegex,
-    loadPersona = () => import('/scripts/personas.js'), onError = () => {}, diagnostics } = {}) {
+    onError = () => {}, diagnostics } = {}) {
     history ??= createBrowserPlayHistory(ctx, diagnostics);
     const playground = createPlayground({ history, prepareRequest, diagnostics, enabled: () => settings.enabled !== false,
         uuid: () => ctx().uuidv4(),
@@ -143,12 +143,6 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
             const card = ctx().characters?.find(character => character.avatar === characterAvatar);
             if (!card?.avatar || !card.name) throw new PlaygroundError('target_character_missing', '所选角色卡已不存在，请重新选择角色。');
             return playground.addManualFavorite({ character: { avatar: card.avatar, name: card.name }, title, text, firstLine });
-        },
-        async getUserIdentity() {
-            try {
-                const persona = await loadPersona();
-                return { name: ctx().name1 || 'User', avatar: persona.user_avatar || null };
-            } catch (error) { diagnostics?.warn('读取用户头像，已使用默认显示', error); throw error; }
         },
         async initialize() {
             try { await prepareRequest.ready?.(); }
