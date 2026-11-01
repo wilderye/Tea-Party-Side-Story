@@ -79,7 +79,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-persona-session.js','play-character-context.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -529,10 +529,10 @@ if (require.main === module) (async()=>{
    assert.equal(await a.locator('iframe').count(),0,'关闭设置之前不重建已显示的回复');
    await screenshot(page,`processing-settings-${viewport.width}.png`);
    await closeSettings(dialog);
-   await a.frameLocator('iframe').getByText('状态卡：默认隐藏状态',{exact:true}).waitFor();
-   await a.frameLocator('iframe').locator('body').evaluate(node=>node.dataset.readingState='kept');
+   await a.locator('.play-prose').getByText('状态卡：默认隐藏状态',{exact:false}).waitFor();
+   await a.locator('.play-prose').filter({hasText:'状态卡：默认隐藏状态'}).evaluate(node=>node.dataset.readingState='kept');
    dialog=await openSettings();await closeSettings(dialog);
-   assert.equal(await a.frameLocator('iframe').locator('body').getAttribute('data-reading-state'),'kept','设置未影响显示时保留网页内部状态');
+   assert.equal(await a.locator('.play-prose').filter({hasText:'状态卡：默认隐藏状态'}).getAttribute('data-reading-state'),'kept','设置未影响显示时保留正文内部状态');
    dialog=await openSettings();await dialog.locator('summary').click();
    await dialog.getByRole('checkbox',{name:'状态栏美化',exact:true}).uncheck();
    assert.equal(await dialog.locator('.play-display-settings').getByRole('checkbox').count(),3,'直接显示三处可用规则');

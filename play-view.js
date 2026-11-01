@@ -192,7 +192,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const sourceSignature = JSON.stringify([original, context?.userName, playground.display?.revision ?? 0, depth]);
         if (!view.userEditor && view.promptSourceSignature !== sourceSignature) {
             const text = playground.display?.process(original, roundCharacter(round), context, 'user', depth) ?? original;
-            if (view.promptText !== text) renderPlayText(view.userText, text, `${round.id}/user/text`);
+            if (view.promptText !== text) renderPlayText(view.userText, text, `${round.id}/user/text`, false, false, { role: 'user', name: identity.name });
             view.promptText = text;
             view.promptSourceSignature = sourceSignature;
         }
@@ -871,7 +871,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             output.sourceSignature = sourceSignature;
         }
         renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error,
-            anchor: `${round.id}/assistant/${result.id}`, editing: !!output.editor });
+            name: roundCharacter(round).name, anchor: `${round.id}/assistant/${result.id}`, editing: !!output.editor });
         view.swipes.hidden = false;
         updateResultNavigation(round, view);
         view.count.disabled = isEditing(round.id) || !!view.removing;

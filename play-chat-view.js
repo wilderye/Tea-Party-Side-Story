@@ -429,11 +429,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             for (const key of Object.keys(view.message)) if (!Object.hasOwn(message, key)) delete view.message[key];
             Object.assign(view.message, message); message = view.message; result = currentResult(message);
             chat.messages[messageIndex] = message; messageDepths.set(message, depth);
-            if (message.role === 'assistant') renderPlayReply(output, result, { displayText: processed(message, result),
+            if (message.role === 'assistant') renderPlayReply(output, result, { name: owner()?.name, displayText: processed(message, result),
                 job: playground.getState(result.id), error, anchor: `${chat.id}/${message.id}` });
             else if (!editingSessions.has(chat.id)) {
                 const text = processed(message);
-                if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true); view.userText = text; }
+                if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true, { role: 'user' }); view.userText = text; }
             }
             return node;
         }
@@ -447,9 +447,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         const session = editingSessions.get(chat.id), editing = session?.messageId === message.id;
         if (message.role === 'user' && !editing) {
             const text = processed(message);
-            if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true); view.userText = text; }
+            if (view.userText !== text) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true, { role: 'user' }); view.userText = text; }
         } else if (message.role === 'assistant' && !editing) {
-            renderPlayReply(output, result, { displayText: processed(message, result), job: playground.getState(result.id),
+            renderPlayReply(output, result, { name: owner()?.name, displayText: processed(message, result), job: playground.getState(result.id),
                 error, anchor: `${chat.id}/${message.id}` });
         }
         const edit = iconButton('edit', message.role === 'user' ? '修改用户消息' : '编辑回复原文', () => editMessage(message, body, tools));
@@ -906,7 +906,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             const view = replyViews.get(node);
             if (view && latest) {
                 const current = currentResult(latest);
-                renderPlayReply(view.output, current, { displayText: processed(latest, current), job: playground.getState(current.id),
+                renderPlayReply(view.output, current, { name: owner()?.name, displayText: processed(latest, current), job: playground.getState(current.id),
                     error: view.error, anchor: `${chat.id}/${latest.id}`, editing: editingSessions.get(chat.id)?.messageId === latest.id });
                 view.continueBtn.hidden = chat.messages.at(-1)?.id !== latest.id || !current.text.trim();
             }

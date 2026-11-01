@@ -302,7 +302,7 @@ async function verify(page, url, viewport) {
     const settingsArea=panel.locator('.tea-settings').filter({visible:true});
     await settingsArea.getByRole('textbox',{name:'隐藏标签',exact:true}).fill('');
     await button(viewport.width<=760?'返回剧场演出':'设置').click();
-    await branch.locator('iframe.play-web-output').contentFrame().getByText('状态卡：默认隐藏状态',{exact:false}).waitFor();
+    await branch.locator('.play-prose').getByText('状态卡：默认隐藏状态',{exact:false}).waitFor();
     assert.equal(await input.inputValue(),'原对子自己的草稿');
     await button('设置').click();
     await settingsArea.getByRole('textbox',{name:'隐藏标签',exact:true}).fill('think,thinking,update,status');
@@ -379,6 +379,9 @@ async function verify(page, url, viewport) {
     await settle(page);
     const afterHeightChange=await longFeed.evaluate((node,id)=>node.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-node.getBoundingClientRect().top,firstFloorId);
     assert.ok(Math.abs(afterHeightChange-beforeHeightChange)<4,`网页高度变化保持消息位置 ${beforeHeightChange} → ${afterHeightChange}`);
+    await button('关闭面板').click();await panel.waitFor({state:'detached'});
+    await page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
+    await branch.locator('iframe.play-web-output').first().contentFrame().getByRole('button',{name:'展开网页',exact:true}).waitFor();
     await branch.getByRole('button',{name:'聊天操作',exact:true}).click();
     await branch.getByRole('button',{name:'收藏该聊天',exact:true}).click();
     await button('我的收藏').click();await button('演出记录').click();

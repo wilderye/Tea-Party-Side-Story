@@ -84,3 +84,4 @@ tests/*
 !tests/play-favorite-navigation.browser.cjs
 !tests/play-manual-favorites.browser.cjs
 README.md
+!tests/play-render.browser.cjs

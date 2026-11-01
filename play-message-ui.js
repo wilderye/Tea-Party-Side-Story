@@ -147,7 +147,7 @@ export function createPlayResultMenu() {
 }
 
 /** Keep notices in the reply body, using the existing playground behavior. */
-export function renderPlayReply(output, result, { displayText, job, error, anchor, editing = false }) {
+export function renderPlayReply(output, result, { displayText, job, error, anchor, editing = false, name = result.context?.characterName ?? '' }) {
     const pendingSave = job?.resultId === result.id && (job.phase === 'save-failed' || job.unsaved && job.phase === 'saving');
     const retryingSave = pendingSave && job.phase === 'saving';
     const retryMessage = job?.retry && activePhases.has(job.phase)
@@ -158,10 +158,10 @@ export function renderPlayReply(output, result, { displayText, job, error, ancho
     const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
         : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
     const renderHtml = ['saving', 'complete', 'stopped', 'failed', 'save-failed'].includes(result.status);
-    const signature = result.text ? `${renderHtml}:${displayText}` : `${result.status}:${!!errorMessage}:${!!retryMessage}`;
+    const signature = result.text ? JSON.stringify([renderHtml, name, displayText]) : `${result.status}:${!!errorMessage}:${!!retryMessage}`;
     if (!editing && output.signature !== signature) {
         if (result.text) {
-            if (displayText.trim()) renderPlayText(output.box, displayText, anchor, renderHtml, true);
+            if (displayText.trim()) renderPlayText(output.box, displayText, anchor, renderHtml, true, { name });
             else output.box.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         } else if (errorMessage || retryMessage) output.box.replaceChildren();
         else {

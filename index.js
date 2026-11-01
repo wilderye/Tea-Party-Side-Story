@@ -6,6 +6,9 @@ import { syncQrEntry, removeQrEntry } from './qr-entry.js';
 import { createPlayRuntime } from './play-runtime.js';
 import { createPlayPromptFavorites } from './play-prompt-favorites.js';
 import { createDiagnostics, observePluginErrors } from './diagnostics.js';
+import { initializeTavernRenderer } from './play-tavern-render.js';
+import { initializeHelperResources } from './play-helper-resources.js';
+import { initializePlayRendering } from './play-render.js';
 
 const diagnostics = createDiagnostics();
 observePluginErrors(diagnostics);
@@ -259,6 +262,9 @@ export async function onUninstall() {
         throw error;
     }
 }
+await initializeTavernRenderer(diagnostics);
+initializeHelperResources(diagnostics);
+initializePlayRendering(diagnostics);
 ui = createTheatrePanel(ctx, state, {
     loaded, updateLibrary, saveManuscript, deleteManuscript, toggleFavorite, saveSettings, playground, promptFavorites, diagnostics,
 });

@@ -218,7 +218,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface):not([data-appearance=tavern]) :is(.tea-body,.play-prose) u { all:unset!important; text-decoration:underline solid #b36c52 1px!important; text-underline-offset:.18em!important; text-decoration-skip-ink:auto!important; }
 /* Follow mode starts from ordinary Markdown elements, so our default quote,
    table and code decorations cannot cover the theme's actual decorations. */
-:is(#teahouse-panel,.tea-panel-surface)[data-appearance=tavern] :where(.tea-body,.play-prose) :where(p,q,em,i,b,strong,u,s,del,a,h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,table,thead,tbody,tfoot,tr,th,td,pre,code,kbd,samp,hr,img,ruby,rt,rp) { all:revert; box-sizing:border-box; text-shadow:none; }
+:is(#teahouse-panel,.tea-panel-surface)[data-appearance=tavern] :where(.tea-body,.play-prose) :where(p,q,em,i,b,strong,u,s,del,a,h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,table,thead,tbody,tfoot,tr,th,td,pre,code,kbd,samp,hr,img,ruby,rt,rp,details,summary,sub,sup,video,audio) { all:revert; box-sizing:border-box; text-shadow:none; }
 :is(#teahouse-panel,.tea-panel-surface)[data-appearance=tavern] :is(.tea-body,.play-prose) :where(p,q,em,i,b,strong,u,s,del,a,h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,table,thead,tbody,tfoot,tr,th,td) { font-family:inherit!important; }
 :is(#teahouse-panel,.tea-panel-surface)[data-appearance=tavern] :is(.tea-body,.play-prose) :where(p,q,em,i,b,strong,u,s,del,a,li) { font-size:inherit!important; }
 :is(#teahouse-panel,.tea-panel-surface)[data-appearance=tavern] :is(.tea-body,.play-prose) :is(pre,code) { font-family:Consolas,var(--tea-ui),monospace!important; }
@@ -939,3 +939,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 
 #teahouse-panel-host { position:relative; width:100%; height:100%; min-height:0; overflow:hidden; background:var(--tea-paper,#faf7ee); }
 #teahouse-panel-host>.tea-panel-surface { position:absolute; inset:0; }
+
+:is(#teahouse-panel,.tea-panel-surface) :where(.tea-body) details { margin:12px 0; }
+:is(#teahouse-panel,.tea-panel-surface) :where(.tea-body) summary { display:list-item; cursor:pointer; }
+:is(#teahouse-panel,.tea-panel-surface) :where(.tea-body) :is(video,audio) { max-width:100%; }
+:is(#teahouse-panel,.tea-panel-surface) :where(.tea-body) pre { position:relative; }
+:is(#teahouse-panel,.tea-panel-surface) :where(.tea-body) .code-copy { position:absolute; right:8px; top:8px; cursor:pointer; }

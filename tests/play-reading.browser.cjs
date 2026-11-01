@@ -230,6 +230,25 @@ async function checkReopen(page, mode) {
   }
 }
 
+async function checkWebReopen(page) {
+  await page.evaluate(async()=>{
+    const round=await runtime.getRound(seed.a);
+    await runtime.editResult(round.id,round.results[0].id,'<div>重开网页</div><button onclick="this.textContent=\'已点击\'">点击我</button>',round.results[0].text);
+  });
+  const open=()=>page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
+  const button=name=>page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button',{name,exact:true}).filter({visible:true});
+  await open();await button('剧场演出').click();
+  for(let repeat=0;repeat<3;repeat++) {
+    await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'点击我',exact:true}).click();
+    await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'已点击',exact:true}).waitFor();
+    await button('关闭面板').click();await page.locator('.teahouse-dialog').waitFor({state:'detached'});
+    await open();
+  }
+  await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'点击我',exact:true}).click();
+  await button('茶会选集').click();await button('剧场演出').click();
+  await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'已点击',exact:true}).waitFor();
+}
+
 async function checkStreaming(page) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
@@ -359,13 +378,14 @@ async function checkFavoriteProcessing(page, viewport) {
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }]) {
-      for (const mode of ['reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'jump', 'automatic', 'slow', 'states', 'switch', 'favorite', 'favorite-processing', 'stream', 'continue', 'continue-reopen', 'continue-tab', 'continue-stop']) {
+      for (const mode of ['web-reopen', 'reopen', 'reopen-loading', 'reopen-bottom', 'anchor', 'jump', 'automatic', 'slow', 'states', 'switch', 'favorite', 'favorite-processing', 'stream', 'continue', 'continue-reopen', 'continue-tab', 'continue-stop']) {
         const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
         await page.goto(`http://127.0.0.1:${server.address().port}/`); await page.waitForFunction(() => window.ready);
         assert.equal(await page.title(), '小剧场设置与原文编辑验证');
-        if (mode.startsWith('reopen')) await checkReopen(page, mode);
+        if (mode==='web-reopen') await checkWebReopen(page);
+        else if (mode.startsWith('reopen')) await checkReopen(page, mode);
         else if (mode === 'favorite') await checkFavorite(page);
         else if (mode === 'favorite-processing') await checkFavoriteProcessing(page, viewport);
         else if (mode === 'stream') await checkStreaming(page);

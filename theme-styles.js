@@ -1,7 +1,7 @@
 const panelScope = ':is(#teahouse-panel,.tea-panel-surface)[data-appearance="tavern"]';
 const prose = ':is(.tea-body,.play-prose)';
 const neutralAncestors = new Set(['#chat', '.mes', '.mes_block']);
-const proseTags = /^(?:p|q|em|i|b|strong|u|s|del|a|h[1-6]|blockquote|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|pre|code|kbd|samp|hr|img|ruby|rt|rp)(?=[.#[:\s>+~]|$)/;
+const proseTags = /^(?:p|q|em|i|b|strong|u|s|del|a|h[1-6]|blockquote|ul|ol|li|table|thead|tbody|tfoot|tr|th|td|pre|code|kbd|samp|hr|img|ruby|rt|rp|details|summary|sub|sup|video|audio)(?=[.#[:\s>+~]|$)/;
 // The prose wrapper's foreground and background must travel together.
 const rootProperties = /^(?:color|background(?:-.+)?|line-height|letter-spacing|word-spacing|text-align|text-indent|text-transform|font-weight|font-style|font-variant(?:-.+)?)$/;
 const bodyProperties = /^(?:color|background(?:-.+)?|border(?:-.+)?|outline(?:-.+)?|box-shadow|padding(?:-.+)?|margin(?:-.+)?|font-(?:size|weight|style|variant(?:-.+)?|stretch)|line-height|letter-spacing|word-spacing|text-.+|white-space|word-break|overflow-wrap|hyphens|vertical-align|list-style(?:-.+)?|counter-(?:reset|increment)|opacity|display|width|min-width|max-width|height|min-height|max-height|overflow(?:-[xy])?|tab-size|caption-side|empty-cells|border-collapse|border-spacing|content|position|inset(?:-.+)?|top|right|bottom|left|transform(?:-.+)?|box-decoration-break|-webkit-box-decoration-break)$/;

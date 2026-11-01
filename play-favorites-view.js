@@ -118,7 +118,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         }
         const text = value.cleaned ? value.text : (playground.display?.process(value.text, { avatar: value.characterAvatar, name: value.characterName }) ?? value.text);
         if (signature === text) return;
-        if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true);
+        if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true, { name: value.characterName });
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         signature = text;
     }
@@ -154,7 +154,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
                 prompt.classList.add('play-sent-prompt-action'); tools.append(prompt); head.append(tools);
             }
             const content = element('div', undefined, user ? 'play-user-text' : 'play-results');
-            renderPlayText(content, message.text, `favorite/${value.id}/${message.messageId}`, !user, true);
+            renderPlayText(content, message.text, `favorite/${value.id}/${message.messageId}`, !user, true, { role: message.role, name: identity.name });
             floor.append(head, content); fragment.append(floor); renderedMessages++;
         }
         body.append(fragment);

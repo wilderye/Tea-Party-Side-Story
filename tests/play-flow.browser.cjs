@@ -31,7 +31,7 @@ document.getElementById('render').onclick=()=>window.renderText('<!doctype html>
 const allowed = new Set(['play-message-context.js','play-sent-prompt.js', 'play-chat-favorites.js', 'style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
   'play-persona-session.js', 'play-character-context.js',
   'play-storage-worker.js', 'play-storage-lock.js', 'play-prompt.js', 'play-task-module.js', 'play-template-context.js','play-variable-context.js', 'play-preparation.js', 'play-preset.js', 'play-parameters.js', 'play-request.js',
-  'play-render.js', 'view-diagnostics.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
+  'play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js', 'view-diagnostics.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://test'), file = url.pathname.slice(1);
@@ -104,8 +104,9 @@ async function verifyHtmlOutputs(page, host, viewport) {
       .includes(prefix.includes('thinking') ? '思考内容仍然保留' : '说明文字'), '前缀内容未被删除');
   }
   await page.evaluate(text => window.renderText(text), '<thinking>思考内容仍然保留</thinking><div>同一行的网页正文</div>');
-  await page.frameLocator('iframe').getByText('同一行的网页正文', {exact:true}).waitFor();
-  assert.ok((await page.frameLocator('iframe').locator('body').innerText()).includes('思考内容仍然保留'));
+  assert.equal(await page.locator('iframe').count(), 0, '没有程序的 div 留在普通正文');
+  assert.ok((await page.locator('#output').innerText()).includes('思考内容仍然保留'));
+
 
   const proseCases = [
     '普通正文\n\n- 第一项\n- 第二项',
@@ -129,7 +130,7 @@ async function verifyHtmlOutputs(page, host, viewport) {
   await page.evaluate(text => window.renderText(text, false), card);
   assert.equal(await page.locator('iframe').count(), 0, '生成过程中仍只显示文字');
 
-  const mixed = '前言\n\n```html\n<div>第一个网页</div>\n```\n\n```text\n<div>代码示例</div>\n```\n\n<style>div{color:rgb(12,34,56)}</style>\n<div>第二个网页</div>';
+  const mixed = '前言\n\n```html\n<div>第一个网页</div>\n```\n\n```text\n<div>代码示例</div>\n```\n\n<style>div{color:rgb(12,34,56)}</style>\n<div>第二个网页</div><script>window.fragmentReady=true;</script>';
   await page.evaluate(text => window.renderText(text), mixed);
   assert.equal(await page.locator('iframe').count(), 2, '原有 HTML 代码块和裸网页可以一起显示');
   await page.frameLocator('iframe').nth(0).getByText('第一个网页', {exact:true}).waitFor();
