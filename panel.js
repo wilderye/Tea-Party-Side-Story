@@ -1232,7 +1232,6 @@ export function createTheatrePanel(ctx, state, actions) {
             renderPlayPromptSetting(generation, state.settings, actions.saveSettings);
             const display = group('正则与隐藏标签');
             display.classList.add('play-display-settings');
-            display.append(element('p', '仅用于插件内的小剧场。', 'tea-setting-description'));
             processingSettings = renderPlayProcessingSettings(display, state.settings, actions.saveSettings, actions.playground.display, viewState?.rules);
         }
         const reading = group('阅读外观');

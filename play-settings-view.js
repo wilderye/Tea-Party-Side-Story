@@ -101,11 +101,9 @@ export function renderPlayChatSetting(area, settings, saveSettings) {
     const row = element('label', undefined, 'tea-setting-row');
     const name = '不发送角色聊天，仅读取预设/人设/世界书';
     const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = readPlaySettings(settings).noChat; toggle.setAttribute('aria-label', name);
-    toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', 'play-chat-description');
-    const description = element('p', '角色设定照常使用。MVU 角色卡开启时读取初始变量；关闭时发送该角色最新聊天，读取最新有效变量。', 'tea-setting-description');
-    description.id = 'play-chat-description';
+    toggle.setAttribute('role', 'switch');
     toggle.addEventListener('change', () => { settings.playNoChat = toggle.checked; saveSettings(); });
-    row.append(element('strong', name), toggle); section.append(row, description); area.append(section);
+    row.append(element('strong', name), toggle); section.append(row); area.append(section);
 }
 
 export function renderPlayRetrySettings(area, settings, saveSettings) {
@@ -315,7 +313,7 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     const config = readPlaySettings(settings);
     const section = element('section', undefined, 'play-processing-settings');
     const tags = textSetting(section, settings, saveSettings, 'playHiddenTags', '隐藏标签', config.hiddenTags,
-        '用中英文逗号或换行分隔；标签闭合后从显示和分支发送中去掉内容，原文保留。');
+        '用中英文逗号或换行分隔。');
     tags.classList.add('play-hidden-tags');
     tags.rows = 1;
     const nativeTagSizing = CSS.supports('field-sizing', 'content');
@@ -333,12 +331,11 @@ export function renderPlayProcessingSettings(area, settings, saveSettings, displ
     paused.setAttribute('role', 'status'); section.append(paused);
 
     const details = element('details', undefined, 'play-regex-list');
-    details.append(element('summary', '选择酒馆正则'));
-    const toolbar = element('div', undefined, 'play-regex-toolbar');
+    const toolbar = element('summary', undefined, 'play-regex-toolbar');
     const status = element('p', '', 'tea-setting-description'); status.setAttribute('role', 'status');
     const list = element('div', undefined, 'play-regex-groups'); let loading = false, loaded = !!viewState?.loaded;
-    const refresh = iconButton('refresh', '刷新列表', () => void load());
-    toolbar.append(refresh);
+    const refresh = iconButton('refresh', '刷新列表', event => { event.preventDefault(); void load(); });
+    toolbar.append(element('span', '选择酒馆正则', 'play-regex-title'), refresh);
     details.append(toolbar, status, list);
     section.append(details); area.append(section);
 
