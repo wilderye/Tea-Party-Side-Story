@@ -538,10 +538,12 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message { margin-bottom:32px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed>.play-feed-content>.play-message:last-child { margin-bottom:0; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message-actions>button:not(.tea-icon) { grid-column:1/-1; }
-:is(#teahouse-panel,.tea-panel-surface) .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); }
-:is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message:has(.play-delete-checkbox) { padding:12px 12px 12px 40px; cursor:pointer; }
+:is(#teahouse-panel,.tea-panel-surface) .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); box-shadow:0 -4px 0 var(--tea-accent-fill,#ed80692a); }
 :is(#teahouse-panel,.tea-panel-surface) .play-message:has(.play-delete-checkbox) iframe { pointer-events:none; }
 :is(#teahouse-panel,.tea-panel-surface) .play-delete-checkbox { position:absolute; top:24px; left:10px; width:18px; height:18px; margin:0; accent-color:var(--tea-accent,#a65340); }
+@media(min-width:761px) {
+    :is(#teahouse-panel,.tea-panel-surface) .play-delete-checkbox { left:-24px; }
+}
 :is(#teahouse-panel,.tea-panel-surface) .play-delete-controls { display:flex; flex:none; align-items:center; flex-wrap:wrap; gap:10px 16px; padding:12px 30px; background:var(--tea-paper); }
 :is(#teahouse-panel,.tea-panel-surface) .play-delete-controls span { flex:1; min-width:160px; font-size:13px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-delete-controls button { min-height:36px; }

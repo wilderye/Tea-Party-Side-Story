@@ -31,6 +31,91 @@ async function screenshot(page, name) {
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, name) });
 }
+async function verifyDeletionControls(page, branch, viewport) {
+    const activate = async locator => viewport.width <= 760 ? locator.tap() : locator.click();
+    const input = branch.getByRole('textbox', { name: '分支聊天输入', exact: true });
+    await input.fill('取消删除后保留的草稿');
+    await settle(page);
+    await branch.evaluate(node => {
+        const measure = message => {
+            const rect = message.getBoundingClientRect();
+            const parts = [message.querySelector('.play-user-text,.play-results'), message.querySelector('.play-message-meta'),
+                message.querySelector('.play-message-avatar'), ...message.querySelectorAll('.play-header-actions button,.play-message-actions button')];
+            return parts.map(part => {
+                const box = part.getBoundingClientRect();
+                const visible = !!part.getClientRects().length;
+                return { width: box.width, height: box.height, x: visible ? box.x - rect.x : 0, y: visible ? box.y - rect.y : 0, visible };
+            });
+        };
+        window.deleteBaseline = [...node.querySelectorAll('[data-message-id]')].map(message => ({
+            message, body: message.querySelector('.play-user-text,.play-results'),
+            anchors: [...message.querySelectorAll('[data-read-anchor]')], geometry: measure(message),
+            disabled: [...message.querySelectorAll('button')].map(button => button.disabled),
+        }));
+        window.measureDeleteMessage = measure;
+        window.deleteMenuNodes = [...node.querySelector('.play-chat-menu .tea-sort-menu').children];
+        window.deleteCalls = [];
+        window.deleteOriginals = { getChatWindow: runtime.getChatWindow, process: runtime.display.process };
+        runtime.getChatWindow = (...args) => { deleteCalls.push('read'); return deleteOriginals.getChatWindow(...args); };
+        runtime.display.process = (...args) => { deleteCalls.push('process'); return deleteOriginals.process(...args); };
+    });
+    const enter = async () => {
+        await activate(branch.getByRole('button', { name: '聊天操作', exact: true }));
+        await activate(branch.getByRole('button', { name: '删除', exact: true }));
+        await settle(page);
+        assert.equal(await branch.locator('.play-delete-selected,.play-delete-checkbox:checked').count(), 0, '进入时包括最新楼层在内全部未选中');
+        assert.equal(await branch.getByRole('button', { name: '确认删除', exact: true }).isDisabled(), true);
+        assert.equal(await branch.locator('.play-delete-controls span').textContent(), '请选择要从哪里开始删除');
+        assert.equal(await branch.locator('[data-chat-action]:not(:disabled)').filter({ visible: true }).count(), 0);
+    };
+    const verifyGeometry = async () => {
+        assert.equal(await branch.evaluate(node => deleteBaseline.every(saved => {
+            const current = measureDeleteMessage(saved.message);
+            return saved.body === saved.message.querySelector('.play-user-text,.play-results')
+                && saved.anchors.every(anchor => saved.body.contains(anchor))
+                && saved.geometry.every((part, index) => Object.keys(part).every(key => typeof part[key] === 'number'
+                    ? Math.abs(part[key] - current[index][key]) < 1 : part[key] === current[index][key]))
+                && deleteMenuNodes.every((button, index) => button === node.querySelector('.play-chat-menu .tea-sort-menu').children[index]);
+        })), true, '删除选择不重建正文或菜单，正文、头像和原有按钮的尺寸与相对位置不变');
+    };
+    await enter(); await verifyGeometry();
+    assert.equal(await branch.evaluate(node => [...node.querySelectorAll('.play-delete-checkbox')].every(checkbox => {
+        const message = checkbox.closest('[data-message-id]').getBoundingClientRect(), box = checkbox.getBoundingClientRect();
+        const feed = node.querySelector('.play-chat-feed').getBoundingClientRect(), avatar = checkbox.parentElement.querySelector('.play-message-avatar').getBoundingClientRect();
+        return Math.abs(box.x - message.x - (matchMedia('(max-width:760px)').matches ? 10 : -24)) < 1
+            && Math.abs(box.y - message.y - 24) < 1 && box.width === 18 && box.height === 18
+            && box.left >= feed.left && (box.right <= avatar.left || box.left >= avatar.right || box.bottom <= avatar.top || box.top >= avatar.bottom);
+    })), true, '小方框沿用手机位置，电脑仅横移，且不被裁切或遮挡头像');
+    await branch.locator('.play-header-actions').first().click({ force: true });
+    await branch.getByRole('button', { name: '生成新版本', exact: true }).click({ force: true });
+    await branch.evaluate(node => {
+        for (const tools of node.querySelectorAll('.play-header-actions,.play-message-actions')) {
+            tools.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
+    });
+    assert.equal(await branch.locator('.play-delete-selected').count(), 0, '禁用按钮及工具区不能选中删除起点');
+    assert.equal(await branch.locator('.play-edit-form').count(), 0);
+    const controls = branch.locator('.play-delete-controls');
+    await branch.locator('.play-delete-checkbox').last().click();
+    assert.equal(await branch.locator('.play-delete-selected').count(), 1);
+    await controls.getByRole('button', { name: '取消', exact: true }).click();
+    await settle(page); await verifyGeometry();
+    assert.equal(await branch.locator('.play-delete-checkbox,.play-delete-selected').count(), 0);
+    assert.equal(await input.inputValue(), '取消删除后保留的草稿');
+    assert.equal(await page.evaluate(() => deleteBaseline.every(saved => [...saved.message.querySelectorAll('button')]
+        .every((button, index) => button.disabled === saved.disabled[index]))), true, '取消后恢复原有权限，原本禁用的按钮仍禁用');
+    await enter(); await verifyGeometry();
+    await branch.locator('.play-chat-feed').evaluate(node => node.dispatchEvent(new Event('scroll')));
+    await settle(page); await verifyGeometry();
+    await page.evaluate(() => runtime.publish({ roundId: 'another-chat', phase: 'generating', resultId: 'another-result' }));
+    await settle(page);
+    assert.equal(await branch.locator('[data-chat-action]:not(:disabled)').filter({ visible: true }).count(), 0, '其他聊天状态通知不会启用删除模式的按钮');
+    assert.equal(await page.evaluate(() => deleteCalls.length), 0, '进入、取消不读取聊天或重新处理显示文字');
+    await page.evaluate(() => {
+        runtime.getChatWindow = deleteOriginals.getChatWindow; runtime.display.process = deleteOriginals.process;
+        deleteBaseline = null; deleteMenuNodes = null; deleteOriginals = null;
+    });
+}
 async function verifyReadingControls(page, panel, branch, viewport) {
     const feed = branch.locator('.play-chat-feed'), ai = branch.locator('.play-assistant-message').first();
     const title = branch.locator('.play-chat-heading');
@@ -357,8 +442,18 @@ async function verify(page, url, viewport) {
     assert.ok(await branch.locator('[data-message-id]').count()<=24,'长对话初次只建立末尾24条消息');
     await settle(page);const longFeed=branch.locator('.play-chat-feed');
     assert.ok(await longFeed.evaluate(node=>node.scrollHeight-node.clientHeight-node.scrollTop<4),'无阅读位置从最底部打开');
+    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
+    await branch.getByRole('button', { name: '删除', exact: true }).click();
+    assert.equal(await branch.locator('.play-delete-checkbox:checked').count(), 0);
+    await branch.locator('.play-delete-checkbox').first().click();
+    assert.equal(await branch.locator('.play-delete-checkbox:checked').count(), 24);
     await branch.getByRole('button',{name:'显示更早的消息',exact:true}).click();
     assert.equal(await branch.locator('[data-message-id]').count(),48);
+    assert.equal(await branch.locator('.play-delete-checkbox').count(), 48);
+    assert.equal(await branch.locator('.play-delete-checkbox:checked').count(), 24, '显示更早消息沿用已有删除起点');
+    assert.equal(await branch.locator('.play-delete-checkbox').first().isChecked(), false);
+    assert.equal(await branch.locator('.play-delete-controls span').textContent(), '将删除所选消息到最后，共 24 条消息');
+    await branch.locator('.play-delete-controls').getByRole('button', { name: '取消', exact: true }).click();
     await longFeed.evaluate(node=>node.scrollTop=120);await settle(page);
     const scroll=await longFeed.evaluate(node=>{
         const top=node.getBoundingClientRect().top,anchor=[...node.querySelectorAll('[data-message-id]')].find(item=>item.getBoundingClientRect().bottom>top+1);
@@ -532,12 +627,12 @@ async function verifyRequestedControls(page, url, viewport) {
     await ai.getByRole('button', { name: '保存', exact: true }).click();
     await page.evaluate(id=>runtime.session.flush(id),a);
     assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[1].results[0].text, '尚未保存的回复修改');
-    await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
-    await branch.getByRole('button', { name: '删除', exact: true }).click();
+    await verifyDeletionControls(page, branch, viewport);
     assert.equal(await branch.locator('.play-delete-selected').count(), 0);
     assert.equal(await branch.getByRole('button', { name: '确认删除', exact: true }).isDisabled(), true);
     await settle(page);
-    assert.equal(await branch.getByRole('button', { name: '生成新版本', exact: true }).isVisible(), false, '删除模式只显示删除操作');
+    assert.equal(await branch.getByRole('button', { name: '生成新版本', exact: true }).isVisible(), true, '删除模式保留消息操作按钮原位');
+    assert.equal(await branch.getByRole('button', { name: '生成新版本', exact: true }).isDisabled(), true);
     await firstUser.locator('.play-user-text').click();
     assert.equal(await branch.locator('.play-delete-selected').count(), 2);
     assert.equal(await branch.getByRole('checkbox').first().isChecked(), true);
@@ -545,6 +640,22 @@ async function verifyRequestedControls(page, url, viewport) {
     assert.equal(await branch.locator('.play-delete-selected').count(), 1);
     assert.equal(await firstUser.getByRole('checkbox').isChecked(), false);
     await screenshot(page, `requested-delete-${viewport.width}.png`);
+    const beforeDelete = await page.evaluate(id => runtime.getChat(id), a);
+    await page.evaluate(() => {
+        window.failSave = true; window.deleteFailure = null;
+        window.deleteOriginal = runtime.truncateChat;
+        runtime.truncateChat = async (...args) => {
+            try { return await deleteOriginal(...args); }
+            catch (error) { window.deleteFailure = error.message; throw error; }
+        };
+    });
+    await branch.getByRole('button', { name: '确认删除', exact: true }).click();
+    await page.waitForFunction(() => deleteFailure === '模拟保存失败');
+    await settle(page);
+    assert.equal(await branch.locator('[data-message-id]').count(), 2, '保存失败不提前移除正文');
+    assert.deepEqual(await page.evaluate(id => runtime.getChat(id), a), beforeDelete, '保存失败保留完整聊天');
+    assert.equal(await branch.locator('.play-delete-selected').count(), 1, '保存失败保留已选择的删除范围');
+    await page.evaluate(() => { window.failSave = false; runtime.truncateChat = deleteOriginal; deleteOriginal = null; });
     await branch.getByRole('button', { name: '确认删除', exact: true }).click();
     await branch.locator('.play-assistant-message').waitFor({ state: 'detached' });
     assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages.length, 1);
@@ -579,7 +690,7 @@ async function verifyRequestedControls(page, url, viewport) {
         for (const viewport of [{ width: 1332, height: 896 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
             const context = await browser.newContext({ viewport });
             await verify(await context.newPage(), url, viewport); await context.close();
-            const controls = await browser.newContext({ viewport });
+            const controls = await browser.newContext({ viewport, hasTouch: viewport.width <= 760 });
             await verifyRequestedControls(await controls.newPage(), url, viewport); await controls.close();
         }
         const viewport = { width: 390, height: 844 }, context = await browser.newContext({ viewport });

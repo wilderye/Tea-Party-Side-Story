@@ -58,7 +58,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     inputRow.append(menu, input, send); inner.append(inputRow); compose.append(inner);
     const deleteControls = element('div', undefined, 'play-delete-controls'); deleteControls.hidden = true;
     const deleteDescription = element('span'), confirmDelete = textButton('确认删除', () => void confirmMessageDeletion());
-    deleteControls.append(deleteDescription, confirmDelete, textButton('取消', () => { deletingFrom = null; renderChat(position()); }));
+    deleteControls.append(deleteDescription, confirmDelete, textButton('取消', () => setDeletionMode(null)));
     branchPage.append(heading, readingArea, compose, deleteControls); page.append(directory, branchPage);
     let characters = [], selected, chat, visible = false, route = 'history', browsing = false;
     let searchOpen = false, queryTimer, queryId = 0, directoryId = 0, openId = 0, reloadId = 0, loading = false, mutating = false, panel;
@@ -115,10 +115,10 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
     function messagePermissions(message, jobs = ownJobs()) {
         const result = currentResult(message), session = editingSession(), editing = session?.messageId === message.id;
-        const idle = !writeBlocked() && !editing && !playMessageIsPending(message, jobs);
-        const index = message.results?.indexOf(result), last = chat.messages.at(-1)?.id === message.id, chatIdle = !busy(jobs);
+        const idle = deletingFrom === null && !writeBlocked() && !editing && !playMessageIsPending(message, jobs);
+        const index = message.results?.indexOf(result), last = chat.messages.at(-1)?.id === message.id, chatIdle = deletingFrom === null && !busy(jobs);
         const copiesEditor = !!session && chat.messages.findIndex(item => item.id === session.messageId) <= chat.messages.indexOf(message);
-        return { inspect: !chatUnavailable, more: !chatUnavailable, edit: idle, remove: idle, visibility: idle, branch: idle && !copiesEditor,
+        return { inspect: deletingFrom === null && !chatUnavailable, more: deletingFrom === null && !chatUnavailable, edit: idle, remove: idle, visibility: idle, branch: idle && !copiesEditor,
             favorite: idle && !!(result?.text ?? message.text)?.trim(),
             previous: chatIdle && index > 0, choose: chatIdle,
             next: chatIdle && (index < (message.results?.length ?? 0) - 1 || canWrite()),
@@ -138,6 +138,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             if (!view) continue;
             const permissions = messagePermissions(message, active);
             for (const button of view.node.querySelectorAll('[data-chat-action]')) button.disabled = !permissions[button.dataset.chatAction];
+            if (view.reply) view.reply.stop.disabled = deletingFrom !== null;
+            if (view.finish) view.finish.disabled = deletingFrom !== null || mutating || settings.enabled === false;
         }
         for (const button of menuItems.children) button.disabled = !menuPermission(button.dataset.chatAction, active);
     }
@@ -345,7 +347,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             const top = node.querySelector('.play-message-top');
             if (!top) continue;
             const session = editingSession(), editor = session?.messageId === node.dataset.messageId ? session.editor : null;
-            const hidden = deletingFrom !== null || !playMessageNeedsTop(node.querySelector('.play-results,.play-user-text'), node.querySelector('.play-message-meta'), height, editor);
+            const hidden = !playMessageNeedsTop(node.querySelector('.play-results,.play-user-text'), node.querySelector('.play-message-meta'), height, editor);
+            top.disabled = deletingFrom !== null;
             if (top.hidden !== hidden) updates.push({ top, hidden });
         }
         if (jump.hidden !== hidden) jump.hidden = hidden;
@@ -354,12 +357,12 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             const view = replyViews.get(node);
             if (view && !view.actions.querySelector('button:not(.tea-icon):not(.play-count)')) {
                 syncPlayReplyFooter(view);
-                if (deletingFrom !== null) view.actions.hidden = true;
             }
         }
-        for (const view of messageViews.values()) if (view.userTop) view.userActions.hidden = deletingFrom !== null || view.userTop.hidden;
+        for (const view of messageViews.values()) if (view.userTop) view.userActions.hidden = view.userTop.hidden;
     }
     function jumpToMessage(node) {
+        if (deletingFrom !== null) return;
         const session = editingSession();
         scrollPlayMessageToTop(feed, node, getReadingInset(), setFeedScroll, session?.messageId === node.dataset.messageId ? session.editor : null);
         remember(); updateReadingControls();
@@ -501,21 +504,34 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                         if (confirmed === ctx().POPUP_RESULT.AFFIRMATIVE) await run(() => playground.finishUnfinishedChat(chat.id));
                     }); reply.actions.append(view.finish);
                 }
-                view.finish.disabled = mutating || settings.enabled === false;
             } else { view.finish?.remove(); view.finish = null; }
         }
-        node.querySelector(':scope > .play-delete-checkbox')?.remove(); node.onclick = null; tools.hidden = deletingFrom !== null;
-        if (deletingFrom !== null) {
-            const choose = element('input', undefined, 'play-delete-checkbox'); choose.type = 'checkbox';
-            choose.setAttribute('aria-label', `从第 ${chat.messages.indexOf(message) + 1} 条消息删除到最后`); node.prepend(choose);
-            node.querySelector('.play-message-actions')?.setAttribute('hidden', '');
-            node.onclick = event => {
-                if (mutating) return;
-                if (event.target !== choose) event.preventDefault();
-                deletingFrom = chat.messages.indexOf(view.message); updateDeletionSelection();
-            };
-        }
+        syncMessageDeletion(view);
         return node;
+    }
+    function syncMessageDeletion(view) {
+        const { node } = view;
+        let choose = node.querySelector(':scope > .play-delete-checkbox');
+        if (deletingFrom !== null) {
+            if (!choose) {
+                choose = element('input', undefined, 'play-delete-checkbox'); choose.type = 'checkbox'; node.prepend(choose);
+                node.onclick = event => {
+                    if (mutating || event.target.closest('.play-header-actions,.play-message-actions')) return;
+                    if (event.target !== choose) event.preventDefault();
+                    deletingFrom = chat.messages.findIndex(message => message.id === node.dataset.messageId); updateDeletionSelection();
+                };
+            }
+            choose.setAttribute('aria-label', `从第 ${chat.messages.findIndex(message => message.id === node.dataset.messageId) + 1} 条消息删除到最后`);
+        } else {
+            choose?.remove(); node.onclick = null;
+        }
+    }
+    function setDeletionMode(value) {
+        const saved = position();
+        deletingFrom = value; closeVersions(false);
+        for (const view of messageViews.values()) syncMessageDeletion(view);
+        const jobs = playground.getStates();
+        syncPermissions(jobs); updateDeletionSelection(); updateInput(jobs); updateReadingControls(); restore(saved);
     }
     function updateFavorite(view) {
         const message = view.message, result = currentResult(message);
@@ -536,7 +552,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         menuItems.append(textButton(chatFavorite ? '取消收藏该聊天' : '收藏该聊天', () => void toggleChatFavorite()),
             textButton('隐藏楼层管理', () => void manageHiddenFloors()),
             textButton('修改聊天名称', () => void renameChat(chat)), textButton('删除该聊天', () => void deleteChat(chat)),
-            textButton('删除', () => { menu.open = false; deletingFrom = -1; renderChat(position()); }));
+            textButton('删除', () => { menu.open = false; setDeletionMode(-1); }));
         for (const [index, action] of ['favorite', 'hidden', 'rename', 'delete', 'truncate'].entries()) menuItems.children[index].dataset.chatAction = action;
         const session = editingSession();
         const nodes = chatUnavailable && session ? [session.view.node] : chat.messages.slice(start, end).map(renderMessage);
