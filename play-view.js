@@ -6,7 +6,7 @@ import { playRoundDepth, playMessageIdentity } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters } from './play-character-picker.js';
-import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu, createPlayStopAll, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu, createPlayStopAll, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor, placePlayEditorActions } from './play-message-ui.js';
 import { readPlayElementPosition, restorePlayElementPosition } from './play-reading-position.js';
 
 const pad = value => String(value).padStart(2, '0');
@@ -30,7 +30,8 @@ function recentTime(value) {
 
 /** A persistent conversation view. History and generation stay in playground. */
 export function createPlayView(ctx, settings, playground, notify, diagnostics, promptFavorites,
-    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch, onInspectPrompt, onBrowsing } = {}) {
+    { getReadingInset = () => 0, onProgrammaticScroll = () => {}, onBranch, onInspectPrompt, onBrowsing,
+        messageEditing } = {}) {
     const mobile = matchMedia('(max-width: 760px)');
     const characterPicker = createPlayCharacterPicker(ctx, {
         getCharacters: () => characters, getSelected: () => selected, onSelect: character => void chooseCharacter(character),
@@ -140,7 +141,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         catch (error) { current = null; currentError = error.message; }
     }
     function updateUserMessage(round, view) {
-        const userHidden = round.prompt === null && !view.userEditor;
+        const userEditor = recordEditor(view, 'user'), userHidden = round.prompt === null && !userEditor;
         if (view.user.hidden !== userHidden) view.user.hidden = userHidden;
         const identity = playMessageIdentity(round);
         const context = { userName: identity.name };
@@ -152,7 +153,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.user.setAttribute('aria-label', `${identity.name} 发送的小剧场提示词`);
         }
         if (round.prompt === null) {
-            if (!view.userEditor) { view.userText.replaceChildren(); view.promptText = null; view.promptSourceSignature = null; }
+            if (!userEditor) { view.userText.replaceChildren(); view.promptText = null; view.promptSourceSignature = null; }
             return;
         }
         // Expand only display names; keep the saved prompt and other macros untouched.
@@ -160,7 +161,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const original = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
         const depth = playRoundDepth(round, 'user');
         const sourceSignature = JSON.stringify([original, context?.userName, playground.display?.revision ?? 0, depth]);
-        if (!view.userEditor && view.promptSourceSignature !== sourceSignature) {
+        if (!userEditor && view.promptSourceSignature !== sourceSignature) {
             const text = playground.display?.process(original, roundCharacter(round), context, 'user', depth) ?? original;
             if (view.promptText !== text) renderPlayText(view.userText, text, `${round.id}/user/text`, false, false, { role: 'user', name: identity.name });
             view.promptText = text;
@@ -380,8 +381,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function jumpToMessage(id, role) {
         const view = views.get(id), message = view?.[role];
         if (!visible || !message?.getClientRects().length) return;
-        scrollPlayMessageToTop(feed, message, readingInset(), setFeedScroll, role === 'user' ? view.userEditor
-            : [...view.outputs.values()].find(output => output.editor)?.editor);
+        scrollPlayMessageToTop(feed, message, readingInset(), setFeedScroll, recordEditor(view, role));
         rememberPosition(true, true); updateJump();
     }
     function resizeInput(force = false) {
@@ -427,8 +427,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function updateMessageTops(items, height = feed.clientHeight - readingInset()) {
         const updates = items.map(view => ({ view,
-            userHidden: !playMessageNeedsTop(view.userText, view.userHead, height, view.userEditor),
-            assistantHidden: !playMessageNeedsTop(view.results, view.aiHead, height, [...view.outputs.values()].find(output => output.editor)?.editor) }));
+            userHidden: !playMessageNeedsTop(view.userText, view.userHead, height, recordEditor(view, 'user')),
+            assistantHidden: !playMessageNeedsTop(view.results, view.aiHead, height, recordEditor(view, 'assistant')) }));
         for (const { view, userHidden, assistantHidden } of updates) {
             if (view.userTop.hidden !== userHidden) view.userTop.hidden = userHidden;
             if (view.assistantTop.hidden !== assistantHidden) view.assistantTop.hidden = assistantHidden;
@@ -511,8 +511,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const retry = round && pendingSaveFor(result, job);
             view.stop.hidden = !result || !showPlayReplyStop(job);
             view.stop.dataset.resultId = job.resultId ?? '';
-            view.edit.hidden = !canEditPrompt(round);
-            view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting || isEditing(id);
+            view.edit.hidden = !canEditPrompt(round) || isEditing(id, 'user');
+            view.editReply.hidden = !canEditResult(result) || isEditing(id, 'assistant');
+            view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting || messageEditing.busy;
             view.removePrompt.hidden = view.removeReply.hidden = false;
             view.removePrompt.disabled = !canRemoveMessage(round, 'user', jobs);
             view.removeReply.disabled = !canRemoveMessage(round, 'assistant', jobs);
@@ -532,6 +533,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.branch.disabled = !result || !canEditResult(result) || isEditing(id) || settings.enabled === false;
             view.continueBtn.disabled = !canCont;
             if (round) { updateResultNavigation(round, view); updateFavoriteStar(round, view); updatePromptFavoriteStar(round, view); }
+            if (view.sourceMissing) {
+                for (const tools of [view.userTools, view.replyTools, view.actions, view.userActions]) {
+                    for (const button of tools.querySelectorAll('button')) if (!button.closest('.play-edit-actions')) button.disabled = true;
+                }
+            }
             syncMessageActions(view);
         }
     }
@@ -600,30 +606,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function editPrompt(id) {
         const round = records.get(id)?.round, view = views.get(id);
-        if (!canEditPrompt(round) || !view || view.removing || view.favoriting || isEditing(id)) return;
-        const original = round.prompt;
-        function finish() {
-            keepReading(() => {
-                view.userEditor?.dispose();
-                view.userEditor = null; view.promptText = null; view.promptSourceSignature = null;
-                renderRecord(records.get(id).round, view); updateControls();
-                if (!(rowsByCharacter.get(selected?.id) ?? []).some(row => row.id === id)) renderHistory();
-            }, false, view.user);
-        }
-        const editing = createPlayEditor({ text: original, label: '提示词原文', onCancel: finish,
-            async onSave({ text }) {
-                const updated = await playground.editPrompt(id, text, original);
-                records.set(id, { round: updated });
-                finish();
-                await refresh();
-            },
-        });
-        keepReading(() => {
-            view.userEditor = editing; view.userText.replaceChildren(editing.body);
-            renderRecord(round, view); updateControls(); editing.resize();
-        }, false, view.user);
-        editing.input.focus({ preventScroll: true });
-        revealPlayEditor(feed, editing, readingInset(), setFeedScroll); rememberPosition(false, true); layout();
+        if (!canEditPrompt(round) || !view || view.removing || view.favoriting || messageEditing.busy) return;
+        openMessageEditor(id, 'user');
     }
     function hasPendingSave(job) {
         return job.phase === 'save-failed' || (job.unsaved && job.phase === 'saving');
@@ -678,54 +662,93 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return result && settings.enabled !== false && !['preparing', 'generating', 'retry-wait', 'saving', 'unfinished'].includes(result.status);
     }
     function isEditing(id, role) {
-        const view = views.get(id);
-        return role !== 'assistant' && !!view?.userEditor || role !== 'user' && [...(view?.outputs.values() ?? [])].some(output => output.editor);
+        return !!messageEditing.find('record', id, role);
+    }
+    function recordEditor(view, role, resultId) {
+        return messageEditing.find('record', view.id, role, resultId)?.editor;
     }
     function hasActiveEditor() {
         return [...views].some(([id, view]) => !view.item.hidden && isEditing(id));
     }
     function captureRecordEditors(view) {
-        if (view.userEditor?.input.getClientRects().length) view.userEditorState = view.userEditor.capture();
-        for (const output of view.outputs.values()) if (output.editor?.input.getClientRects().length) output.editorState = output.editor.capture();
+        const session = messageEditing.find('record', view.id);
+        if (session?.editor.input.getClientRects().length) session.state = session.editor.capture();
     }
     function restoreRecordEditors(view) {
-        if (view.userEditorState && view.userEditor?.input.getClientRects().length) { view.userEditor.restore(view.userEditorState); view.userEditorState = null; }
-        for (const output of view.outputs.values()) if (output.editorState && output.editor?.input.getClientRects().length) { output.editor.restore(output.editorState); output.editorState = null; }
+        const session = messageEditing.find('record', view.id);
+        if (session?.state && session.editor.input.getClientRects().length) { session.editor.restore(session.state); session.state = null; }
     }
     const readingInset = getReadingInset;
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
-        if (!canEditResult(result) || !output || view.removing || view.favoriting || isEditing(id)) return;
-        const original = result.text;
-        function finish() {
-            keepReading(() => {
-                output.editor?.dispose();
-                output.editor = null; output.signature = null;
-                renderRecord(records.get(id).round, view); updateControls();
-                if (!(rowsByCharacter.get(selected?.id) ?? []).some(row => row.id === id)) renderHistory();
-            }, false, view.assistant);
-        }
-        const editing = createPlayEditor({ text: original, onCancel: finish,
-            async onSave({ text }) {
-                const updated = await playground.editResult(id, result.id, text, original);
-                if (updated.initialIsLast && updated.initialAssistantId && updated.selectedResultId !== result.id) {
-                    await playground.setMessageVersion(id, updated.initialAssistantId, result.id, updated.selectedResultId);
-                    updated.selectedResultId = result.id;
-                }
-                records.set(id, { round: updated });
-                finish();
-                await refresh();
-            },
-        });
-        keepReading(() => {
-            // A new result from another window must not replace the editor.
-            selections.set(id, result.id);
-            output.editor = editing; output.box.replaceChildren(editing.body);
-            renderRecord(round, view); updateControls(); editing.resize();
-        }, false, view.assistant);
-        editing.input.focus({ preventScroll: true });
-        revealPlayEditor(feed, editing, readingInset(), setFeedScroll); rememberPosition(false, true); layout();
+        if (!canEditResult(result) || !output || view.removing || view.favoriting || messageEditing.busy) return;
+        openMessageEditor(id, 'assistant', result.id);
+    }
+    function openMessageEditor(id, role, resultId) {
+        void messageEditing.open({ key: `record/${id}/${role}/${resultId ?? ''}`, async create() {
+            const round = await playground.getRound(id), view = views.get(id);
+            const result = role === 'assistant' ? round.results.find(item => item.id === resultId) : null;
+            if (!view || view.removing || view.favoriting || (role === 'user' ? !canEditPrompt(round) : !canEditResult(result))) return null;
+            records.set(id, { round });
+            const original = role === 'user' ? round.prompt : result.text;
+            const character = roundCharacter(round);
+            const session = { page: 'record', id, role, resultId, character, view,
+                activate() {
+                    keepReading(() => {
+                        if (resultId) selections.set(id, resultId);
+                        renderRecord(round, view);
+                        updateControls(); session.editor.resize();
+                    }, false, view[role]);
+                    session.editor.input.focus({ preventScroll: true });
+                    revealPlayEditor(feed, session.editor, readingInset(), setFeedScroll); rememberPosition(false, true); layout();
+                },
+                async finish() {
+                    if (role === 'user') { view.promptText = null; view.promptSourceSignature = null; }
+                    else if (view.outputs.has(resultId)) view.outputs.get(resultId).signature = null;
+                    if (!visible || characterKey(selected) !== characterKey(character)) {
+                        session.editor.actions.remove(); session.editor.body.remove();
+                        renderRecord(records.get(id)?.round ?? round, view);
+                        resumeNeedsRefresh = true; return;
+                    }
+                    try {
+                        const updated = await playground.getRound(id);
+                        const message = view[role], area = feed.getBoundingClientRect(), box = message.getBoundingClientRect();
+                        const position = box.bottom > area.top + readingInset() && box.top < area.bottom
+                            ? { bottom: false, anchor: message.querySelector('[data-read-anchor]')?.dataset.readAnchor,
+                                offset: -readPlayElementPosition(feed, message, readingInset()), scrollTop: feed.scrollTop }
+                            : capturePosition(false);
+                        session.editor.actions.remove();
+                        records.set(id, { round: updated });
+                        renderRecord(updated, view); restorePosition(position); rememberPosition(false, true);
+                    } catch (error) { session.editor.actions.remove(); session.editor.body.remove(); view.item.remove(); views.delete(id); records.delete(id); showReadError(error.message); }
+                    await refresh();
+                },
+                async reveal() {
+                    setBrowsing(false);
+                    await chooseCharacter(character, true);
+                    view.item.hidden = false; content.hidden = false; empty.hidden = true;
+                    if (!content.contains(view.item)) content.insertBefore(view.item, laterBar);
+                    restoreRecordEditors(view);
+                    const error = session.editor.error.getBoundingClientRect(), area = feed.getBoundingClientRect();
+                    if (error.bottom > area.bottom) setFeedScroll(feed.scrollTop + error.bottom - area.bottom);
+                    else if (error.top < area.top + readingInset()) setFeedScroll(feed.scrollTop + error.top - area.top - readingInset());
+                },
+            };
+            session.editor = createPlayEditor({ text: original, label: role === 'user' ? '提示词原文' : '回复原文',
+                onSubmit: () => messageEditing.save(session), onCancel: () => messageEditing.cancel(session),
+                async onSave({ text }) {
+                    const updated = role === 'user' ? await playground.editPrompt(id, text, original)
+                        : await playground.editResult(id, resultId, text, original);
+                    if (role === 'assistant' && updated.initialIsLast && updated.initialAssistantId && updated.selectedResultId !== resultId) {
+                        await playground.setMessageVersion(id, updated.initialAssistantId, resultId, updated.selectedResultId);
+                        updated.selectedResultId = resultId;
+                    }
+                    records.set(id, { round: updated });
+                },
+            });
+            return session;
+        } });
     }
     function header(character, time, anchor, role = 'assistant') {
         const head = element('header', undefined, `play-message-meta play-${role}-meta`);
@@ -785,11 +808,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             onStop: () => playground.stop(stop.dataset.resultId), onTop: () => jumpToMessage(round.id, 'assistant'),
         });
         assistant.append(aiHead.head, results, actions); item.append(userMessage, assistant);
-        return { item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
+        return { id: round.id, item, user: userMessage, assistant, userText, userHead: userHead.head, userHeader: userHead, userSignature: JSON.stringify(user), aiHead: aiHead.head, userActions, actions, userTop, assistantTop,
             userTools, userMore, replyTools, replyMore, prompt, userFavorite, favorite, branch, removePrompt, removeReply, generate, time: aiHead.date, speaker: aiHead.speaker, results, error, edit, editReply, again, continueBtn, stop, swipes, prev, count, next, outputs: new Map() };
     }
     function selectedResult(round) {
-        const editingId = [...(views.get(round.id)?.outputs ?? [])].find(([, output]) => output.editor)?.[0];
+        const editingId = messageEditing.find('record', round.id, 'assistant')?.resultId;
         return round.results.find(result => result.id === (editingId ?? round.selectedResultId ?? selections.get(round.id))) ?? round.results.at(-1);
     }
     async function branchFromRound(id) {
@@ -819,11 +842,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return { box, signature: null };
     }
     function renderRecord(round, view) {
+        const userEditor = recordEditor(view, 'user'), replyEditor = recordEditor(view, 'assistant');
+        placePlayEditorActions(view.userTools, view.edit, userEditor);
+        placePlayEditorActions(view.replyTools, view.editReply, replyEditor);
+        if (userEditor && !view.userText.contains(userEditor.body)) view.userText.replaceChildren(userEditor.body);
         updateUserMessage(round, view);
         const ids = new Set(round.results.map(result => result.id));
         // Keep an open draft even if another window replaced its source result.
         // Cancelling then renders the new result; saving reports the missing source.
-        if ([...view.outputs].some(([id, output]) => output.editor && !ids.has(id))) { restoreRecordEditors(view); return; }
+        if (replyEditor && !ids.has(messageEditing.find('record', round.id, 'assistant').resultId)) { restoreRecordEditors(view); return; }
         for (const [id, output] of view.outputs) {
             if (!ids.has(id)) { output.box.remove(); view.outputs.delete(id); }
         }
@@ -838,7 +865,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         for (const [id, output] of view.outputs) if (output.box.hidden !== (id !== result.id)) output.box.hidden = id !== result.id;
         const output = view.outputs.get(result.id);
-        view.editReply.hidden = !canEditResult(result);
+        view.editReply.hidden = !canEditResult(result) || !!replyEditor;
         updateFavoriteStar(round, view);
         const job = playground.getState(result.id);
         const depth = playRoundDepth(round);
@@ -847,8 +874,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             output.displayText = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', depth) ?? result.text;
             output.sourceSignature = sourceSignature;
         }
+        if (replyEditor && !output.box.contains(replyEditor.body)) output.box.replaceChildren(replyEditor.body);
         renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error,
-            name: roundCharacter(round).name, anchor: `${round.id}/assistant/${result.id}`, editing: !!output.editor });
+            name: roundCharacter(round).name, anchor: `${round.id}/assistant/${result.id}`, editing: !!replyEditor });
         view.swipes.hidden = false;
         updateResultNavigation(round, view);
         view.count.disabled = isEditing(round.id) || !!view.removing;
@@ -950,7 +978,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const { start, end } = historyRange(rows, key);
         const visibleRows = rows.slice(start, end);
         const visibleIds = new Set(visibleRows.map(row => row.id));
-        for (const [id] of views) if (isEditing(id) && records.get(id)?.round.characterId === selected?.id && !rows.some(row => row.id === id)) visibleIds.add(id);
+        for (const [id, view] of views) {
+            view.sourceMissing = isEditing(id) && records.get(id)?.round.characterId === selected?.id && !rows.some(row => row.id === id);
+            if (view.sourceMissing) visibleIds.add(id);
+        }
         let retainedFrames = 0;
         for (const [id, view] of views) {
             const retainFrame = !visibleIds.has(id) && !!view.item.querySelector('iframe') && retainedFrames++ < historyPageSize;
@@ -1067,8 +1098,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         });
         return request.promise;
     }
-    async function chooseCharacter(character) {
+    async function chooseCharacter(character, internal = false) {
+        if (!internal && messageEditing.busy) return;
         if (characterKey(selected) === characterKey(character)) { if (mobile.matches) setBrowsing(false); return; }
+        for (const view of views.values()) captureRecordEditors(view);
         latestRequest = null; pendingReveal = null;
         closeResults(false); rememberPosition(); selected = character;
         displayedCharacter = '';
@@ -1289,11 +1322,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             resizeObserver.observe(page); resizeObserver.observe(content); resizeObserver.observe(people); resizeObserver.observe(compose);
             updateControls(); updateComposer(); layout();
         },
-        refresh, layout,
+        refresh, layout, updateEditing: updateControls,
         getSelectedCharacter: () => selected,
         prepareLayout() { if (visible) { closeResults(false); for (const view of views.values()) captureRecordEditors(view); rememberPosition(true, false); saveViewState(); } },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
-        canLeave: () => ![...views.values()].some(view => view.removing || view.userEditor?.saving || [...view.outputs.values()].some(output => output.editor?.saving)),
+        canLeave: ({ ignoreEditing = false } = {}) => (ignoreEditing || !messageEditing.busy) && ![...views.values()].some(view => view.removing),
         async fillFromEntry(entry) {
             await refresh(); if (!selected || !canWrite()) return false;
             browsing = false;

@@ -46,11 +46,11 @@ async function setKeyboard(page, height = null) {
 }
 
 async function verifyGeometry(panel, editor, actions) {
-    const feed = await panel.locator('.play-feed').boundingBox(), box = await editor.boundingBox(), form = await editor.locator('..').boundingBox();
+    const feed = await panel.locator('.play-feed').boundingBox(), box = await editor.boundingBox(), head = await actions.locator('..').boundingBox();
     assert.ok(box.height <= await editor.evaluate(node => parseFloat(getComputedStyle(node).maxHeight)) + 1, '编辑框遵循酒馆的高度上限');
     for (const name of ['保存', '取消']) {
         const action = await actions.getByRole('button', { name, exact: true }).boundingBox();
-        assert.ok(action.y >= form.y && action.y + action.height <= box.y + 1 && action.x >= box.x && action.x + action.width <= box.x + box.width, `${name}在编辑框右上角：${JSON.stringify({ feed, box, action })}`);
+        assert.ok(action.y >= head.y && action.y + action.height <= box.y + 1 && action.x >= box.x && action.x + action.width <= box.x + box.width, `${name}在消息头部：${JSON.stringify({ feed, box, action })}`);
     }
 }
 
@@ -134,7 +134,7 @@ async function verifyEditing(page, url, viewport) {
             const feed = await panel.locator('.play-feed').boundingBox();
             for (const name of ['保存', '取消']) {
                 const box = await actions.getByRole('button', { name, exact: true }).boundingBox();
-                assert.ok(box.y >= (await editor.locator('..').boundingBox()).y && box.y + box.height <= (await editor.boundingBox()).y + 1, '滚动后保存和取消随整条消息移动，仍在编辑框右上角');
+                assert.ok(box.y >= (await actions.locator('..').boundingBox()).y && box.y + box.height <= (await editor.boundingBox()).y + 1, '滚动后保存和取消随整条消息移动，仍在消息头部');
             }
             await page.setViewportSize(viewport); await settle(page);
         } else {

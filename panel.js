@@ -7,6 +7,7 @@ import { renderDiagnostics } from './diagnostics-view.js';
 import { showSentPromptViewer } from './play-sent-prompt-view.js';
 import { createPlayView } from './play-view.js';
 import { createPlayChatView } from './play-chat-view.js';
+import { createPlayMessageEditing } from './play-message-editing.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
 import { createPlayFavoriteComposer } from './play-favorite-composer.js';
 import { createPlayApiSettings, renderPlayChatSetting, renderPlayRetrySettings, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
@@ -58,7 +59,7 @@ function createMobileNavigation(panel, media) {
     }
     function readingArea(target) {
         if (!isReading() || !(target instanceof Element)) return null;
-        if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form')) return null;
+        if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form, .play-edit-actions')) return null;
         const area = target.closest('.tea-list, .play-feed, .play-people');
         return area && panel.contains(area) && area.getClientRects().length
             && (offset > 0 || area.scrollHeight > area.clientHeight + 1) ? area : null;
@@ -234,11 +235,26 @@ export function createTheatrePanel(ctx, state, actions) {
     }]));
     const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
+    const messageEditing = createPlayMessageEditing({
+        onChange: () => { playView?.updateEditing(); chatView?.updateEditing(); },
+        onError: error => showMessage(error.message),
+        async onReveal(session) {
+            if (messageEditing.current !== session || busy || confirming || favoriteComposer?.canLeave() === false
+                || playView?.canLeave({ ignoreEditing: true }) === false || chatView?.canLeave({ ignoreEditing: true }) === false
+                || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return;
+            playView?.prepareLayout(); chatView?.prepareLayout();
+            scope = 'play'; mode = 'list'; playRoute = session.page === 'record' ? 'play' : 'chat';
+            render();
+            await session.reveal();
+            mobileNavigation?.sync(scope);
+        },
+    });
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
-        { getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
+        { messageEditing, getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
             onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt,
             onBrowsing: updateCharacterBrowsing });
     const getChatView = () => chatView ??= createPlayChatView(ctx, state.settings, actions.playground, actions.promptFavorites, {
+        messageEditing,
         onInspectPrompt: inspectPrompt,
         notify: showMessage, onOpen: (id, messageId) => void enterBranch(id, messageId),
         getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
@@ -387,7 +403,7 @@ export function createTheatrePanel(ctx, state, actions) {
             { okButton: actionLabel, cancelButton: '取消' }) === ctx().POPUP_RESULT.AFFIRMATIVE;
     }
     async function canLeave() {
-        if (busy || confirming || favoriteComposer?.canLeave() === false || playView?.canLeave() === false || chatView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
+        if (messageEditing.busy || busy || confirming || favoriteComposer?.canLeave() === false || playView?.canLeave() === false || chatView?.canLeave() === false || [...favoriteReaders.values()].some(reader => !reader.canLeave())) return false;
         if (favoriteComposer?.dirty()) {
             confirming = true;
             try { return await confirm('收藏有未保存的内容，确定放弃吗？', '放弃添加'); }

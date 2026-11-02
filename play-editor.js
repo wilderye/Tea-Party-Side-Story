@@ -1,7 +1,7 @@
 import { element, glyph, iconButton } from './ui.js';
 
 /** Inline source editor shared by messages and saved performances. */
-export function createPlayEditor({ text, title, label = title === undefined ? '回复原文' : '收藏内容', autoGrow = true, onSave, onCancel }) {
+export function createPlayEditor({ text, title, label = title === undefined ? '回复原文' : '收藏内容', autoGrow = true, onSave, onSubmit, onCancel }) {
     const body = element('div', undefined, 'play-edit-form');
     body.setAttribute('role', 'group'); body.setAttribute('aria-label', title === undefined ? `编辑${label}` : '编辑收藏');
     const input = element('textarea'); input.value = text; input.spellcheck = false; input.rows = 2;
@@ -27,7 +27,14 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     }) : null;
     observer?.observe(body);
     if (autoGrow && !nativeSizing) input.addEventListener('input', resize);
-    const editor = { body, actions, input, titleInput, saving: false,
+    let savingTask = null;
+    const editor = { body, actions, input, titleInput, error,
+        get saving() { return savingTask !== null; },
+        save() {
+            if (savingTask) return savingTask;
+            savingTask = performSave().finally(() => { savingTask = null; });
+            return savingTask;
+        },
         resize() { if (autoGrow && !nativeSizing) resize(); },
         capture() { return { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection, scroll: input.scrollTop }; },
         restore(state) {
@@ -36,22 +43,21 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
         },
         scrollToTop() { input.scrollTop = 0; },
         dispose: () => observer?.disconnect() };
-    const cancel = iconButton('close', '取消', onCancel);
-    const save = iconButton('check', '保存', async () => {
-        if (editor.saving) return;
-        editor.saving = true; input.disabled = true; save.disabled = true; cancel.disabled = true; error.hidden = true;
+    const cancel = iconButton('close', '取消', () => { if (!editor.saving) onCancel(); });
+    const save = iconButton('check', '保存', () => onSubmit ? onSubmit() : editor.save());
+    async function performSave() {
+        input.disabled = true; save.disabled = true; cancel.disabled = true; error.hidden = true;
         if (titleInput) titleInput.disabled = true;
         save.setAttribute('aria-busy', 'true'); save.title = '正在保存'; save.replaceChildren(glyph('refresh'));
-        try { await onSave({ text: input.value, ...(titleInput ? { title: titleInput.value } : {}) }); }
-        catch (cause) { error.textContent = cause.message; error.hidden = false; }
+        try { await onSave({ text: input.value, ...(titleInput ? { title: titleInput.value } : {}) }); return true; }
+        catch (cause) { error.textContent = cause.message; error.hidden = false; return false; }
         finally {
-            editor.saving = false; input.disabled = false; save.disabled = false; cancel.disabled = false;
+            input.disabled = false; save.disabled = false; cancel.disabled = false;
             if (titleInput) titleInput.disabled = false;
             save.setAttribute('aria-busy', 'false'); save.title = '保存'; save.replaceChildren(glyph('check'));
         }
-    });
+    }
     save.classList.add('play-edit-save'); actions.append(save, cancel);
-    if (title === undefined) body.append(actions);
     body.append(input, error);
     return editor;
 }

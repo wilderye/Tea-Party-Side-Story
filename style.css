@@ -535,7 +535,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-menu summary { list-style:none; cursor:pointer; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-menu summary::-webkit-details-marker { display:none; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-menu .tea-sort-menu { top:auto; bottom:calc(100% + 8px); left:0; right:auto; z-index:6; }
-:is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message { padding:0; margin-bottom:32px; }
+:is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message { margin-bottom:32px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed>.play-feed-content>.play-message:last-child { margin-bottom:0; }
 :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message-actions>button:not(.tea-icon) { grid-column:1/-1; }
 :is(#teahouse-panel,.tea-panel-surface) .play-delete-selected { background:var(--tea-accent-fill,#ed80692a); }
@@ -577,7 +577,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-feed-content { display:flow-root; flex:none; width:100%; max-width:840px; margin:0 auto; padding:30px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-record { margin:0; padding:0; border:0; background:none; border-radius:0; }
 :is(#teahouse-panel,.tea-panel-surface) .play-message { --play-message-inset:24px; position:relative; padding:18px var(--play-message-inset) 12px; }
-:is(#teahouse-panel,.tea-panel-surface) .play-record>.play-message { --play-message-inset:0px; padding:0; margin:0 0 34px; }
+:is(#teahouse-panel,.tea-panel-surface) :is(.play-record>.play-message,.play-chat-feed .play-message) { --play-message-inset:0px; padding:0; }
+:is(#teahouse-panel,.tea-panel-surface) .play-record>.play-message { margin:0 0 34px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-record:nth-last-child(1 of .play-record:not([hidden]))>.play-message:nth-last-child(1 of .play-message:not([hidden])) { margin-bottom:0; }
 :is(#teahouse-panel,.tea-panel-surface) .play-message-meta { display:flex; align-items:center; gap:13px; margin-bottom:17px; min-height:46px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-message-meta::after { content:''; flex:1; order:2; height:1px; min-height:1px; max-height:1px; min-width:12px; margin:0; padding:0; border:0; box-shadow:none; background:var(--tea-subtle-line,#e5e3d5); }
@@ -751,7 +752,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-edit-form textarea { display:block; width:calc(100% + 2 * var(--play-message-inset)); min-width:0; max-width:none; min-height:calc(3.7em + 24px); height:auto; max-height:75vh; max-height:75dvh; margin:0 calc(-1 * var(--play-message-inset))!important; padding:12px var(--play-message-inset)!important; border-radius:0!important; resize:vertical; overflow:auto; font:max(16px,var(--tea-body-size))/1.85 var(--tea-ui); white-space:pre-wrap; }
 :is(#teahouse-panel,.tea-panel-surface) .play-edit-form.is-native-sized textarea { field-sizing:content; }
 :is(#teahouse-panel,.tea-panel-surface) .play-edit-actions { display:flex; align-items:center; gap:6px; }
-:is(#teahouse-panel,.tea-panel-surface) .play-reading-area .play-edit-form > .play-edit-actions { justify-content:flex-end; width:calc(100% + 2 * var(--play-message-inset)); min-height:48px; margin:0 calc(-1 * var(--play-message-inset)); padding:0 4px; background:var(--play-input-paper); }
+:is(#teahouse-panel,.tea-panel-surface) .play-feed .play-edit-form textarea { width:100%; margin:0!important; padding:12px!important; }
 :is(#teahouse-panel,.tea-panel-surface) .play-edit-actions .play-edit-save { color:var(--tea-heading,var(--tea-forest))!important; }
 :is(#teahouse-panel,.tea-panel-surface) :is(.play-edit-save,.play-regex-toolbar button)[aria-busy=true] svg { animation:tea-update-spin 1s linear infinite; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-icon.play-in-plugin { width:44px; height:44px; min-width:44px; }
@@ -843,7 +844,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-topbar { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-reading-area { --play-prose-leading:1.73; --play-paragraph-gap:.72em; }
     :is(#teahouse-panel,.tea-panel-surface) .play-feed { scrollbar-gutter:auto; scroll-padding-top:44px; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-feed-content { padding:66px 19px 24px; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-feed-content { padding:66px 28px 24px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-message { --play-message-inset:10px; padding:12px var(--play-message-inset) 6px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-record>.play-message { margin-bottom:22px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message { margin-bottom:24px; }
@@ -891,6 +892,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-count { gap:4px; }
 }
 @media(prefers-reduced-motion:reduce) { :is(#teahouse-panel,.tea-panel-surface) .play-waiting::after,:is(#teahouse-panel,.tea-panel-surface) :is(.play-edit-save,.play-regex-toolbar button) svg { animation:none!important; } }
+:is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-header-actions .play-edit-actions .tea-icon { width:44px; min-width:44px; height:44px; }
+:is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-header-actions .play-edit-actions .tea-icon::before { content:none; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-log-controls { display:flex; flex-wrap:wrap; gap:8px 20px; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-log-controls button { min-height:36px; text-decoration:underline; text-underline-offset:4px; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-log-list { height:360px; max-height:50dvh; margin-top:12px; padding:12px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--tea-scrollbar,#b7c2b4) transparent; overflow-anchor:none; border:1px solid var(--tea-line); border-radius:6px; background:var(--tea-field-paper,#ffffff80); font:12px/1.7 var(--tea-ui); }

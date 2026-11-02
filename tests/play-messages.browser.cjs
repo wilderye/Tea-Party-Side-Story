@@ -237,9 +237,9 @@ async function verifyEditPosition(page, url, viewport) {
                 if (long && finish === '取消') await screenshot(page, `edit-${role}-after-${viewport.width}.png`);
                 if (viewport.width <= 760) {
                     const bounds = await feed.boundingBox(), editorBounds = await editor.boundingBox();
-                    const saveBounds = await record.locator('.play-edit-form').getByRole('button', { name: '保存', exact: true }).boundingBox();
+                    const saveBounds = await record.locator('.play-edit-actions').getByRole('button', { name: '保存', exact: true }).boundingBox();
                     assert.ok(during.head >= bounds.y && saveBounds.y + saveBounds.height <= bounds.y + bounds.height + 1,
-                        '手机进入编辑时露出消息头部及编辑框右上角的按钮');
+                        '手机进入编辑时露出消息头部的保存和取消按钮');
                     assert.ok(editorBounds.height <= viewport.height * .75 + 1, '长文编辑沿用酒馆高度上限，正文仍可滚动');
                 } else {
                     assert.ok(Math.abs(during.head - before.head) < 2 && Math.abs(during.body - before.body) < 2,
@@ -252,7 +252,7 @@ async function verifyEditPosition(page, url, viewport) {
                     await editor.evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, text + '\n本次保存。');
                     await settle();
                 }
-                await record.locator('.play-edit-form').getByRole('button', { name: finish, exact: true }).click();
+                await record.locator('.play-edit-actions').getByRole('button', { name: finish, exact: true }).click();
                 await editor.waitFor({ state: 'detached' }); await settle();
                 const afterFinish = await metrics(head);
                 assert.ok(Math.abs(afterFinish.head - before.head) < 2, `${viewport.width} ${role} ${long ? '长' : '短'}消息 ${finish}后消息标题仍在原位置：${JSON.stringify({ before, during, afterFinish })}`);
@@ -274,14 +274,14 @@ async function verifyEditPosition(page, url, viewport) {
         if (viewport.width <= 760) {
             const bounds = await feed.boundingBox();
             for (const name of ['保存', '取消']) {
-                const action = await last.locator('.play-edit-form').getByRole('button', { name, exact: true }).boundingBox();
+                const action = await last.locator('.play-edit-actions').getByRole('button', { name, exact: true }).boundingBox();
                 assert.ok(action.y >= bounds.y && action.y + action.height <= bounds.y + bounds.height,
                     '手机在末尾编辑也露出保存和取消按钮');
             }
         } else {
             assert.ok(Math.abs(after.head - before.head) < 2, `停在末尾时编辑 ${role} 不自动回到消息顶部：${JSON.stringify({ before, after })}`);
         }
-        await last.locator('.play-edit-form').getByRole('button', { name: '取消', exact: true }).click(); await settle();
+        await last.locator('.play-edit-actions').getByRole('button', { name: '取消', exact: true }).click(); await settle();
         if (viewport.width <= 760) assert.ok(Math.abs((await metrics(head)).head - before.head) < 2, '手机退出编辑后回到原阅读位置');
     }
 }

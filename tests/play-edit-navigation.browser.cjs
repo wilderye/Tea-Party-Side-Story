@@ -207,7 +207,7 @@ async function verify(page, url, viewport, mode) {
     await button(scope, '停止所有生成').click(); await page.waitForFunction(() => runtime.getStates().length === 0);
     assert.equal(await composer.inputValue(), '下一条尚未发送的草稿');
     assert.ok((await anotherEditor.inputValue()).endsWith('生成期间的草稿'));
-    await button(previous.locator('.play-edit-form'), '取消').click();
+    await button(previous.locator('.play-header-actions .play-edit-actions'), '取消').click();
     const source = await previous.evaluate(node => ({ id: node.dataset.messageId ?? node.closest('[data-record]').dataset.record }));
     await align(page, previous); await clickWithoutScroll(page, button(previous, '编辑回复原文'));
     await anotherEditor.evaluate(node => { node.value += '\n来源删除后保留的草稿'; node.dispatchEvent(new Event('input', { bubbles: true })); node.setSelectionRange(5, 15); node.scrollTop = 110; });
@@ -219,9 +219,9 @@ async function verify(page, url, viewport, mode) {
     }, { mode, id: source.id, chatId: ids.id });
     await settle(page); await anotherEditor.waitFor();
     assert.deepEqual(await inputState(anotherEditor), missingState, '来源删除后保留可读取的原草稿');
-    await button(previous.locator('.play-edit-form'), '保存').click(); await previous.getByRole('alert').waitFor();
+    await button(previous.locator('.play-header-actions .play-edit-actions'), '保存').click(); await previous.getByRole('alert').waitFor();
     assert.equal(await anotherEditor.inputValue(), missingState.value, '来源缺失时保存报错且不覆盖草稿');
-    await button(previous.locator('.play-edit-form'), '取消').click(); await anotherEditor.waitFor({ state: 'detached' });
+    await button(previous.locator('.play-header-actions .play-edit-actions'), '取消').click(); await anotherEditor.waitFor({ state: 'detached' });
     assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(), 0);
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', navigation: 'available', stop: 'independent', passed: true }));

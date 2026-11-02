@@ -88,3 +88,5 @@ README.md
 !tests/play-identity.test.js
 !tests/play-identity.browser.cjs
 !tests/play-edit-navigation.browser.cjs
+!tests/play-message-editing.test.js
+!tests/play-message-editing.browser.cjs

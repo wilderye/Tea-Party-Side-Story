@@ -66,9 +66,9 @@ async function verify(page, url, viewport, nativeSizing) {
         }
         await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
         assert.ok((await editor.boundingBox()).height < 150, '手机与桌面短文都按内容显示紧凑编辑框');
-        const field = await editor.boundingBox(), form = await item.locator('.play-edit-form').boundingBox(), actions = await item.locator('.play-edit-actions').boundingBox();
-        assert.ok(actions.y >= form.y && actions.y + actions.height <= field.y + 1 && field.x + field.width - actions.x - actions.width < 40,
-            '保存和取消统一放在编辑框内部右上角');
+        const field = await editor.boundingBox(), head = await meta.boundingBox(), actions = await item.locator('.play-edit-actions').boundingBox();
+        assert.ok(actions.y >= head.y && actions.y + actions.height <= head.y + head.height + 1 && actions.y + actions.height <= field.y + 1,
+            '保存和取消位于消息头部');
         assert.equal(await editor.evaluate(node => getComputedStyle(node).fieldSizing === 'content'), nativeSizing);
         await screenshot(page, `branch-${role}-short-${viewport.width}-${nativeSizing}.png`);
         await editor.fill(longText); await settle(page);
@@ -105,7 +105,7 @@ async function verify(page, url, viewport, nativeSizing) {
             assert.ok((await editor.boundingBox()).height <= keyboardHeight * .75 + 1, '布局视口缩小时沿用酒馆 75dvh 上限');
             await page.setViewportSize(viewport); await settle(page);
         }
-        await button(item.locator('.play-edit-form'), '取消').click(); await settle(page);
+        await button(item.locator('.play-header-actions .play-edit-actions'), '取消').click(); await settle(page);
         if (mobile) {
             assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
             assert.equal(await scope.locator('.play-chat-heading').isVisible(), true);
@@ -114,10 +114,10 @@ async function verify(page, url, viewport, nativeSizing) {
         await button(item, name).click(); assert.equal(await editor.inputValue(), original, '取消不修改原文');
         const text = role === 'user' ? '清晨，他重新泡了一壶茶。' : '她推开窗，看见雨后的第一缕阳光。';
         await editor.fill(text); await page.evaluate(() => { window.failSave = true; });
-        await button(item.locator('.play-edit-form'), '保存').click(); await item.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
+        await button(item.locator('.play-header-actions .play-edit-actions'), '保存').click(); await item.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
         assert.equal(await editor.inputValue(), text);
         if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
-        await page.evaluate(() => { window.failSave = false; }); await button(item.locator('.play-edit-form'), '保存').click();
+        await page.evaluate(() => { window.failSave = false; }); await button(item.locator('.play-header-actions .play-edit-actions'), '保存').click();
         await editor.waitFor({ state: 'detached' }); await item.getByText(text, { exact: true }).waitFor();
         if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
         assert.equal(await draft.inputValue(), '尚未发送的草稿。');
@@ -192,10 +192,10 @@ async function verifyOperations(page, url, viewport) {
     assert.equal(await userEditor.inputValue(), '生成期间改过的旧用户消息');
     assert.equal(await latest.locator('.play-stop').isVisible(), true, '编辑期间仍可停止当前生成');
     await screenshot(page, `branch-generating-edit-${viewport.width}.png`);
-    await button(firstUser.locator('.play-edit-form'), '保存').click(); await userEditor.waitFor({ state: 'detached' });
+    await button(firstUser.locator('.play-edit-actions'), '保存').click(); await userEditor.waitFor({ state: 'detached' });
     await button(firstAi, '编辑回复原文').click();
     await firstAi.getByRole('textbox', { name: '回复原文', exact: true }).fill('生成期间改过的旧 AI 消息');
-    await button(firstAi.locator('.play-edit-form'), '保存').click();
+    await button(firstAi.locator('.play-edit-actions'), '保存').click();
     await firstAi.getByText('生成期间改过的旧 AI 消息', { exact: true }).waitFor();
     await button(firstAi, '更多回复操作').click(); await button(firstAi, '隐藏楼层').click();
     await firstAi.locator('.play-hidden-mark').waitFor({ state: 'attached' });

@@ -96,8 +96,14 @@ export function revealPlayEditor(feed, editor, inset, setScroll) {
     const field = editor.input.getBoundingClientRect(), area = feed.getBoundingClientRect();
     const actions = editor.actions.getBoundingClientRect();
     const line = parseFloat(getComputedStyle(editor.input).lineHeight) || 30;
-    if (field.top + line > area.bottom) setScroll(feed.scrollTop + field.top + line - area.bottom);
-    else if (actions.bottom < area.top + inset) setScroll(feed.scrollTop + actions.top - area.top - inset);
+    const top = area.top + inset;
+    if (actions.top < top) setScroll(feed.scrollTop + actions.top - top);
+    else if (field.top + line > area.bottom) setScroll(feed.scrollTop + field.top + line - area.bottom);
+}
+
+export function placePlayEditorActions(tools, edit, editor) {
+    if (editor && editor.actions.parentElement !== tools) tools.insertBefore(editor.actions, edit);
+    edit.hidden = !!editor;
 }
 
 export function syncPlayReplyFooter(view) {
