@@ -89,6 +89,7 @@ async function main() {
                 await page.goto(url);await page.waitForFunction(()=>window.ready);
                 assert.equal(await page.title(),'正文与网页显示验证');
                 assert.equal(await page.evaluate(()=>diag.read().count),0,await page.evaluate(()=>diag.export()));
+                await testWrappedHtmlReply(page,directory,viewport);
                 await testReviewFixes(page);
                 await testHiddenHeight(page);
                 const original='<abstract>原来的摘要内容</abstract>\n\n<div>状态卡片</div>\n\n**后面的粗体**\n\n<style>.red{color:rgb(198,30,40)}</style><span class="red">红字</span> <ruby>茶<rt>chá</rt></ruby> :smile:';
@@ -269,6 +270,59 @@ async function testLifecycle(browser,url) {
     await hidden.evaluate(()=>document.getElementById('output').hidden=false);
     await hidden.waitForFunction(()=>runs===1);
     await hidden.close();console.log('Replacement, hiding, teardown, integrity and execution failure checks passed');
+}
+async function testWrappedHtmlReply(page,directory,viewport) {
+    const html='<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1.0">\n<style>body{margin:0;padding:16px}#wrapped-text{color:rgb(12,34,56)}</style>\n</head>\n<body>\n<div id="wrapped-text">网页正文</div>\n<button id="wrapped-next">翻页</button>\n<script>document.getElementById("wrapped-next").onclick=()=>document.getElementById("wrapped-text").textContent="第二页";</script>\n</body>\n</html>';
+    const opening='<content>\n```html\n', summary='<details><summary>摘要</summary>\n<span id="wrapped-summary">模拟摘要</span>\n</details>';
+    const source=opening+html+'\n```\n\n</content>\n\n'+summary;
+    const parts=await page.evaluate(source=>split(source),source);
+    assert.deepEqual(parts.map(part=>part.type),['prose','web','prose']);
+    assert.equal(parts[0].text,'<content>\n');
+    assert.equal(parts[1].text,html+'\n');
+    assert.equal(parts[2].text,'\n</content>\n\n'+summary);
+    await page.evaluate(async text=>{
+        const {renderPlayReply}=await import('/play-message-ui.js');
+        window.wrappedOutput={box:document.getElementById('output')};
+        window.wrappedError=document.createElement('p');
+        window.renderWrapped=(text,status)=>renderPlayReply(wrappedOutput,{text,status},{displayText:text,error:wrappedError,anchor:'wrapped',name:'测试角色'});
+        renderWrapped(text,'generating');
+    },opening+html);
+    assert.equal(await page.locator('iframe').count(),0);
+    await page.evaluate(source=>renderWrapped(source,'complete'),source);
+    const frame=page.frameLocator('iframe');
+    await frame.getByRole('button',{name:'翻页'}).click();
+    assert.equal(await page.locator('iframe').count(),1);
+    assert.equal(await frame.locator('#wrapped-text').innerText(),'第二页');
+    assert.equal(await frame.locator('#wrapped-text').evaluate(node=>getComputedStyle(node).color),'rgb(12, 34, 56)');
+    assert.equal(await frame.locator('details').count(),0);
+    assert.equal(await page.locator('#output pre').count(),0);
+    assert.equal(await page.locator('#output').evaluate(node=>node.textContent.includes('```')),false);
+    await page.locator('#output summary').click();
+    assert.equal(await page.locator('#output details').getAttribute('open'),'');
+    assert.equal(await page.locator('#wrapped-summary').innerText(),'模拟摘要');
+    await page.locator('#output summary').click();
+    assert.equal(await page.locator('#output details').getAttribute('open'),null);
+    if(process.env.TEA_QA_DIR){await fs.mkdir(process.env.TEA_QA_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.TEA_QA_DIR,`wrapped-html-${path.basename(directory)}-${viewport.width}.png`)});}
+    for(const gap of ['', '\n']) {
+        const source=opening+html+'\n```\n'+gap+'</content>\n\n'+summary;
+        for(const status of ['complete','stopped','failed']) {
+            await page.evaluate(({source,status})=>renderWrapped(source,status),{source,status});
+            await page.frameLocator('iframe').getByRole('button',{name:'翻页'}).click();
+            assert.equal(await page.frameLocator('iframe').locator('#wrapped-text').innerText(),'第二页');
+            assert.equal(await page.locator('#output details').count(),1);
+        }
+    }
+    const boundaries=await page.evaluate(()=>[
+        '<content>\n```text\n<script>window.exampleExecuted=true</script>\n```\n</content>',
+        '```text\n<content>\n```html\n<script>window.exampleExecuted=true</script>\n```\n</content>\n```',
+        '````text\n<content>\n```html\n<script>window.exampleExecuted=true</script>\n```\n</content>\n````',
+        '<!--\n<content>\n```html\n<script>window.exampleExecuted=true</script>\n```\n</content>\n-->',
+        '<textarea>\n\n<content>\n```html\n<script>window.exampleExecuted=true</script>\n```\n</content>\n</textarea>',
+        '<template>\n\n<content>\n```html\n<script>window.exampleExecuted=true</script>\n```\n</content>\n</template>',
+        '    <content>\n    ```html\n    <script>window.exampleExecuted=true</script>\n    ```\n    </content>',
+    ].map(source=>split(source).map(part=>part.type)));
+    assert.deepEqual(boundaries,Array.from({length:7},()=>['prose']));
+    await page.evaluate(()=>{renderText('清理测试内容');delete window.wrappedOutput;delete window.wrappedError;delete window.renderWrapped;});
 }
 async function testReviewFixes(page) {
     await page.route('**/review-event-image', route=>route.fulfill({status:404,body:''}));

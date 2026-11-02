@@ -5,6 +5,16 @@ import { element } from './ui.js';
 import { recordViewEvent } from './view-diagnostics.js';
 
 const parser = new MarkdownIt({ html: true });
+parser.block.ruler.before('html_block', 'tea_content_marker', (state, startLine, endLine, silent) => {
+    const start = state.bMarks[startLine] + state.tShift[startLine];
+    if (!/^<\/?content>\s*$/.test(state.src.slice(start, state.eMarks[startLine]))) return false;
+    if (silent) return true;
+    const token = state.push('html_block', '', 0);
+    token.block = true; token.map = [startLine, startLine + 1];
+    token.content = state.getLines(startLine, startLine + 1, state.blkIndent, true);
+    state.line = startLine + 1;
+    return true;
+});
 const htmlStart = /^(?:html|head|body|style|script|section|article|main|div|details|table|span|button|form|p|ul|ol|h[1-6])$/i;
 const frameSizes = new WeakMap();
 const frameJobs = new WeakMap();
