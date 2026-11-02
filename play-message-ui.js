@@ -67,14 +67,8 @@ export function createPlayReplyActions({ onPrevious, onNext, onChoose, onAgain, 
     return { actions, actionGroup, again, continueBtn, swipes, prev, next, count, stop, assistantTop };
 }
 
-export function showPlayReplyStop(job) {
-    return playJobCanStop(job);
-}
-
-export function createPlayStopAll(onStop) {
-    const button = iconButton('stop', '停止所有生成', onStop);
-    button.classList.add('play-stop', 'play-stop-all'); button.hidden = true;
-    return { button, update(jobs) { button.hidden = !jobs.some(playJobCanStop); } };
+export function showPlayReplyStop(job, multipleActive) {
+    return !!multipleActive && playJobCanStop(job);
 }
 
 export function createPlayMessageTop(onTop) {

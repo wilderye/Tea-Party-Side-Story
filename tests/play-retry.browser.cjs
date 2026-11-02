@@ -64,13 +64,13 @@ async function verifyStreaming(page, url, viewport) {
     async function checkStream(surface, label) {
         await surface.getByText(retryText, { exact: true }).waitFor();
         assert.equal(await page.evaluate(() => runtime.getStates().length), 1);
-        assert.equal(await surface.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 1);
+        assert.equal(await surface.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 0);
         await page.evaluate(() => emitGeneration(`${window.streamBase} \n`)); await settle();
         assert.equal(await surface.getByText(retryText, { exact: true }).isVisible(), true, '空白和续写原文仍不算新正文');
         await page.evaluate(() => emitGeneration(window.streamBase + Array.from({ length: 35 }, (_, index) => `模拟正文第${index + 1}段。`).join('\n\n')));
         await surface.getByText('模拟正文第35段。', { exact: true }).last().waitFor(); await settle();
         assert.equal(await surface.getByText(retryText, { exact: true }).isVisible(), false, '重试出字后立即隐藏提示');
-        assert.equal(await surface.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 1);
+        assert.equal(await surface.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 0);
         const samples = await surface.evaluate(node => new Promise(resolve => {
             const feed = node.querySelector('.play-feed'), ai = [...feed.querySelectorAll('.play-assistant-message')].at(-1);
             const footer = ai.querySelector('.play-message-actions'), input = node.querySelector('.play-input-row'), samples = [];
@@ -107,7 +107,7 @@ async function verifyStreaming(page, url, viewport) {
             await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `retry-stream-${label}-${viewport.width}.png`) });
         }
         if (label === 'branch') {
-            await surface.getByRole('button', { name: '停止所有生成', exact: true }).click(); await page.waitForFunction(() => runtime.getStates().length === 0);
+            await surface.getByRole('button', { name: '停止这份回复', exact: true }).click(); await page.waitForFunction(() => runtime.getStates().length === 0);
             await settle();
             assert.equal(await surface.locator('.play-assistant-message').last().locator('.play-results').getAttribute('data-status'), 'stopped');
         } else {
@@ -116,7 +116,7 @@ async function verifyStreaming(page, url, viewport) {
         }
         await settle();
         assert.equal(await surface.locator('.play-stop').filter({ visible: true }).count(), 0);
-        console.log(`PASS retry streaming ${label} ${viewport.width}: prompt cleared, single stop available, same-frame scrolling (${JSON.stringify(samples)})`);
+        console.log(`PASS retry streaming ${label} ${viewport.width}: prompt cleared, composer stop available, same-frame scrolling (${JSON.stringify(samples)})`);
     }
     const original = panel.locator('.play-page:not(.play-history-page):not(.play-branch-page)').filter({ visible: true }).first();
     await panel.getByRole('textbox', { name: '小剧场提示词', exact: true }).fill('模拟重试出字');
@@ -211,7 +211,7 @@ async function verify(page, url, viewport) {
         { json: { text: '', thought: 'discarded thought' } }, { json: { text: '自动重试成功的正文' } }];
     await send('重试验证');
     await panel.getByText('遇到 429，2 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();
-    assert.equal(await panel.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 1, '只有一条生成时也保留回复旁的停止按钮');
+    assert.equal(await panel.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 0, '只有一条生成时使用输入框旁的停止按钮');
     assert.equal(await button('停止所有生成').isEnabled(), true);
     await screenshot('countdown');
     await panel.getByText('遇到 429，1 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();

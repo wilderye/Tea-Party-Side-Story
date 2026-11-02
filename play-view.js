@@ -6,7 +6,7 @@ import { playRoundDepth, playMessageIdentity } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters } from './play-character-picker.js';
-import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu, createPlayStopAll, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor, placePlayEditorActions } from './play-message-ui.js';
+import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor, placePlayEditorActions } from './play-message-ui.js';
 import { readPlayElementPosition, restorePlayElementPosition } from './play-reading-position.js';
 import { createPlayReadingStorage } from './play-reading-storage.js';
 
@@ -66,8 +66,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const readError = element('div', undefined, 'play-load-error'); readError.hidden = true;
     feed.append(content, empty, readError);
     const jump = iconButton('bottom', '跳到最新消息', jumpToLatest); jump.classList.add('play-jump-latest'); jump.hidden = true;
-    const stopAll = createPlayStopAll(() => playground.stopAll());
-    readingArea.append(feed, jump, stopAll.button);
+    readingArea.append(feed, jump);
     const compose = element('footer', undefined, 'play-compose'), inner = element('div', undefined, 'play-compose-inner');
     const contextLine = element('div', undefined, 'play-compose-context'); contextLine.hidden = true;
     const inputRow = element('div', undefined, 'play-input-row');
@@ -76,7 +75,10 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         isComposing: () => inputComposing, getContextHeight: () => contextLine.offsetHeight });
     const nativeInputSizing = inputSizer.nativeSizing;
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
-    const send = iconButton('send', '发送小剧场', () => void sendDraft()); send.classList.add('play-send'); send.dataset.icon = 'send';
+    const send = iconButton('send', '发送小剧场', () => {
+        if (composerStopsGeneration()) playground.stopAll();
+        else void sendDraft();
+    }); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
@@ -147,6 +149,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return drafts.get(key);
     }
     function canWrite() { return !!selected?.avatar && settings.enabled !== false; }
+    function composerStopsGeneration() {
+        return !input.value.trim() && playground.getStates().some(job => activePhases.has(job.phase));
+    }
     function readTarget() {
         return { characterId: selected?.id, character: { avatar: selected?.avatar, name: selected?.name } };
     }
@@ -513,9 +518,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         updateControls();
     }
     function updateSendControl() {
-        const available = playground.availability(), label = '发送小剧场';
-        const title = !available.available ? available.message : label;
-        const disabled = !canWrite() || !input.value.trim() || !available.available;
+        const available = playground.availability(), stopping = composerStopsGeneration();
+        const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送小剧场';
+        if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
+        const title = !stopping && !available.available ? available.message : label;
+        const disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
         if (send.title !== title) send.title = title;
         if (send.getAttribute('aria-label') !== label) send.setAttribute('aria-label', label);
         if (send.disabled !== disabled) send.disabled = disabled;
@@ -525,11 +532,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         compose.hidden = inputRow.hidden && contextLine.hidden;
         updateSendControl();
         const jobs = playground.getStates();
-        stopAll.update(jobs);
+        const multipleActive = jobs.filter(job => activePhases.has(job.phase)).length > 1;
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = jobs.find(job => job.resultId === result?.id) ?? { phase: 'idle' };
-            view.stop.hidden = !result || !showPlayReplyStop(job);
+            view.stop.hidden = !result || !showPlayReplyStop(job, multipleActive);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id, 'user');
             view.editReply.hidden = !canEditResult(result) || isEditing(id, 'assistant');

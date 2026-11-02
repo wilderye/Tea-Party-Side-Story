@@ -173,13 +173,14 @@ async function verify(page, url, viewport, mode) {
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
     await page.evaluate(() => emitGeneration('正在生成的正文')); await settle(page);
     await composer.fill('下一条尚未发送的草稿');
-    assert.equal(await button(scope, '停止所有生成').isEnabled(), true);
+    assert.equal(await scope.locator('.play-send').isEnabled(), true);
+    assert.equal(await scope.locator('.play-send').getAttribute('aria-label'), mode === 'chat' ? '停止这份回复' : '发送小剧场');
     const previousId = await scope.locator('.play-assistant-message:not([hidden] *)').first().evaluate(node => node.dataset.messageId ?? node.closest('[data-record]').dataset.record);
     const previous = mode === 'chat' ? scope.locator(`[data-message-id="${previousId}"]`) : scope.locator(`[data-record="${previousId}"] .play-assistant-message`);
     await align(page, previous); await clickWithoutScroll(page, button(previous, '编辑回复原文'));
     const anotherEditor = previous.getByRole('textbox', { name: '回复原文', exact: true });
     await anotherEditor.evaluate(node => { node.value += '\n生成期间的草稿'; node.dispatchEvent(new Event('input', { bubbles: true })); });
-    assert.equal(await button(scope, '停止所有生成').isEnabled(), true);
+    assert.equal(await scope.locator('.play-send').isEnabled(), true);
     await button(previous, '更多回复操作').click();
     assert.equal(await button(previous, '删除 AI 消息').isDisabled(), true);
     assert.equal(await button(previous, '创建分支').isDisabled(), true);
@@ -187,9 +188,7 @@ async function verify(page, url, viewport, mode) {
     await page.evaluate(() => emitGeneration('编辑过程中仍然收到的正文')); await settle(page);
     assert.ok((await anotherEditor.inputValue()).endsWith('生成期间的草稿'));
     if (mode === 'chat') {
-        assert.equal(await scope.locator('.play-send').isDisabled(), true);
-        await composer.press('Control+Enter');
-        assert.equal(await page.evaluate(() => runtime.getStates()[0].phase), 'generating', '发送快捷键不会停止');
+        assert.equal(await scope.locator('.play-send').getAttribute('aria-label'), '停止这份回复');
         const state = await inputState(anotherEditor);
         const otherUserId = await previous.evaluate(node => node.previousElementSibling.dataset.messageId);
         await button(scope.locator(`[data-message-id="${otherUserId}"]`), '收藏用户消息').click(); await settle(page);
@@ -204,8 +203,16 @@ async function verify(page, url, viewport, mode) {
         await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
         await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `edit-navigation-${mode}-${viewport.width}.png`) });
     }
-    await button(scope, '停止所有生成').click(); await page.waitForFunction(() => runtime.getStates().length === 0);
-    assert.equal(await composer.inputValue(), '下一条尚未发送的草稿');
+    if (mode === 'chat') {
+        await composer.press('Control+Enter');
+        await page.waitForFunction(() => runtime.getStates().length === 0);
+        assert.equal(await composer.inputValue(), '下一条尚未发送的草稿');
+    } else {
+        await composer.fill('');
+        await button(scope, '停止所有生成').click();
+        await page.waitForFunction(() => runtime.getStates().length === 0);
+        assert.equal(await composer.inputValue(), '');
+    }
     assert.ok((await anotherEditor.inputValue()).endsWith('生成期间的草稿'));
     await button(previous.locator('.play-header-actions .play-edit-actions'), '取消').click();
     const source = await previous.evaluate(node => ({ id: node.dataset.messageId ?? node.closest('[data-record]').dataset.record }));
@@ -231,7 +238,7 @@ async function verify(page, url, viewport, mode) {
     }
     assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(), 0);
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
-    console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', navigation: 'available', stop: 'independent', passed: true }));
+    console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', navigation: 'available', stop: 'composer', passed: true }));
 }
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
