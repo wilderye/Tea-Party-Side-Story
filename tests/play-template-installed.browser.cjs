@@ -47,7 +47,7 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
             });
             await context.route('**/api/characters/all', route => route.fulfill({ json: cards }));
             await context.route('**/api/groups/all', route => route.fulfill({ json: [] }));
-            await context.route(/\/(?:User%20Avatars|user\/avatar)\//, route => route.fulfill({ contentType: 'image/png',
+            await context.route(/\/(?:User%20Avatars|user\/avatar)\/|\/thumbnail\?type=persona&file=/, route => route.fulfill({ contentType: 'image/png',
                 body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5AAAAABJRU5ErkJggg==', 'base64') }));
             await context.route('**/api/characters/chats', route => {
                 const card = cards.find(item => item.avatar === route.request().postDataJSON().avatar_url);
@@ -198,10 +198,10 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
             assert.deepEqual(errors, []);
             for (const viewport of [{ width: 1332, height: 900 }, { width: 390, height: 844 }]) {
                 await page.setViewportSize(viewport);
-                await page.evaluate(() => {
+                await page.evaluate(width => {
                     const { env, modules } = window.templatePublicTest;
                     const c = SillyTavern.getContext(), power = c.powerUserSettings;
-                    power.personas = { 'first.png': '人设一', 'second.png': '人设二' };
+                    power.personas = { [`first-${width}.png`]: '人设一', [`second-${width}.png`]: '人设二' };
                     power.persona_descriptions = Object.fromEntries(Object.keys(power.personas).map(id => [id,
                         { description: id, connections: [{ id: '0.png' }, { id: '1.png' }] }]));
                     power.persona_allow_multi_connections = true;
@@ -218,10 +218,10 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
                             .then(scope => { personaChecks.states[slot] = { status: 'ready', id: scope.resolved.persona.id }; scope.dispose(); },
                                 error => { personaChecks.states[slot] = { status: error.name }; });
                     };
-                    void startPersonaCheck(0); void startPersonaCheck(1);
-                });
+                    void startPersonaCheck(1); void startPersonaCheck(0);
+                }, viewport.width);
                 const dialog = page.locator('dialog:visible');
-                await dialog.getByText('为「甲」的本次小剧场选择用户设定。', { exact: true }).waitFor();
+                await dialog.getByText(/^为「乙」选择用户设定。/).waitFor();
                 assert.equal(await dialog.count(), 1, '多份任务的选择窗口依次出现');
                 await page.waitForFunction(() => [...document.querySelectorAll('dialog[open]')]
                     .every(node => getComputedStyle(node).opacity === '1'));
@@ -229,16 +229,21 @@ const entry = (uid, content, comment = '常驻测试') => ({ uid, content, comme
                     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
                     await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `persona-${url.port}-${viewport.width}.png`) });
                 }
-                await dialog.locator('.avatar[data-pid="first.png"]').click();
+                await dialog.locator(`.avatar[data-pid="first-${viewport.width}.png"]`).click();
                 await page.waitForFunction(() => personaChecks.states[0].status === 'ready');
-                assert.equal(await page.evaluate(() => personaChecks.states[0].id), 'first.png');
-                await dialog.getByText('为「乙」的本次小剧场选择用户设定。', { exact: true }).waitFor();
+                assert.equal(await page.evaluate(() => personaChecks.states[0].id), `first-${viewport.width}.png`);
+                await dialog.getByText(/^为「甲」选择用户设定。/).waitFor();
                 await dialog.getByRole('button', { name: '取消', exact: true }).click();
                 await page.waitForFunction(() => personaChecks.states[1].status === 'AbortError');
+                await dialog.waitFor({ state: 'hidden' });
+                await page.evaluate(() => startPersonaCheck(1));
+                await page.waitForFunction(() => personaChecks.states[2].status === 'ready');
+                assert.equal(await page.evaluate(() => personaChecks.states[2].id), `first-${viewport.width}.png`);
+                assert.equal(await dialog.count(), 0, '同一角色的新任务沿用本次打开酒馆期间的选择');
                 await page.evaluate(() => startPersonaCheck(0));
-                await dialog.getByText('为「甲」的本次小剧场选择用户设定。', { exact: true }).waitFor();
-                await page.evaluate(() => personaChecks.controllers[2].abort(new DOMException('停止测试', 'AbortError')));
-                await page.waitForFunction(() => personaChecks.states[2].status === 'AbortError');
+                await dialog.getByText(/^为「甲」选择用户设定。/).waitFor();
+                await page.evaluate(() => personaChecks.controllers[3].abort(new DOMException('停止测试', 'AbortError')));
+                await page.waitForFunction(() => personaChecks.states[3].status === 'AbortError');
                 await dialog.waitFor({ state: 'hidden' });
                 assert.equal(await page.evaluate(() => {
                     const power = SillyTavern.getContext().powerUserSettings;

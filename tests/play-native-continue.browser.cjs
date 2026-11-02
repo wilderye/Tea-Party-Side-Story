@@ -163,6 +163,8 @@ const root = path.resolve(__dirname, '..');
                 const ctx = SillyTavern.getContext(), preparer = createNativePlayPreparer(() => ctx);
                 await preparer.ready();
                 const base = structuredClone(openai.oai_settings), cases = [];
+                const hadTail = Object.hasOwn(core.extension_prompts, 'synthetic-tail');
+                const previousTail = core.extension_prompts['synthetic-tail'];
                 for (const source of ['openai', 'claude']) for (const prefill of [false, true]) {
                     for (const variant of ['tail', 'empty-nudge', 'send-empty', 'budget']) {
                         Object.assign(openai.oai_settings, structuredClone(base), {
@@ -172,7 +174,6 @@ const root = path.resolve(__dirname, '..');
                             openai_max_context: variant === 'budget' ? 900 : 8192, openai_max_tokens: 200,
                             squash_system_messages: false, function_calling: false, names_behavior: 1,
                         });
-                        for (const key of Object.keys(core.extension_prompts)) delete core.extension_prompts[key];
                         core.setExtensionPrompt('synthetic-tail', '插入的助手指令', core.extension_prompt_types.IN_CHAT, 0, false, 2);
                         const history = Array.from({ length: variant === 'budget' ? 24 : 2 }, (_, index) => ({
                             name: index % 2 ? ctx.name2 : ctx.name1, is_user: index % 2 === 0,
@@ -204,6 +205,8 @@ const root = path.resolve(__dirname, '..');
                     }
                 }
                 Object.assign(openai.oai_settings, base);
+                if (hadTail) core.extension_prompts['synthetic-tail'] = previousTail;
+                else delete core.extension_prompts['synthetic-tail'];
                 return cases;
             });
             for (const item of comparisons) assert.deepEqual(item.scoped, item.native,
