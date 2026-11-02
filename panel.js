@@ -32,7 +32,6 @@ function createMobileNavigation(panel, media) {
     const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
     const activeSurface = () => panel.querySelector('.tea-panel-surface[data-active=true]') ?? panel;
     const isReading = () => !suspended && media.matches && scope !== 'community' && activeSurface().dataset.mode === 'list' && slot?.isConnected;
-    const isEditingMessage = () => !!activeSurface().querySelector('.play-reading-area .play-edit-form:not([hidden] *)');
     function paint() {
         paintFrame = 0;
         if (!slot) return;
@@ -59,7 +58,6 @@ function createMobileNavigation(panel, media) {
     }
     function readingArea(target) {
         if (!isReading() || !(target instanceof Element)) return null;
-        if (scope === 'play' && isEditingMessage()) return null;
         if (target.closest('input, textarea, select, iframe, .tea-table-scroll, .tea-sort-menu, .tea-page-popover, .play-result-menu, .play-edit-form')) return null;
         const area = target.closest('.tea-list, .play-feed, .play-people');
         return area && panel.contains(area) && area.getClientRects().length
@@ -160,7 +158,7 @@ function createMobileNavigation(panel, media) {
         // It still owns paragraph capture/restoration and history persistence.
         getReadingInset() {
             if (!media.matches || scope !== 'play' || activeSurface().dataset.mode !== 'list' || !slot?.isConnected) return 0;
-            return isEditingMessage() ? (heading?.offsetHeight ?? 0) : height - paintedOffset;
+            return height - paintedOffset;
         },
         ignoreScroll(area) {
             scrollTops.set(area, scrollPosition(area));

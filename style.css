@@ -679,6 +679,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .tea-icon.play-jump-latest { position:absolute; z-index:2; right:16px; bottom:10px; width:36px; min-width:36px; height:36px; border:1px solid var(--tea-field-line,#c6cbbc)!important; border-radius:50%!important; background:var(--tea-paper)!important; color:var(--tea-heading,var(--tea-forest))!important; box-shadow:0 3px 12px var(--tea-popup-shadow,#183e361c)!important; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-icon.play-jump-latest:hover { background:var(--tea-code-paper,#eeeee2)!important; border-color:var(--tea-field-line,#9ba98f)!important; }
 :is(#teahouse-panel,.tea-panel-surface) .play-jump-latest svg { width:18px; height:18px; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-icon.play-stop-all { position:absolute; z-index:2; left:12px; bottom:6px; width:44px; min-width:44px; height:44px; border-radius:50%!important; background:var(--tea-paper)!important; box-shadow:0 3px 12px var(--tea-popup-shadow,#183e361c)!important; }
 :is(#teahouse-panel,.tea-panel-surface):has(>.play-result-menu) .play-jump-latest { visibility:hidden; }
 :is(#teahouse-panel,.tea-panel-surface) .play-input-row { display:flex; align-items:flex-end; gap:10px; padding:3px; border:0; border-radius:6px; background:var(--play-input-paper); }
 :is(#teahouse-panel,.tea-panel-surface) .play-compose-input { display:block; flex:1; width:100%; min-width:0; height:44px; min-height:44px; margin:0!important; padding:10px 11px!important; border-radius:0!important; resize:none; color:var(--tea-ink)!important; font:16px/24px var(--tea-ui); overflow-x:hidden; overflow-y:auto; scrollbar-width:none; overscroll-behavior:contain; }
@@ -882,13 +883,6 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-jump-latest::after { content:''; position:absolute; inset:-4px; border-radius:50%; }
     :is(#teahouse-panel,.tea-panel-surface) .play-input-row { gap:3px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-compose-input { padding-right:7px!important; padding-left:8px!important; }
-    /* Both message pages derive navigation visibility from the mounted editor. */
-    :is(#teahouse-panel,.tea-panel-surface).tea-play-mode[data-mode=list]:not(.play-choosing-character):has(.play-reading-area .play-edit-form:not([hidden] *)) .play-catalog .tea-mobile-tab-slot { display:none; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed-content { padding-top:22px; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-branch-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-chat-heading { top:0; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-branch-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed-content { padding-top:calc(22px + var(--play-chat-heading-height,40px)); }
-    :is(#teahouse-panel,.tea-panel-surface) .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-feed { scroll-padding-top:0; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-page:has(> .play-reading-area .play-edit-form:not([hidden] *)) .play-jump-latest { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .tea-settings .tea-field :is(input,textarea) { font-size:16px; }
 }
 @media(max-width:355px) {

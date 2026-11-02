@@ -87,7 +87,7 @@ async function verifyEditing(page, url, viewport) {
         await record.getByRole('button', { name: button, exact: true }).click(); await settle(page);
         const editor = record.getByRole('textbox', { name: label, exact: true });
         assert.equal(await editor.inputValue(), originalText);
-        assert.equal(await panel.locator('.play-compose').isVisible(), !mobile, '手机编辑期间隐藏底部输入区域，桌面保持原布局');
+        assert.equal(await panel.locator('.play-compose').isVisible(), true, '编辑期间保留底部输入区域');
         assert.equal(await composer.inputValue(), draft, '隐藏输入框保留原草稿');
         // Both layouts follow Tavern: short messages keep a compact editor.
         await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
@@ -110,20 +110,20 @@ async function verifyEditing(page, url, viewport) {
         if (mobile) {
             await verifyGeometry(panel, editor, actions);
             const editorHeightBeforeKeyboard = (await editor.boundingBox()).height;
-            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '编辑时隐藏导航');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '编辑时保留导航');
             assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-brand').isVisible(), true, '编辑时保留茶话会顶栏');
             await screenshot(page, `message-edit-${role}-${viewport.width}.png`);
             // iOS and modern Android can resize only visualViewport, including panning.
             await setKeyboard(page, keyboardHeight);
             assert.equal((await panel.boundingBox()).height, keyboardHeight, '模拟键盘后面板跟随可见屏幕缩小');
-            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '键盘出现后保持同一条隐藏导航规则');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '键盘出现后仍保留导航');
             assert.ok(Math.abs((await editor.boundingBox()).height - editorHeightBeforeKeyboard) <= 1, '仅 visualViewport 缩小时不根据面板剩余空间调整编辑框');
             await typeAtEnd(editor); await settle(page);
             await verifyGeometry(panel, editor, actions);
             await screenshot(page, `message-edit-keyboard-${role}-${viewport.width}.png`);
             await setKeyboard(page);
             assert.ok(Math.abs((await editor.boundingBox()).height - editorHeightBeforeKeyboard) <= 1, '收起键盘后恢复编辑框高度');
-            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), false, '收起键盘仍在编辑时继续隐藏导航');
+            assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '收起键盘后仍保留导航');
             // Some Android browsers resize the layout viewport as well.
             await page.setViewportSize({ width: viewport.width, height: keyboardHeight }); await settle(page);
             await typeAtEnd(editor); await settle(page);
@@ -159,7 +159,7 @@ async function verifyEditing(page, url, viewport) {
         await actions.getByRole('button', { name: '保存', exact: true }).click();
         await record.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
         assert.equal(await editor.inputValue(), savedText, '保存失败保留正在修改的文字');
-        assert.equal(await panel.locator('.play-compose').isVisible(), !mobile, '保存失败继续保持编辑状态');
+        assert.equal(await panel.locator('.play-compose').isVisible(), true, '保存失败继续保持编辑状态');
         if (mobile) {
             const errorBox = await record.getByRole('alert').boundingBox();
             assert.ok(errorBox.height > 0, '保存失败显示原因，正文可以滚动查看');
@@ -195,7 +195,7 @@ async function verifyEditing(page, url, viewport) {
                 const url = `http://127.0.0.1:${server.address().port}/`;
                 await verifyEditing(page, url, viewport);
                 assert.deepEqual(errors, [], '没有浏览器错误或警告');
-                console.log(JSON.stringify({ url, viewport, checks: '酒馆编辑框高度、两种键盘缩屏与偏移、隐藏和恢复导航、长文末尾输入、保存/取消随消息滚动、草稿恢复、取消、保存失败重试', errors }));
+                console.log(JSON.stringify({ url, viewport, checks: '酒馆编辑框高度、两种键盘缩屏与偏移、编辑保留导航、长文末尾输入、保存/取消随消息滚动、草稿恢复、取消、保存失败重试', errors }));
             } finally { await context.close(); }
         }
     } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }

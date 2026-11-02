@@ -27,7 +27,15 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     }) : null;
     observer?.observe(body);
     if (autoGrow && !nativeSizing) input.addEventListener('input', resize);
-    const editor = { body, actions, input, titleInput, saving: false, dispose: () => observer?.disconnect() };
+    const editor = { body, actions, input, titleInput, saving: false,
+        resize() { if (autoGrow && !nativeSizing) resize(); },
+        capture() { return { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection, scroll: input.scrollTop }; },
+        restore(state) {
+            if (!state) return;
+            this.resize(); input.setSelectionRange(state.start, state.end, state.direction); input.scrollTop = state.scroll;
+        },
+        scrollToTop() { input.scrollTop = 0; },
+        dispose: () => observer?.disconnect() };
     const cancel = iconButton('close', '取消', onCancel);
     const save = iconButton('check', '保存', async () => {
         if (editor.saving) return;

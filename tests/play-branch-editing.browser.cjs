@@ -60,7 +60,7 @@ async function verify(page, url, viewport, nativeSizing) {
         if (mobile) {
             const feedBox = await feed.boundingBox(), head = await meta.boundingBox();
             assert.ok(head.y >= feedBox.y - 1 && head.y + head.height <= feedBox.y + feedBox.height, '旧消息移到可见正文区域');
-            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), false, '分支编辑与演出记录一样隐藏导航');
+            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true, '分支编辑与演出记录一样保留导航');
             assert.equal(await scope.locator('.play-chat-heading').isVisible(), true, '编辑时保留分支标题和关闭聊天页面按钮');
             assert.equal(await catalog.locator('.tea-brand').isVisible(), true, '茶话会顶栏保留');
         }
@@ -96,7 +96,7 @@ async function verify(page, url, viewport, nativeSizing) {
             }, keyboardHeight); await settle(page);
             assert.equal((await panel.boundingBox()).height, keyboardHeight);
             assert.ok(Math.abs((await editor.boundingBox()).height - editorHeight) < 1, '不根据面板剩余空间单独缩放分支编辑框');
-            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), false);
+            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
             await editor.press('Control+End'); await editor.pressSequentially(' 继续输入。');
             assert.ok((await editor.inputValue()).endsWith(' 继续输入。'));
             await screenshot(page, `branch-${role}-keyboard-${viewport.width}-${nativeSizing}.png`);
@@ -116,7 +116,7 @@ async function verify(page, url, viewport, nativeSizing) {
         await editor.fill(text); await page.evaluate(() => { window.failSave = true; });
         await button(item.locator('.play-edit-form'), '保存').click(); await item.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
         assert.equal(await editor.inputValue(), text);
-        if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), false);
+        if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
         await page.evaluate(() => { window.failSave = false; }); await button(item.locator('.play-edit-form'), '保存').click();
         await editor.waitFor({ state: 'detached' }); await item.getByText(text, { exact: true }).waitFor();
         if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
@@ -190,7 +190,7 @@ async function verifyOperations(page, url, viewport) {
     await page.evaluate(() => emitGeneration('编辑期间仍然显示新收到的回复'));
     await latest.getByText('编辑期间仍然显示新收到的回复', { exact: true }).waitFor();
     assert.equal(await userEditor.inputValue(), '生成期间改过的旧用户消息');
-    assert.equal(await latest.locator('.play-stop').isVisible(), true, '编辑隐藏发送区时仍可停止当前生成');
+    assert.equal(await latest.locator('.play-stop').isVisible(), true, '编辑期间仍可停止当前生成');
     await screenshot(page, `branch-generating-edit-${viewport.width}.png`);
     await button(firstUser.locator('.play-edit-form'), '保存').click(); await userEditor.waitFor({ state: 'detached' });
     await button(firstAi, '编辑回复原文').click();

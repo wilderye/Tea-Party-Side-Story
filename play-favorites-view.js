@@ -177,7 +177,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
             },
         });
         updateNavigation();
-        heading.replaceChildren(character); tools.replaceChildren(editor.actions);
+        heading.replaceChildren(character); tools.replaceChildren(prompt, editor.actions);
         body.replaceChildren(editor.titleInput, editor.body); editor.titleInput.focus({ preventScroll: true });
     }
     async function load(row, force = false) {

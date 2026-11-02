@@ -57,8 +57,8 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             const aId = await page.evaluate(() => seed.a), a = panel.locator(`[data-record="${aId}"]`);
             await a.getByRole('button', { name: '重新生成', exact: true }).click();
             await page.waitForFunction(() => window.modelCalls === 1);
-            await button('停止所有生成').waitFor(); assert.equal(await send.isEnabled(), true);
-            await a.locator('.play-stop').waitFor({ state: 'hidden' });
+            await button('停止所有生成').waitFor(); assert.equal(await button('停止所有生成').isEnabled(), true);
+            await a.locator('.play-stop').waitFor();
             await a.getByRole('button', { name: '生成新剧场', exact: true }).click();
             await page.waitForFunction(() => window.modelCalls === 2);
             await a.getByRole('button', { name: '上一个结果', exact: true }).click();
@@ -91,8 +91,8 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await settle(page);
             assert.equal(await a.locator('.play-result:visible').getAttribute('data-play-result'), selected, '隐藏版本更新及另角色完成不会切版本');
             await a.getByRole('button', { name: '下一个结果', exact: true }).click();
-            await a.locator('.play-stop').waitFor({ state: 'hidden' });
-            assert.equal(await send.isEnabled(), true, '多份变为单份后隐藏单独停止，输入框停止仍可用');
+            await a.locator('.play-stop').waitFor();
+            assert.equal(await button('停止所有生成').isEnabled(), true, '单份生成仍保留单独和整体停止');
             await a.getByRole('button', { name: '上一个结果', exact: true }).click();
             await input.fill('甲的新回复'); await button('发送小剧场').click();
             await page.waitForFunction(() => window.modelCalls === 4);
@@ -116,17 +116,17 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
                 assert.ok(actions.stop.width >= 44 && actions.stop.height >= 44, '手机停止点击面积至少44像素');
             } else assert.ok(actions.stop.right <= actions.top.left + 1, '桌面停止在回顶左边');
             const palette = () => page.evaluate(() => {
-                const single = document.querySelector('.play-stop:not([hidden])'), all = document.querySelector('.play-send');
+                const single = document.querySelector('.play-stop:not([hidden])'), all = document.querySelector('.play-stop-all');
                 const read = node => { const style = getComputedStyle(node); return [style.backgroundColor, style.color, style.borderRadius]; };
                 const glyph = single.querySelector('.tea-glyph');
-                return { single: read(glyph), all: read(all), size: [glyph.offsetWidth, glyph.offsetHeight], filled: getComputedStyle(single.querySelector('rect')).fill === getComputedStyle(single).color };
+                return { single: read(glyph), all: read(all.querySelector('.tea-glyph')), size: [glyph.offsetWidth, glyph.offsetHeight], filled: getComputedStyle(single.querySelector('rect')).fill === getComputedStyle(single).color };
             });
             await page.mouse.move(0, 0);
             const originalPalette = await palette();
             assert.deepEqual(originalPalette.single, originalPalette.all, '单独停止沿用输入框停止的底色和图标颜色');
             assert.deepEqual(originalPalette.size, [24, 24], '单独停止的可见方块缩为24像素，点击范围不缩小');
             assert.equal(originalPalette.filled, true, '实心方块清楚表示停止');
-            await send.hover(); assert.deepEqual((await palette()).all, originalPalette.all, '鼠标停留或触屏发送后保留停止方块底');
+            await button('停止所有生成').hover(); assert.deepEqual((await palette()).all, originalPalette.all, '鼠标停留或触屏发送后保留停止方块底');
             await reply.getByRole('button', { name: '停止这份回复', exact: true }).hover();
             assert.deepEqual((await palette()).single, originalPalette.single, '单独停止悬停也保留方块底');
             await page.mouse.move(0, 0);
@@ -157,8 +157,8 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await reply.getByText('面板关闭后继续收到内容', { exact: true }).waitFor();
             await page.evaluate(() => tasks[1].finish('甲的另一版本'));
             await page.waitForFunction(() => runtime.getStates().length === 1);
-            await reply.locator('.play-stop').waitFor({ state: 'hidden' });
-            assert.equal(await button('停止所有生成').isEnabled(), true, '另一个版本完成后当前回复也隐藏单独停止');
+            await reply.locator('.play-stop').waitFor();
+            assert.equal(await button('停止所有生成').isEnabled(), true, '另一个版本完成后当前回复仍可单独停止');
             if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `single-request-${viewport.width}.png`) });
             await page.evaluate(() => tasks[3].finish('甲的新回复完成'));
             await page.waitForFunction(() => runtime.getStates().length === 0);
@@ -167,7 +167,7 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await input.fill('准备时停止'); await button('发送小剧场').click();
             await page.waitForFunction(() => tasks.length === 5);
             const preparingId = await page.evaluate(() => runtime.getState(tasks[4].id).roundId), preparing = panel.locator(`[data-record="${preparingId}"]`);
-            await preparing.locator('.play-stop').waitFor({ state: 'hidden' });
+            await preparing.locator('.play-stop').waitFor();
             await button('停止所有生成').click();
             await page.waitForFunction(() => runtime.getStates().length === 0);
             await page.evaluate(() => tasks[4].releasePreparation()); await settle(page);
@@ -181,12 +181,12 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await page.waitForFunction(() => window.modelCalls === 7);
             await input.fill('   \n'); assert.equal(await button('停止所有生成').isEnabled(), true, '只有空白时仍可停止');
             await input.fill('保留下一份草稿'); assert.equal(await send.getAttribute('data-icon'), 'send');
-            assert.equal(await send.isEnabled(), true, '生成中输入内容后可以继续发送');
+            assert.equal(await button('停止所有生成').isEnabled(), true, '生成中输入内容后可以继续发送');
             await input.fill('');
             const completedRoundId = await page.evaluate(() => runtime.getState(tasks[5].id).roundId);
             await page.evaluate(() => tasks[5].finish('输入框第一份已经完成'));
             await page.waitForFunction(() => runtime.getStates().length === 2);
-            await button('停止所有生成').waitFor(); assert.equal(await send.isEnabled(), true, '部分完成后仍显示停止');
+            await button('停止所有生成').waitFor(); assert.equal(await button('停止所有生成').isEnabled(), true, '部分完成后仍显示停止');
             const completedId = await page.evaluate(() => tasks[5].id);
             await choose('测试乙');
             await button('停止所有生成').click();

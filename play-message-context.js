@@ -1,3 +1,7 @@
+export function playJobCanStop(job) {
+    return !!job && ['preparing', 'generating', 'retry-wait'].includes(job.phase);
+}
+
 /** Protect the reply being generated or waiting for its save, wherever it is read. */
 export function playMessageIsPending(message, jobs = []) {
     return !!message && (message.results?.some(result => ['unfinished', 'preparing', 'generating', 'retry-wait', 'saving', 'save-failed'].includes(result.status))

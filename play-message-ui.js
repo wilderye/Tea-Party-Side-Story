@@ -1,5 +1,7 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
 import { renderPlayText } from './play-render.js';
+import { playJobCanStop } from './play-message-context.js';
+import { restorePlayElementPosition } from './play-reading-position.js';
 
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 export const playResultStatusText = { preparing: '正在准备', generating: '正在生成', 'retry-wait': '等待自动重试',
@@ -24,6 +26,10 @@ export function setupPlayReplyHeaderActions(tools, { branch, prompt, remove, fav
     });
     more.classList.add('play-reply-more'); more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', tools.id);
     tools.replaceChildren(...(role === 'user' ? [visibility, favorite, edit, remove, more].filter(Boolean) : [...secondary, favorite, edit, more]));
+    tools.addEventListener('click', event => {
+        if (!secondary.includes(event.target.closest('button'))) return;
+        tools.classList.remove('is-expanded'); more.setAttribute('aria-expanded', 'false');
+    });
     tools.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !tools.classList.contains('is-expanded')) return;
         event.preventDefault(); event.stopPropagation(); tools.classList.remove('is-expanded');
@@ -55,18 +61,47 @@ export function createPlayReplyActions({ onPrevious, onNext, onChoose, onAgain, 
     count.setAttribute('aria-haspopup', 'listbox'); count.setAttribute('aria-expanded', 'false');
     swipes.append(prev, count, next);
     const stop = iconButton('stop', '停止这份回复', onStop); stop.classList.add('play-stop'); stop.hidden = true;
-    const assistantTop = iconButton('top', '回到这条消息开头', onTop); assistantTop.classList.add('play-message-top'); assistantTop.hidden = true;
+    const assistantTop = createPlayMessageTop(onTop);
     const rightActions = element('div', undefined, 'play-right-actions'); rightActions.append(stop, assistantTop);
     actions.append(actionGroup, swipes, rightActions);
     return { actions, actionGroup, again, continueBtn, swipes, prev, next, count, stop, assistantTop };
 }
 
-export function showPlayReplyStop(job, multipleActive) {
-    return !!job && multipleActive && activePhases.has(job.phase);
+export function showPlayReplyStop(job) {
+    return playJobCanStop(job);
 }
 
-export function syncPlayReplyFooter(view, editing = false) {
-    const hidden = editing || [view.swipes, view.again, view.continueBtn, view.stop, view.assistantTop].every(node => node.hidden);
+export function createPlayStopAll(onStop) {
+    const button = iconButton('stop', '停止所有生成', onStop);
+    button.classList.add('play-stop', 'play-stop-all'); button.hidden = true;
+    return { button, update(jobs) { button.hidden = !jobs.some(playJobCanStop); } };
+}
+
+export function createPlayMessageTop(onTop) {
+    const button = iconButton('top', '回到这条消息开头', onTop);
+    button.classList.add('play-message-top'); button.hidden = true;
+    return button;
+}
+
+export function playMessageNeedsTop(body, head, height, editor) {
+    return height > 0 && (body.scrollHeight + head.offsetHeight > height || !!editor && editor.input.scrollHeight > editor.input.clientHeight + 1);
+}
+
+export function scrollPlayMessageToTop(feed, message, inset, setScroll, editor) {
+    editor?.scrollToTop();
+    restorePlayElementPosition(feed, message, 10, inset, setScroll);
+}
+
+export function revealPlayEditor(feed, editor, inset, setScroll) {
+    const field = editor.input.getBoundingClientRect(), area = feed.getBoundingClientRect();
+    const actions = editor.actions.getBoundingClientRect();
+    const line = parseFloat(getComputedStyle(editor.input).lineHeight) || 30;
+    if (field.top + line > area.bottom) setScroll(feed.scrollTop + field.top + line - area.bottom);
+    else if (actions.bottom < area.top + inset) setScroll(feed.scrollTop + actions.top - area.top - inset);
+}
+
+export function syncPlayReplyFooter(view) {
+    const hidden = [view.swipes, view.again, view.continueBtn, view.stop, view.assistantTop].every(node => node.hidden);
     if (view.actions.hidden !== hidden) view.actions.hidden = hidden;
 }
 

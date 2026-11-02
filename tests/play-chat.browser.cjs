@@ -105,7 +105,7 @@ async function verifyConcurrentControls(page, panel, branch) {
     await page.evaluate(() => emitGeneration('并发A已收到正文\n\n'.repeat(45)));
     const latest = branch.locator('.play-assistant-message').last();
     await latest.getByText('并发A已收到正文', { exact: true }).first().waitFor();
-    assert.equal(await latest.locator('.play-stop').isVisible(), false, '仅一个任务没有额外楼层停止按钮');
+    assert.equal(await latest.locator('.play-stop').isVisible(), true, '单份任务也保留楼层停止按钮');
     await page.evaluate(async () => {
         const a = runtime.getStates()[0], chat = await runtime.getChat(a.roundId), b = await runtime.createBranch(chat.id, chat.messages[1].id);
         const character = ctx.characters.find(character => character.avatar === a.characterAvatar);
@@ -169,10 +169,10 @@ async function verify(page, url, viewport) {
     assert.equal(await input.inputValue(), '');
     assert.equal(await input.evaluate(node => node.clientHeight), 44, '发送清空后输入框恢复一行');
     assert.equal(await branch.locator('footer .play-result-status').count(), 0, '不在按钮下另加生成状态');
-    assert.equal(await branch.locator('.play-assistant-message').last().locator('.play-stop').isVisible(), false, '单个生成沿用游玩记录的底部停止入口');
+    assert.equal(await branch.locator('.play-assistant-message').last().locator('.play-stop').isVisible(), true, '单份生成也可在楼层底部停止');
     await input.fill('下一轮尚未发送的草稿');
     assert.equal(await branch.getByRole('button', { name: '停止这份回复', exact: true }).count() >= 1, true);
-    assert.equal(await button('发送消息').count(), 0, '本分支生成时仍是停止按钮');
+    assert.equal(await button('发送消息').isDisabled(), true, '本分支生成时发送禁用，停止独立显示');
     await button('关闭聊天页面').click();
     await original.waitFor(); await settle(page);
     const returnScroll = await originalFeed.evaluate(node => node.scrollTop);
@@ -398,7 +398,7 @@ async function verify(page, url, viewport) {
     await page.waitForFunction(()=>runtime.getStates().some(job=>job.phase==='generating'));
     await page.evaluate(()=>{window.failSave=true;emitGeneration('保存失败仍保留的正文');finishGeneration('保存失败仍保留的正文');});
     await branch.getByRole('button',{name:'重试保存',exact:true}).waitFor();
-    assert.equal(await button('发送消息').count(),0,'保存失败时本分支不接受新发送');
+    assert.equal(await button('发送消息').isDisabled(),true,'保存失败时本分支不接受新发送');
     await page.evaluate(()=>window.failSave=false);await branch.getByRole('button',{name:'重试保存',exact:true}).click();
     await page.waitForFunction(()=>runtime.getStates().length===0);
     await branch.getByText('保存失败仍保留的正文',{exact:true}).waitFor();
