@@ -28,7 +28,7 @@ window.runtime = createPlayRuntime(()=>ctx,{enabled:true},undefined,{loadRegex:a
 window.renderText = (text, renderHtml = true) => renderPlayText(document.getElementById('output'),text,'test',renderHtml,true);
 document.getElementById('render').onclick=()=>window.renderText('<!doctype html><html><head><style>body{min-height:100vh}</style></head><body><p>网页回复正文</p><button id="expand">展开更多</button><div id="more"></div><script>document.getElementById("expand").onclick=()=>{document.getElementById("more").innerHTML="<p>更多内容</p>".repeat(40)};<'+ '/script></body></html>');
 </script>`;
-const allowed = new Set(['play-message-context.js','play-sent-prompt.js', 'play-chat-favorites.js', 'style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
+const allowed = new Set(['play-session.js', 'play-message-context.js','play-sent-prompt.js', 'play-chat-favorites.js', 'style.css', 'play-runtime.js', 'playground.js', 'play-history.js', 'play-storage.js', 'diagnostics.js',
   'play-persona-session.js', 'play-character-context.js',
   'play-storage-worker.js', 'play-storage-lock.js', 'play-prompt.js', 'play-task-module.js', 'play-template-context.js','play-variable-context.js', 'play-preparation.js', 'play-preset.js', 'play-parameters.js', 'play-request.js',
   'play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js', 'view-diagnostics.js', 'play-settings.js', 'play-processing.js', 'ui.js', 'markdown.js', 'vendor/markdown-it.js']);
@@ -240,8 +240,9 @@ async function verifyExpiredWriter(page) {
           const stored = await b.evaluate(id => runtime.getRound(id), results[0].roundId);
           assert.equal(stored.results[0].text, '');
           assert.equal(stored.results[0].status, 'unfinished');
-          assert.deepEqual(fileMutations, writesBeforeStream, '生成中的正文和思考内容不触发上传或删除请求');
-          assert.deepEqual([...files], filesBeforeStream);
+          assert.deepEqual(fileMutations.filter(item => item.operation === 'api/files/upload'),
+            writesBeforeStream.filter(item => item.operation === 'api/files/upload'), '生成中的正文和思考内容不触发上传；前次提交的后台清理可继续');
+          for (const [name, text] of files) assert.equal(filesBeforeStream.find(([previous]) => previous === name)?.[1], text);
           if (mode === 'missing') assert.equal(await a.evaluate(() => runtime.stop()), true);
         } finally {
           await a.evaluate(async () => { window.finishStreamSaveTest(); await window.streamSaveTest; window.reply = null; });
@@ -258,8 +259,10 @@ async function verifyExpiredWriter(page) {
       assert.equal(round.results[0].text, '模拟回复');
       await b.evaluate(({roundId, resultId}) => runtime.editResult(roundId, resultId, '通过历史保存接口编辑后的正文', '模拟回复'),
         {roundId:round.id, resultId:round.results[0].id});
+      await b.evaluate(id => runtime.session.flush(id), round.id);
       assert.equal((await a.evaluate(id=>runtime.getRound(id),round.id)).results[0].text, '通过历史保存接口编辑后的正文', '页面与共享后台任务都支持编辑历史正文');
       await b.evaluate(({id,prompt}) => runtime.editPrompt(id, '原位置保存的用户消息', prompt), round);
+      await b.evaluate(id => runtime.session.flush(id), round.id);
       const promptEdited = await a.evaluate(id=>runtime.getRound(id),round.id);
       assert.equal(promptEdited.prompt, '原位置保存的用户消息', '页面、共享后台任务和兼容保存入口都支持修改用户消息');
       assert.equal(promptEdited.results[0].text, '通过历史保存接口编辑后的正文');
@@ -272,8 +275,8 @@ async function verifyExpiredWriter(page) {
       assert.equal(reading.round.prompt, '原位置保存的用户消息');
       assert.equal(reading.preview.messages[0].text, '通过历史保存接口编辑后的正文');
       assert.deepEqual(reading.search.messages.map(message=>message.text), ['原位置保存的用户消息','通过历史保存接口编辑后的正文']);
-      assert.equal(reading.metadata.messages[0].text, undefined);
-      assert.equal(reading.metadata.messages[1].results[0].text, undefined);
+      assert.equal(reading.metadata.messages[0].text, '原位置保存的用户消息', '运行时查询保留当前已读取的正文');
+      assert.equal(reading.metadata.messages[1].results[0].text, '通过历史保存接口编辑后的正文');
       assert.equal(reading.window.chat.messages[1].results[0].text, '通过历史保存接口编辑后的正文');
 
       const favorite = await a.evaluate(({id,result}) => runtime.addFavorite({roundId:id,resultId:result.id,startedAt:result.startedAt,
@@ -294,6 +297,7 @@ async function verifyExpiredWriter(page) {
       await a.evaluate(async id=>{
         const chat=await runtime.getChatMetadata(id);
         await runtime.editMessage(id,chat.messages[0].id,{text:'局域网收藏来源更新',expectedText:'页面二'});
+        await runtime.session.flush(id);
       }, results[1].roundId);
       const syncedFavorite = await b.evaluate(id=>runtime.syncFavorite(id, { start:0,end:1 }), chatFavorite.id);
       assert.equal(syncedFavorite.messages[0].text, '局域网收藏来源更新');
@@ -301,7 +305,6 @@ async function verifyExpiredWriter(page) {
       await b.evaluate(id=>runtime.removeFavorite(id), chatFavorite.id);
       assert.equal((await a.evaluate(()=>runtime.listFavorites())).length,0);
 
-      const beforeCancel = [...files];
       await a.evaluate(async () => {
         let acquired;
         const ready = new Promise(resolve => acquired = resolve);
@@ -320,8 +323,18 @@ async function verifyExpiredWriter(page) {
       assert.equal(await b.evaluate(() => window.cancelledSend), null, '取消无需等其他页面释放保存资格');
       assert.equal(await b.evaluate(() => window.requestCount), requestsBeforeCancel);
       await a.evaluate(async () => { window.releaseStopTest(); await window.stopTestHolder; });
-      await b.waitForTimeout(250);
-      assert.deepEqual([...files], beforeCancel, '队列恢复后也不补写已取消的记录');
+      await b.evaluate(async () => {
+        const owner = (await runtime.listCharacters())[0], rows = await runtime.listRounds(owner.id);
+        await runtime.session.flush(rows.at(-1).id);
+      });
+      const stopped = await b.evaluate(async () => {
+        const owner = (await runtime.listCharacters())[0], rows = await runtime.listRounds(owner.id);
+        return runtime.getRound(rows.at(-1).id);
+      });
+      assert.equal(stopped.prompt, '等待保存时停止，不应创建记录');
+      assert.equal(stopped.results[0].status, 'stopped');
+      assert.equal(stopped.results[0].text, '');
+      assert.equal(await b.evaluate(() => window.requestCount), requestsBeforeCancel);
 
       await a.reload(); await a.waitForFunction(()=>!!window.runtime);
       assert.equal((await a.evaluate(id=>runtime.getRound(id),round.id)).results[0].text, '模拟回复', '重新打开读取电脑上保存的结果');
@@ -345,12 +358,13 @@ async function verifyExpiredWriter(page) {
         await verifyHtmlOutputs(b, host, viewport);
       }
       if (host === httpHost && mode === 'native') {
+        const beforeClosing = JSON.parse(files.get('teahouse-play-index.json')).rounds.length;
         entered = deferred(); const observed = entered.promise, gate = hold = deferred();
         const closing = a.evaluate(()=>runtime.send({prompt:'保存期间关闭页面'})).catch(()=>null);
         await observed;
         const other = b.evaluate(()=>runtime.send({prompt:'另一页继续发送'}));
         await a.close(); gate.resolve(); await Promise.all([closing,other]);
-        assert.equal(JSON.parse(files.get('teahouse-play-index.json')).rounds.length,4,'关闭页面不打断共享任务中已开始的保存');
+        assert.equal(JSON.parse(files.get('teahouse-play-index.json')).rounds.length,beforeClosing+2,'关闭页面不打断共享任务中已开始的保存');
       }
       if (mode === 'missing') await verifyExpiredWriter(b);
       await b.evaluate(id=>runtime.generateAnother(id),round.id);

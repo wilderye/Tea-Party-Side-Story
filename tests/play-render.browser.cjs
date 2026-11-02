@@ -90,6 +90,7 @@ async function main() {
                 assert.equal(await page.title(),'正文与网页显示验证');
                 assert.equal(await page.evaluate(()=>diag.read().count),0,await page.evaluate(()=>diag.export()));
                 await testReviewFixes(page);
+                await testHiddenHeight(page);
                 const original='<abstract>原来的摘要内容</abstract>\n\n<div>状态卡片</div>\n\n**后面的粗体**\n\n<style>.red{color:rgb(198,30,40)}</style><span class="red">红字</span> <ruby>茶<rt>chá</rt></ruby> :smile:';
                 await page.evaluate(text=>renderText(text.replace(/<abstract>([\s\S]*?)<\/abstract>/g,'<details><summary>摘要</summary>\n$1\n</details>')),original);
                 assert.equal(await page.locator('iframe').count(),0);
@@ -143,6 +144,32 @@ async function main() {
         await testLogPrivacy(browser,url);
         if(helper) await testInstalledResources(browser,url);
     } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
+}
+async function testHiddenHeight(page) {
+    await page.evaluate(() => {
+        const output = document.getElementById('output');
+        window.heightReports = [];
+        window.captureHeight = event => {
+            const frame = output.querySelector('iframe');
+            if (event.source === frame?.contentWindow && event.data?.type === 'teahouse-output-height') heightReports.push(event.data.height);
+        };
+        addEventListener('message', captureHeight);
+        const observer = new MutationObserver(() => {
+            if (!output.querySelector('iframe')) return;
+            output.setAttribute('aria-hidden', 'true'); observer.disconnect();
+        });
+        observer.observe(output, { childList: true });
+        renderText('<button id="counter">计数 0</button><div id="body">网页高度验证</div><script>let count=0;document.querySelector("#counter").onclick=()=>{document.querySelector("#counter").textContent="计数 "+(++count);document.querySelector("#body").textContent="增加的内容 ".repeat(300);};</script>');
+    });
+    await page.waitForFunction(() => heightReports.length > 0);
+    assert.equal(await page.locator('#output iframe').evaluate(frame => frame.style.height), '');
+    await page.evaluate(() => { window.retainedHeightFrame = document.querySelector('#output iframe'); document.getElementById('output').removeAttribute('aria-hidden'); });
+    await page.waitForFunction(() => parseFloat(retainedHeightFrame.style.height) === heightReports.at(-1));
+    await page.frameLocator('#output iframe').getByRole('button', { name: '计数 0' }).click();
+    await page.waitForFunction(() => parseFloat(retainedHeightFrame.style.height) === heightReports.at(-1) && heightReports.length > 1);
+    assert.equal(await page.locator('#output iframe').evaluate(frame => frame === retainedHeightFrame), true);
+    assert.equal(await page.frameLocator('#output iframe').getByRole('button').innerText(), '计数 1');
+    await page.evaluate(() => { removeEventListener('message', captureHeight); renderText(''); });
 }
 async function testFailures(browser,url) {
     const page=await browser.newPage();await page.goto(url);await page.waitForFunction(()=>window.ready);

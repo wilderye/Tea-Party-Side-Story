@@ -73,7 +73,7 @@ test('十二份跨角色请求同时发送，单独停止不影响其余请求�
         assert.equal(saved.results[0].context.characterName, i % 2 ? characterB.name : characterA.name);
         assert.equal(saved.results[0].text, i ? `完成：提示词${i}` : '片段：提示词0');
     }
-    assert.equal(f.events.filter(event => event.phase === 'idle').length, 12);
+    assert.equal(new Set(f.events.filter(event => event.phase === 'idle' && event.resultId).map(event => event.resultId)).size, 12);
     assert.ok([...f.files.values()].every(text => !text.includes('synthetic-private-key')));
 });
 
@@ -108,7 +108,7 @@ test('停止全部不取消已经结束生成的保存，保存失败也不算�
     const second = f.service.send({ character: characterB, prompt: '第二份' });
     await until(() => f.calls.size === 2);
     f.calls.get(firstId).gate.resolve('等待保存的完整回复');
-    await until(() => f.service.getState(firstId).phase === 'saving');
+    await until(() => f.service.getState(firstId).phase === 'idle' && f.service.session.hasUnsaved());
     assert.equal(f.service.stopAll(), 1);
     assert.equal(f.calls.get(firstId).options.signal.aborted, false);
     assert.equal((await second).result.status, 'stopped');
@@ -120,28 +120,70 @@ test('停止全部不取消已经结束生成的保存，保存失败也不算�
     await until(() => f.calls.size === 3);
     const [failedId, failedCall] = [...f.calls.entries()].at(-1);
     failedCall.gate.resolve('已完成但保存失败的正文');
-    assert.equal((await failed).code, 'history_save_failed');
+    const failedResult = await failed;
+    assert.equal(failedResult.result.status, 'complete');
     assert.equal(f.service.stopAll(), 0);
-    assert.equal(f.service.getState(failedId).phase, 'save-failed');
-    assert.equal(f.service.getState(failedId).text, '已完成但保存失败的正文');
+    assert.equal(f.service.getState(failedId).phase, 'idle');
+    assert.equal(f.service.session.currentRound(failedResult.roundId).results[0].text, '已完成但保存失败的正文');
     f.store.saveResult = saveResult;
-    await f.service.retrySave(failedId);
+    await f.service.session.flush(failedResult.roundId);
 });
 
-test('同一轮新版本和重新生成并发，完成顺序不改变结果位置或互相覆盖', { timeout: 5000 }, async t => {
+test('同一轮重新生成和新增版本并发，倒序完成也保持各自位置和正文', { timeout: 5000 }, async t => {
     const f = fixture(t), first = await completed(f);
     const tasks = [f.service.regenerate(first.roundId, first.result.id),
         ...Array.from({ length: 3 }, () => f.service.generateAnother(first.roundId))];
     await until(() => f.calls.size === 5);
-    await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'busy');
+    await assert.rejects(f.service.regenerate(first.roundId, first.result.id), { code: 'busy' });
     const before = await f.service.getRound(first.roundId);
     assert.equal(before.results.length, 4);
     const ids = before.results.map(result => result.id);
+    for (const id of ids) {
+        await assert.rejects(f.service.regenerate(first.roundId, id), { code: 'busy' });
+        await assert.rejects(f.service.continueResult(first.roundId, id), { code: 'busy' });
+    }
     for (const id of [...ids].reverse()) f.calls.get(id).gate.resolve(`结果：${id}`);
     await Promise.all(tasks);
-    const saved = await f.store.getRound(first.roundId);
+    const saved = await f.createStore().getRound(first.roundId);
     assert.deepEqual(saved.results.map(result => result.id), ids);
     assert.deepEqual(saved.results.map(result => result.text), ids.map(id => `结果：${id}`));
+    assert.ok(saved.results.every(result => result.status === 'complete'));
+    assert.equal(f.service.getStates().length, 0);
+});
+
+test('同一轮单独停止和保存失败不丢失其他版本，补存不重复请求模型', { timeout: 5000 }, async t => {
+    const f = fixture(t), first = await completed(f);
+    const stoppedTask = f.service.regenerate(first.roundId, first.result.id);
+    const completedTask = f.service.generateAnother(first.roundId);
+    await until(() => f.calls.size === 3);
+    const [[stoppedId, stoppedCall], [completedId, completedCall]] = [...f.calls].slice(1);
+    const save = f.store.saveResult.bind(f.store);
+    let failSave = true;
+    f.store.saveResult = (...args) => {
+        if (failSave && args[1] === stoppedId) throw Error('模拟单个版本保存失败');
+        return save(...args);
+    };
+    f.service.stop(stoppedId);
+    const stopped = await stoppedTask;
+    assert.equal(stopped.result.status, 'stopped');
+    assert.equal(completedCall.options.signal.aborted, false);
+    stoppedCall.options.onText('停止后迟到的片段'); stoppedCall.gate.resolve('停止后迟到的终稿');
+    completedCall.options.onText('另一版本继续生成');
+    completedCall.gate.resolve('另一版本的完整正文');
+    await completedTask;
+    const current = f.service.session.currentRound(first.roundId);
+    assert.deepEqual(current.results.map(result => [result.id, result.status, result.text]), [
+        [stoppedId, 'stopped', '片段：原来的提示词'], [completedId, 'complete', '另一版本的完整正文'],
+    ]);
+    assert.equal(f.service.session.hasUnsaved(), true);
+    assert.equal(f.service.getStates().length, 0);
+    failSave = false;
+    await f.service.session.flush(first.roundId);
+    const saved = await f.createStore().getRound(first.roundId);
+    assert.deepEqual(saved.results.map(result => [result.id, result.status, result.text]),
+        current.results.map(result => [result.id, result.status, result.text]));
+    assert.equal(f.service.session.hasUnsaved(), false);
+    assert.equal(f.calls.size, 3);
 });
 
 test('续写读取和准备期间只锁对应版本，停止后迟到准备不会发送', { timeout: 5000 }, async t => {
@@ -170,34 +212,16 @@ test('续写读取和准备期间只锁对应版本，停止后迟到准备不�
     assert.equal(f.calls.size, 2, '原始完成请求和另一角色请求，停止的续写没有发送');
 });
 
-test('多份保存失败彼此独立，仍可生成，指定回复重试不调用模型', { timeout: 5000 }, async t => {
-    const f = fixture(t), failedIds = new Set();
-    const saveResult = f.store.saveResult.bind(f.store);
-    f.store.saveResult = (roundId, resultId, update) => {
-        if (failedIds.has(resultId)) throw new Error(`无法保存：${resultId}`);
-        return saveResult(roundId, resultId, update);
-    };
-    const tasks = [f.service.send({ prompt: '第一份' }), f.service.send({ prompt: '第二份' })]
-        .map(task => task.catch(error => error));
+test('多份保存失败彼此独立，编辑补存分别完成，不请求模型', async t => {
+    const f = fixture(t), failedIds = new Set(), save = f.store.saveResult.bind(f.store);
+    f.store.saveResult = (...args) => { if (failedIds.has(args[1])) throw Error('save failed'); return save(...args); };
+    const tasks = [f.service.send({ prompt: '第一份' }), f.service.send({ prompt: '第二份' })];
     await until(() => f.calls.size === 2);
     for (const [id, call] of f.calls) { failedIds.add(id); call.gate.resolve(`完整：${call.request.prompt}`); }
-    const failures = await Promise.all(tasks);
-    assert.ok(failures.every(error => error.code === 'history_save_failed'));
-    assert.equal(f.service.getStates().filter(state => state.phase === 'save-failed').length, 2);
-    const next = f.service.send({ character: characterB, prompt: '第三份' });
-    await until(() => f.calls.size === 3);
-    const third = [...f.calls.values()].find(call => call.request.prompt === '第三份');
-    third.gate.resolve('第三份完成');
-    assert.equal((await next).result.status, 'complete');
-    await assert.rejects(f.service.retrySave(), error => error.code === 'save_target_required');
-    const ids = [...failedIds];
-    failedIds.delete(ids[0]);
-    await f.service.retrySave(ids[0]);
-    assert.equal(f.service.getState(ids[1]).phase, 'save-failed');
-    failedIds.delete(ids[1]);
-    await f.service.retrySave(ids[1]);
-    assert.equal(f.calls.size, 3);
-    assert.equal(f.service.getStates().length, 0);
+    const results = await Promise.all(tasks); assert.equal(f.service.getStates().length, 0);
+    failedIds.clear();
+    for (const result of results) { await f.service.editResult(result.roundId, result.result.id, result.result.text, result.result.text); await f.service.session.flush(result.roundId); }
+    assert.equal(f.calls.size, 2); assert.equal(f.service.session.hasUnsaved(), false);
 });
 
 test('修改同一轮提示词时返回所有任务的实时内容，后续保存保留修改', { timeout: 5000 }, async t => {

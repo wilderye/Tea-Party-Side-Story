@@ -34,6 +34,7 @@ async function seed(page) {
             records.set(round.id, { round, ordinal, gate }); rows.push({ id: round.id, revision: round.id, characterId: original.characterId, createdAt: round.createdAt });
         }
         const read = runtime.getRound, list = runtime.listRounds;
+        runtime.createRoundReader = undefined;
         runtime.listRounds = id => id === original.characterId ? Promise.resolve(rows) : list(id);
         runtime.getRound = async id => {
             const item = records.get(id); if (!item) return read(id);

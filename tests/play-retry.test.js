@@ -54,7 +54,7 @@ for (const stream of [false, true]) for (const apiMode of ['tavern', 'custom']) 
         assert.ok(f.calls.every(call => call.body === f.calls[0].body));
         assert.equal(result.result.text, '最终正文'); assert.equal(result.result.status, 'complete');
         assert.equal(result.result.extra.reasoning, '');
-        assert.deepEqual(states.filter(state => state.phase === 'retry-wait').map(state => state.retry.reason), ['rateLimit', 'empty']);
+        assert.deepEqual(states.filter(state => state.phase === 'retry-wait' && state.type === 'content').map(state => state.retry.reason).filter((reason, index, reasons) => index === 0 || reason !== reasons[index - 1]), ['rateLimit', 'empty']);
         const saved = await f.createStore().getRound(result.roundId);
         assert.equal(saved.results.length, 1); assert.equal(saved.results[0].id, result.result.id);
         const entries = f.diagnostics.read().entries;
@@ -268,16 +268,13 @@ test('流式续写收到新增正文后遇到429不重试，原正文与已收�
     assert.equal(continued.result.status, 'failed'); assert.equal(continued.result.error.message, 'partial429');
 });
 
-test('回复保存失败只重试保存，不再次请求模型；准备阶段429也不属于模型自动重试', async t => {
-    const f = fixture(t, (_attempt, { io }) => { io.io.beforeWrite = () => { throw Error('save failed'); }; return reply('保留正文'); });
-    await assert.rejects(f.service.send({ prompt: '保存失败' }), /save failed/);
-    assert.equal(f.calls.length, 1);
-    f.io.beforeWrite = null; await f.service.retrySave(); assert.equal(f.calls.length, 1);
-    const files = memoryFiles(); let preparations = 0;
-    const service = createPlayground({ history: files.store, captureEnvironment: () => f.environment, isCurrent: () => true,
-        prepareRequest: async () => { preparations++; throw Object.assign(new Error('prepare429'), { status: 429 }); } });
-    assert.equal((await service.send({ prompt: '准备错误' })).result.status, 'failed');
-    assert.equal(preparations, 1);
+test('回复保存失败不属于模型重试，编辑保存可以补存；准备阶段429不自动重试', async t => {
+    const f = fixture(t, () => { f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('save failed'); }; return reply('完整正文'); });
+    const result = await f.service.send({ prompt: '测试' });
+    assert.equal(f.calls.length, 1); assert.equal(f.service.session.currentRound(result.roundId).results[0].status, 'complete');
+    f.io.beforeWrite = null;
+    await f.service.editResult(result.roundId, result.result.id, result.result.text, result.result.text);
+    await f.service.session.flush(result.roundId); assert.equal(f.calls.length, 1);
 });
 
 test('自动重试期间不保存空回复的思维链，结束后只保存最后一次的结果', async t => {

@@ -219,9 +219,16 @@ async function verify(page, url, viewport, mode) {
     }, { mode, id: source.id, chatId: ids.id });
     await settle(page); await anotherEditor.waitFor();
     assert.deepEqual(await inputState(anotherEditor), missingState, '来源删除后保留可读取的原草稿');
-    await button(previous.locator('.play-header-actions .play-edit-actions'), '保存').click(); await previous.getByRole('alert').waitFor();
-    assert.equal(await anotherEditor.inputValue(), missingState.value, '来源缺失时保存报错且不覆盖草稿');
-    await button(previous.locator('.play-header-actions .play-edit-actions'), '取消').click(); await anotherEditor.waitFor({ state: 'detached' });
+    await button(previous.locator('.play-header-actions .play-edit-actions'), '保存').click();
+    if (mode === 'chat') {
+        await previous.getByRole('alert').waitFor();
+        assert.equal(await anotherEditor.inputValue(), missingState.value, '接收前已确认目标删除时，保留尚未提交的编辑');
+        await button(previous.locator('.play-header-actions .play-edit-actions'), '取消').click();
+    } else {
+        await anotherEditor.waitFor({ state: 'detached' });
+        await page.waitForFunction(() => saveErrors.some(error => /已删除|已不存在/.test(error)));
+        assert.equal(await page.evaluate(id => runtime.session.currentRound(id).results[0].text, source.id), missingState.value);
+    }
     assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(), 0);
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', navigation: 'available', stop: 'independent', passed: true }));

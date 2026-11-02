@@ -8,6 +8,7 @@ import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters } from './play-character-picker.js';
 import { setupPlayReplyHeaderActions, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, playResultStatusText, createPlayResultMenu, createPlayStopAll, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor, placePlayEditorActions } from './play-message-ui.js';
 import { readPlayElementPosition, restorePlayElementPosition } from './play-reading-position.js';
+import { createPlayReadingStorage } from './play-reading-storage.js';
 
 const pad = value => String(value).padStart(2, '0');
 const characterKey = character => character?.id ?? (character?.avatar ? `avatar:${character.avatar}` : '');
@@ -86,16 +87,21 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let browsing = null, lastMobile = mobile.matches;
     let inputSizingFrame, inputComposing = false;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
-    const requests = new Map(), changedJobs = new Map(), previousJobs = new Map();
+    const requests = new Map(), changedJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
     let displayLoad, batchNumber = 0, lastProgrammaticScroll;
     let suspended = false, resumeNeedsRefresh = false;
     const observe = (operation, values) => recordViewEvent(root, operation, values);
     const storageKey = 'teahouse-play-view-v1';
+    let legacyPositions = [], readingReady = false, readingSettled = false, readingTimer;
+    const readingStorage = createPlayReadingStorage(ctx().getCurrentUserHandle
+        ? { getUserHandle: () => ctx().getCurrentUserHandle() } : undefined);
 
     try {
         const saved = JSON.parse(ctx().accountStorage?.getItem(storageKey) ?? 'null');
         if (saved?.format === 1) {
+            legacyPositions = (saved.positions ?? []).filter(entry => Array.isArray(entry) && typeof entry[0] === 'string' && entry[1] && typeof entry[1] === 'object');
+            for (const [key, value] of legacyPositions) positions.set(key, value);
             for (const [key, value] of saved.selections ?? []) if (typeof key === 'string' && typeof value === 'string') selections.set(key, value);
             for (const [key, value] of saved.drafts ?? []) {
                 if (typeof key !== 'string' || !value || typeof value.text !== 'string') continue;
@@ -107,6 +113,19 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     const sharedViewState = () => JSON.stringify({ format: 1, selections: [...selections],
         drafts: [...drafts].filter(([, draft]) => draft.text || draft.origin || draft.previous || draft.mode) });
     let savedSharedState = sharedViewState();
+    const readingLoaded = readingStorage.read(legacyPositions).then(saved => {
+        positions.clear();
+        for (const [key, value] of saved) positions.set(key, value);
+        readingReady = true;
+    }).catch(error => { diagnostics?.error('读取剧场草稿和阅读位置', error); })
+        .finally(() => { readingSettled = true; });
+
+    function saveReadingPosition() {
+        clearTimeout(readingTimer);
+        if (!readingReady) return;
+        try { readingStorage.save(positions); }
+        catch (error) { diagnostics?.error('保存剧场阅读位置', error); }
+    }
 
     function saveViewState() {
         clearTimeout(saveTimer);
@@ -114,6 +133,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const text = sharedViewState();
             if (text === savedSharedState) return;
             const saved = JSON.parse(text);
+            if (!readingReady && legacyPositions.length) saved.positions = legacyPositions;
             ctx().accountStorage?.setItem(storageKey, JSON.stringify(saved));
             savedSharedState = text;
         } catch (error) {
@@ -187,7 +207,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const favorite = favoriteRows.has(favoriteSourceKey({ roundId: round.id, resultId: result.id, startedAt: result.startedAt }));
         view.favorite.title = favorite ? '取消收藏' : '收藏演出记录';
         view.favorite.setAttribute('aria-label', view.favorite.title); view.favorite.setAttribute('aria-pressed', String(favorite));
-        view.favorite.hidden = !canEditResult(result) || result.status === 'save-failed' || !result.text.trim();
+        view.favorite.hidden = !canEditResult(result) || !result.text.trim();
         view.favorite.disabled = !favoritesReady || !!view.favoriting || !!view.removing || isEditing(round.id, 'assistant');
     }
     function updatePromptFavoriteStar(round, view) {
@@ -212,14 +232,14 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const result = await promptFavorites.toggle(current);
             diagnostics?.info(result.favorite ? '用户消息收藏完成' : '用户消息取消收藏完成');
             notify(result.favorite ? result.created ? '已存入亲笔手稿并收藏' : '已收藏剧场' : '已取消收藏');
-        } catch (error) { diagnostics?.error('收藏用户消息', error); notify(error.message); }
+        } catch (error) { diagnostics?.error('收藏用户消息', error); if (!playground.session.isSaveError(error)) notify(error.message); }
         finally { view.favoriting = false; updateControls(); }
     }
     async function toggleFavorite(id) {
         const round = records.get(id)?.round, view = views.get(id);
         if (!round || !view || !favoritesReady || view.favoriting || view.removing || isEditing(id, 'assistant')) return;
         const result = selectedResult(round);
-        if (!canEditResult(result) || result.status === 'save-failed' || !result.text.trim()) return;
+        if (!canEditResult(result) || !result.text.trim()) return;
         const source = { roundId: id, resultId: result.id, startedAt: result.startedAt }, key = favoriteSourceKey(source);
         const existing = favoriteRows.get(key);
         view.favoriting = true; updateControls();
@@ -237,7 +257,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             // previous star state back, even if that read returns later.
             favoritesRefreshId++;
             notify(existing ? '已取消收藏' : '已收藏演出记录');
-        } catch (error) { notify(error.message); }
+        } catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
         finally { view.favoriting = false; if (records.get(id)?.round) updateFavoriteStar(records.get(id).round, view); updateControls(); }
     }
     const renderPeople = resetScroll => characterPicker.render(resetScroll);
@@ -295,7 +315,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return res;
     }
     function commitPosition(position) {
-        if (!position) return;
+        if (!position || !readingSettled) return;
         const key = characterKey(selected), previous = positions.get(key);
         // scrollTop can round to whole pixels. Keep the intended offset so
         // rounding after every inserted batch does not accumulate as drift.
@@ -304,6 +324,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         cachedPosition = { scrollTop: feed.scrollTop, feedHeight: feed.clientHeight, inset: readingInset(), key };
         positions.set(key, position);
+        clearTimeout(readingTimer); readingTimer = setTimeout(saveReadingPosition, 300);
     }
     function rememberPosition(followBottom = true, forceSync = false) {
         if (hasActiveEditor()) followBottom = false;
@@ -508,7 +529,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         for (const [id, view] of views) {
             const round = records.get(id)?.round, own = canWrite() && round?.characterId === selected?.id;
             const result = round && selectedResult(round), job = jobs.find(job => job.resultId === result?.id) ?? { phase: 'idle' };
-            const retry = round && pendingSaveFor(result, job);
             view.stop.hidden = !result || !showPlayReplyStop(job);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id, 'user');
@@ -519,12 +539,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.removeReply.disabled = !canRemoveMessage(round, 'assistant', jobs);
             view.generate.hidden = !own || !round?.prompt || !!round.results.length;
             view.generate.disabled = !canGenerate(round);
-            view.again.hidden = !(own && round.prompt !== null) && !retry;
-            if (round?.initialIsLast === false && !retry) view.again.hidden = true;
-            view.again.disabled = retry ? job.phase === 'saving' : !canRewrite(round, result);
-            view.again.title = retry ? '重试保存' : '重新生成';
-            view.again.setAttribute('aria-label', view.again.title);
-            view.again.setAttribute('aria-busy', String(!!retry && job.phase === 'saving'));
+            view.again.hidden = !(own && round.prompt !== null) || round?.initialIsLast === false;
+            view.again.disabled = !canRewrite(round, result);
             const currentSelected = round && selectedResult(round);
             const canCont = canContinue(round, currentSelected);
             view.continueBtn.hidden = !(own && round?.prompt !== null && currentSelected?.text?.trim());
@@ -549,7 +565,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return canGenerate(round) && !!result && playground.availability({ resultId: result.id }).available;
     }
     function canContinue(round, result) {
-        return canRewrite(round, result) && !!result?.text?.trim() && !pendingSaveFor(result) && !round.initialAssistantHidden;
+        return canRewrite(round, result) && !!result?.text?.trim() && !round.initialAssistantHidden;
     }
     function updateResultNavigation(round, view) {
         view.swipes.hidden = round.initialIsLast === false;
@@ -601,7 +617,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 updateControls();
             });
             scheduleSave(); await refresh(); notify(role === 'user' ? '已删除用户消息' : '已删除 AI 消息及全部生成版本');
-        } catch (error) { notify(error.message); }
+        } catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
         finally { view.removing = false; updateControls(); }
     }
     function editPrompt(id) {
@@ -609,16 +625,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (!canEditPrompt(round) || !view || view.removing || view.favoriting || messageEditing.busy) return;
         openMessageEditor(id, 'user');
     }
-    function hasPendingSave(job) {
-        return job.phase === 'save-failed' || (job.unsaved && job.phase === 'saving');
-    }
-    function pendingSaveFor(result, job = playground.getState(result?.id)) {
-        return !!result && job.resultId === result.id && hasPendingSave(job);
-    }
-    function notifyRequestError(error, resultId) {
-        // Failed saves show their explanation and retry control in the reply.
-        if (error.code !== 'history_save_failed' || !hasPendingSave(playground.getState(resultId))) notify(error.message);
-    }
+    function notifyRequestError(error) { if (!playground.session.isSaveError(error)) notify(error.message); }
     async function runGeneration(run, { draft, prompt, role = 'assistant' } = {}) {
         const request = { key: characterKey(selected), draft, prompt, role, accepted: false, resultId: null };
         latestRequest = request; startingRequest = request;
@@ -627,7 +634,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         finally { startingRequest = null; }
         try { await task; }
         catch (error) { notifyRequestError(error, request.resultId); }
-        finally { if (request.resultId) requests.delete(request.resultId); await refresh(); }
+        finally { if (request.resultId) requests.delete(request.resultId); }
     }
     async function sendDraft() {
         if (!canWrite() || !playground.availability().available || !input.value.trim()) return;
@@ -659,7 +666,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         await runGeneration(() => playground.generateAnother(id, target));
     }
     function canEditResult(result) {
-        return result && settings.enabled !== false && !['preparing', 'generating', 'retry-wait', 'saving', 'unfinished'].includes(result.status);
+        return result && settings.enabled !== false && !['preparing', 'generating', 'retry-wait', 'unfinished'].includes(result.status);
     }
     function isEditing(id, role) {
         return !!messageEditing.find('record', id, role);
@@ -687,7 +694,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function openMessageEditor(id, role, resultId) {
         void messageEditing.open({ key: `record/${id}/${role}/${resultId ?? ''}`, async create() {
-            const round = await playground.getRound(id), view = views.get(id);
+            await playground.ensureChat(id, { selectedResultId: selections.get(id) });
+            let round = playground.session.currentRound(id);
+            if (role === 'user' ? round.prompt === undefined : round.results.find(result => result.id === resultId)?.text === undefined) {
+                await playground.session.loadMessage(id, role === 'user' ? round.initialUserId : round.initialAssistantId, resultId);
+                round = playground.session.currentRound(id);
+            }
+            const view = views.get(id);
             const result = role === 'assistant' ? round.results.find(item => item.id === resultId) : null;
             if (!view || view.removing || view.favoriting || (role === 'user' ? !canEditPrompt(round) : !canEditResult(result))) return null;
             records.set(id, { round });
@@ -712,7 +725,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                         resumeNeedsRefresh = true; return;
                     }
                     try {
-                        const updated = await playground.getRound(id);
+                        const updated = playground.session.currentRound(id);
                         const message = view[role], area = feed.getBoundingClientRect(), box = message.getBoundingClientRect();
                         const position = box.bottom > area.top + readingInset() && box.top < area.bottom
                             ? { bottom: false, anchor: message.querySelector('[data-read-anchor]')?.dataset.readAnchor,
@@ -722,7 +735,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                         records.set(id, { round: updated });
                         renderRecord(updated, view); restorePosition(position); rememberPosition(false, true);
                     } catch (error) { session.editor.actions.remove(); session.editor.body.remove(); view.item.remove(); views.delete(id); records.delete(id); showReadError(error.message); }
-                    await refresh();
                 },
                 async reveal() {
                     setBrowsing(false);
@@ -740,10 +752,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 async onSave({ text }) {
                     const updated = role === 'user' ? await playground.editPrompt(id, text, original)
                         : await playground.editResult(id, resultId, text, original);
-                    if (role === 'assistant' && updated.initialIsLast && updated.initialAssistantId && updated.selectedResultId !== resultId) {
-                        await playground.setMessageVersion(id, updated.initialAssistantId, resultId, updated.selectedResultId);
-                        updated.selectedResultId = resultId;
-                    }
                     records.set(id, { round: updated });
                 },
             });
@@ -799,11 +807,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const error = element('p', undefined, 'play-result-error'); error.hidden = true;
         const { actions, again, continueBtn, assistantTop, stop, swipes, prev, count, next } = createPlayReplyActions({
             onPrevious: () => changeResult(round.id, -1), onNext: () => void advanceResult(round.id), onChoose: () => showResults(round.id),
-            onAgain: () => {
-                const currentRound = records.get(round.id).round, result = selectedResult(currentRound);
-                if (pendingSaveFor(result)) void playground.retrySave(result.id).catch(error => notifyRequestError(error, result.id));
-                else void regenerate(currentRound);
-            },
+            onAgain: () => void regenerate(records.get(round.id).round),
             onContinue: () => void continueReply(records.get(round.id).round),
             onStop: () => playground.stop(stop.dataset.resultId), onTop: () => jumpToMessage(round.id, 'assistant'),
         });
@@ -824,7 +828,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             const ai = chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.role === 'assistant');
             const branch = await playground.createBranch(id, ai.id, chat.revision);
             onBranch(branch); await refresh();
-        } catch (error) { notify(error.message); }
+        } catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
     }
     function createOutput(round, result) {
         // SillyTavern Popup reserves data-result for numeric dialog buttons.
@@ -1047,15 +1051,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         updateControls();
     }
     async function changeResult(id, direction, resultId) {
-        const round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
+        let round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
         if (round.initialIsLast === false) return;
         const index = round.results.indexOf(selectedResult(round));
         const result = resultId ? round.results.find(item => item.id === resultId) : round.results[index + direction];
         if (!result) return;
         if (round.initialAssistantId) {
             try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId, { playSelection: true }); }
-            catch (error) { notify(error.message); return; }
-            round.selectedResultId = result.id;
+            catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); return; }
+            round = playground.session.currentRound(id); records.set(id, { round });
         }
         latestRequest = null; pendingReveal = null;
         closeResults(); selections.set(id, result.id); renderRecord(round, views.get(id)); updateControls();
@@ -1111,7 +1115,28 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         renderPeople(); renderHistory(); updateComposer(); restorePosition(positions.get(characterKey(selected)));
         await refresh();
     }
+    async function refreshCharacters(isCurrent = () => true) {
+        syncCurrent();
+        const savedCharacters = await playground.listCharacters();
+        if (!isCurrent()) return false;
+        const previous = selected, previousKey = characterKey(previous);
+        characters = mergePlayCharacters(savedCharacters, ctx().characters);
+        const currentRow = current && (characters.find(item => item.avatar === current.avatar) ?? { ...current, lastPlayedAt: null });
+        if (currentRow) characters = [currentRow, ...characters.filter(item => item !== currentRow)];
+        selected = !selected ? currentRow ?? (mobile.matches ? null : characters[0]) ?? null
+            : characters.find(item => item.id && item.id === previous.id) ?? characters.find(item => item.avatar && item.avatar === previous.avatar) ?? currentRow ?? characters[0] ?? null;
+        if (!selected) browsing = true;
+        const key = characterKey(selected);
+        if (previous && !previous.id && selected?.id && previous.avatar === selected.avatar) {
+            for (const map of [positions, drafts, historyWindows]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
+            for (const request of requests.values()) if (request.key === previousKey) request.key = key;
+            if (pendingReveal?.key === previousKey) pendingReveal.key = key;
+        }
+        return true;
+    }
     async function refresh() {
+        if (suspended || !visible) { resumeNeedsRefresh = true; return; }
+        await readingLoaded;
         if (suspended || !visible) { resumeNeedsRefresh = true; return; }
         if (mobile.matches && browsing) {
             const saved = await playground.listCharacters();
@@ -1125,25 +1150,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const id = ++refreshId;
         historyLoad = null;
         readError.hidden = true;
-        syncCurrent();
         const isCurrent = () => id === refreshId && visible && !(mobile.matches && browsing);
         try {
             if (id !== refreshId) return;
-            const savedCharacters = await playground.listCharacters(); if (!isCurrent()) return;
-            const previous = selected, previousKey = characterKey(previous);
-            characters = mergePlayCharacters(savedCharacters, ctx().characters);
-            const currentRow = current && (characters.find(item => item.avatar === current.avatar) ?? { ...current, lastPlayedAt: null });
-            if (currentRow) characters = [currentRow, ...characters.filter(item => item !== currentRow)];
-            selected = !selected ? currentRow ?? (mobile.matches ? null : characters[0]) ?? null
-                : characters.find(item => item.id && item.id === previous.id) ?? characters.find(item => item.avatar && item.avatar === previous.avatar) ?? currentRow ?? characters[0] ?? null;
-            if (!selected) browsing = true;
+            if (!await refreshCharacters(isCurrent)) return;
             const key = characterKey(selected);
             if (visible && !displayReady()) void refreshDisplay(selected ?? current);
-            if (previous && !previous.id && selected?.id && previous.avatar === selected.avatar) {
-                for (const map of [positions, drafts, historyWindows]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
-                for (const request of requests.values()) if (request.key === previousKey) request.key = key;
-                if (pendingReveal?.key === previousKey) pendingReveal.key = key;
-            }
             if (visible) { renderPeople(); updateBrowser(); updateComposer(); }
             const characterId = selected?.id;
             const rows = characterId ? await playground.listRounds(characterId) : []; if (!isCurrent()) return;
@@ -1196,21 +1208,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     }
     function applyJob(job) {
-        const round = records.get(job.roundId)?.round;
-        if (round && job.userIdentity && round.initialUserId === job.userMessageId) round.userIdentity = job.userIdentity;
-        const result = round?.results.find(item => item.id === job.resultId);
-        if (result && job.phase !== 'idle') { result.text = job.text; result.status = job.phase; result.error = job.error ?? undefined; if (job.context) result.context = job.context; }
+        if (!job.round) return;
+        records.set(job.round.id, { round: job.round, revision: job.chat?.revision });
     }
     function renderChangedJobs() {
         streamFrame = 0;
         const updates = [...changedJobs.values()]; changedJobs.clear();
         const change = () => {
-            const rendered = new Set();
             for (const job of updates) {
                 applyJob(job);
                 const record = records.get(job.roundId)?.round, view = views.get(job.roundId);
-                if (visible && record && view && !view.item.hidden && selectedResult(record)?.id === job.resultId && !rendered.has(job.roundId)) {
-                    rendered.add(job.roundId); renderRecord(record, view);
+                if (visible && record && view && !view.item.hidden) {
+                    renderRecord(record, view);
                     updateMessageTops([view]);
                 }
             }
@@ -1219,8 +1228,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         if (visible) keepReading(change); else change();
     }
     playground.subscribe(job => {
-        const previous = previousJobs.get(job.resultId);
-        if (job.phase === 'idle') previousJobs.delete(job.resultId); else previousJobs.set(job.resultId, job);
         if (startingRequest && !requests.has(job.resultId)) {
             startingRequest.resultId = job.resultId; requests.set(job.resultId, startingRequest);
             const existing = records.get(job.requestedRoundId)?.round;
@@ -1239,16 +1246,35 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             scheduleSave();
         }
-        changedJobs.set(job.resultId, job);
+        changedJobs.set(job.roundId ?? job.requestedRoundId ?? job.resultId, job);
         if (!streamFrame && visible && !(mobile.matches && browsing)) streamFrame = requestAnimationFrame(renderChangedJobs);
-        if (job.roundId && (!previous?.roundId || job.phase === 'idle' || job.phase === 'save-failed')) void refresh();
+        if (job.round && (selected?.id === job.round.characterId || selected?.avatar === job.characterAvatar)) {
+            if (selected.id !== job.round.characterId) {
+                const previousKey = characterKey(selected);
+                selected = { ...selected, id: job.round.characterId };
+                const key = characterKey(selected);
+                for (const map of [positions, drafts, historyWindows]) if (map.has(previousKey)) { map.set(key, map.get(previousKey)); map.delete(previousKey); }
+                for (const request of requests.values()) if (request.key === previousKey) request.key = key;
+                if (pendingReveal?.key === previousKey) pendingReveal.key = key;
+                displayedCharacter = key;
+            }
+            const rows = rowsByCharacter.get(job.round.characterId) ?? [];
+            if (!rows.some(row => row.id === job.roundId)) rows.push({ id: job.roundId, characterId: job.round.characterId,
+                revision: job.chat?.revision, createdAt: job.round.createdAt });
+            rowsByCharacter.set(job.round.characterId, rows);
+            applyJob(job);
+            if (request && pendingReveal?.roundId === job.roundId && visible) {
+                resetHistoryWindow(rows, job.roundId, characterKey(selected));
+                renderHistory(); updateComposer(); jumpToLatest(); pendingReveal = null;
+            }
+        }
     });
     const events = ctx().eventTypes ?? {};
     if (events.CHAT_CHANGED) ctx().eventSource.on(events.CHAT_CHANGED, () => {
         if (visible) rememberPosition();
         void refresh();
     });
-    window.addEventListener('pagehide', () => { rememberPosition(true, true); void saveViewState(); });
+    window.addEventListener('pagehide', () => { rememberPosition(true, true); saveReadingPosition(); void saveViewState(); });
     window.addEventListener('focus', () => {
         if (visible) { rememberPosition(); void refresh(); void refreshFavorites(); }
     });
@@ -1301,6 +1327,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 commitPosition(capturePosition(true));
             }
             visible = false; refreshId++; historyLoad = null; restoringPosition = false; closeResults(false); characterPicker.suspend(); scheduleSave();
+            saveReadingPosition();
             cancelAnimationFrame(activationFrame); clearTimeout(activationTimer); cancelAnimationFrame(layoutFrame); cancelAnimationFrame(streamFrame); streamFrame = 0; resizeObserver.disconnect();
             cancelAnimationFrame(inputSizingFrame); inputSizingFrame = 0; inputComposing = false;
         },
@@ -1328,7 +1355,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },
         canLeave: ({ ignoreEditing = false } = {}) => (ignoreEditing || !messageEditing.busy) && ![...views.values()].some(view => view.removing),
         async fillFromEntry(entry) {
-            await refresh(); if (!selected || !canWrite()) return false;
+            await refreshCharacters(); if (!selected || !canWrite()) return false;
             browsing = false;
             replaceDraft({ text: entry.body, origin: { id: entry.id, title: entry.title }, mode: 'original' });
             return true;

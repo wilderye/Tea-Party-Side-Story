@@ -249,6 +249,10 @@ export function createTheatrePanel(ctx, state, actions) {
             mobileNavigation?.sync(scope);
         },
     });
+    globalThis.addEventListener?.('beforeunload', event => {
+        if (!messageEditing.current) return;
+        event.preventDefault(); event.returnValue = '';
+    });
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
         { messageEditing, getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
             onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt,
@@ -745,6 +749,7 @@ export function createTheatrePanel(ctx, state, actions) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
                 reader = createPlayFavoriteReader(actions.playground, { notify: showMessage, onInspectPrompt: inspectPrompt,
+                    initialScrollTop: catalog.readingId === item.id ? catalog.readingScroll : 0,
                     onGoToBranch: (id, messageId) => void enterBranch(id, messageId),
                     onNavigate: direction => void openRecordFavorite(item.id, direction),
                     onChange(favorite) { favoriteLoadId++; favoriteRows.set(favorite.id, favorite); render(); },
@@ -777,6 +782,7 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function render({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panelHost || searchComposing) return;
+        if (mode !== 'settings') apiSettings?.cancel();
         if (settingsLayer && mode !== 'settings') {
             const nextMode = mode; closeSettingsLayer({ resume: false }); mode = nextMode;
         }
@@ -812,7 +818,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 if (mode === 'record' || !media.matches) { reader?.resume(); if (reader) void reader.load(favoriteRows.get(catalog.selectedId)); }
                 else reader?.suspend();
             }
-            restoreCatalogPosition(); return;
+            restoreCatalogPosition(); restoringCatalog = false; return;
         }
         if (catalogState) catalogRenders.set(panel, catalogState); else catalogRenders.delete(panel);
         viewDiagnostics?.activate('render');
@@ -820,7 +826,6 @@ export function createTheatrePanel(ctx, state, actions) {
         if (mode !== 'favorite-editor') disposeFavoriteComposer();
         if (resetPosition) resetCatalogPosition(); else captureCatalogPosition();
         restoringCatalog = scope !== 'play';
-        if (mode !== 'settings') apiSettings?.cancel();
         const keptSettings = preserveSettings && mode === 'settings' ? panel.querySelector('.tea-settings')?.parentElement : null;
         const settingsPosition = mode === 'settings' ? settingsView?.capture() : null;
         if (!keptSettings) {

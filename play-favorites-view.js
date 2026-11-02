@@ -18,7 +18,7 @@ export function favoriteSourceKey({ roundId, resultId, startedAt }) {
 }
 
 /** A reader owns its inline draft; saved content stays in the history service. */
-export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, onGoToBranch, onInspectPrompt, notify }) {
+export function createPlayFavoriteReader(playground, { onChange, onRemove, onNavigate, onGoToBranch, onInspectPrompt, notify, initialScrollTop = 0 }) {
     const node = element('article', undefined, 'play-favorite-reading tea-scroll');
     const navigation = element('nav', undefined, 'play-favorite-navigation');
     navigation.setAttribute('aria-label', '演出记录收藏切换');
@@ -121,6 +121,11 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         if (text.trim()) renderPlayText(body, text, `favorite/${value.id}`, true, true, { name: value.characterName });
         else body.replaceChildren(element('p', '内容已隐藏', 'play-result-empty'));
         signature = text;
+        restoreInitialScroll();
+    }
+    function restoreInitialScroll() {
+        if (!initialScrollTop || !node.isConnected) return;
+        node.scrollTop = initialScrollTop; initialScrollTop = 0;
     }
     async function appendMessages(count = 24) {
         if (!active || !value) return;
@@ -159,6 +164,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         }
         body.append(fragment);
         if (renderedMessages < value.messages.length) body.append(moreMessages);
+        restoreInitialScroll();
     }
     function finish() {
         editor?.dispose();

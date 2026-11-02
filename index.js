@@ -112,7 +112,8 @@ const loaded = Promise.all([loadCommunity(), loadManuscripts()]);
 
 // Lazy history reads keep a missing/corrupt play file from blocking the library.
 // The conversation view reads this service when the user opens it.
-export const playground = createPlayRuntime(ctx, settings, undefined, { diagnostics, onError: message => notify(message) });
+export const playground = createPlayRuntime(ctx, settings, undefined, { diagnostics, onError: message => notify(message),
+    onSaveError: message => globalThis.toastr.error(message, undefined, { escapeHtml: true }) });
 
 export async function updateLibrary() {
     if (!settings.enabled || state.updating) return;

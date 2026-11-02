@@ -1,4 +1,5 @@
-import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages } from './play-history.js';
+import { createPlaySession } from './play-session.js';
+import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages, playStartRound } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
 import { playRequestMessages, playMessageIsPending, playUserIdentity } from './play-message-context.js';
 
@@ -30,9 +31,7 @@ function publicError(error, phase) {
     const message = typeof error === 'string' ? error : error?.message;
     const fallback = phase === 'preparing'
         ? { code: 'prompt_preparation_failed', message: '本次提示词处理失败，没有发送到模型。' }
-        : phase === 'saving'
-            ? { code: 'history_save_failed', message: '回复尚未保存到酒馆文件，内容仍保留在当前页面；请重试保存。' }
-            : { code: 'generation_failed', message: '本次生成失败，已保留收到的内容。' };
+        : { code: 'generation_failed', message: '本次生成失败，已保留收到的内容。' };
     return { code: fallback.code, message: typeof message === 'string' && message.trim() ? message : fallback.message };
 }
 
@@ -50,9 +49,21 @@ function retryReason(error) {
  * This module neither evaluates outputs nor broadcasts SillyTavern events.
  */
 export function createPlayground({ history, captureEnvironment, isCurrent, prepareRequest,
-    diagnostics, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString() }) {
+    diagnostics, session, onSaveError = () => {}, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString() }) {
     const jobs = new Map();
     const listeners = new Set();
+    session ??= createPlaySession(history, { onSaveError, onChange: publish });
+    function publish(event) {
+        const job = findJob(event.resultId) ?? [...jobs.values()].find(job => job.requestedRoundId === event.roundId);
+        const state = { ...readJob(job), ...event, roundId: event.roundId,
+            characterAvatar: job?.characterAvatar ?? session.character(event.roundId)?.avatar,
+            characterName: job?.characterName ?? session.character(event.roundId)?.name,
+            round: session.currentRound(event.roundId), chat: session.currentChat(event.roundId) };
+        for (const listener of listeners) {
+            try { listener(state); }
+            catch (error) { diagnostics?.error('更新剧场演出界面', error); }
+        }
+    }
     function findJob(resultId) {
         return jobs.get(resultId) ?? [...jobs.values()].find(job => job.replaceResultId === resultId);
     }
@@ -64,51 +75,22 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function readJob(job) {
         if (!job) return { phase: 'idle', unsaved: false };
         return { phase: job.phase,
-            roundId: job.round?.id ?? null, resultId: job.resultId, characterId: job.round?.characterId ?? null,
+            roundId: job.round?.id ?? job.acceptedId ?? null, resultId: job.resultId, characterId: session.currentChat(job.acceptedId)?.characterId ?? job.round?.characterId ?? null,
             requestedRoundId: job.requestedRoundId ?? null, replaceResultId: job.replaceResultId ?? null,
             chatMode: !!job.chatMode, messageId: job.messageId ?? null,
             ...(job.chatMode ? { operation: job.operation } : {}),
             characterName: job.characterName, characterAvatar: job.characterAvatar,
-            text: job.text, error: clone(job.saveError ?? job.error ?? null),
+            text: job.text, error: clone(job.error ?? null),
             retry: clone(job.retry ?? null),
             context: clone(job.context),
             userMessageId: job.userMessageId ?? null, userIdentity: clone(job.userIdentity ?? null),
-            unsaved: !!job.pendingUpdate };
+            unsaved: false };
     }
     function getState(resultId) {
         return readJob(resultId ? findJob(resultId) : [...jobs.values()].at(-1));
     }
     function hasRoundJob(roundId) {
-        return [...jobs.values()].some(job => (job.round?.id ?? job.requestedRoundId) === roundId);
-    }
-    // File contents can lag behind streamed or unsaved text. Returned rounds
-    // use the same current result for reads and user-message edits.
-    function withLiveResults(round) {
-        for (const result of round.results) {
-            const job = findJob(result.id);
-            if (job) {
-                result.text = job.text;
-                if (job.extra) result.extra = clone(job.extra);
-                result.status = job.phase;
-                if (job.context) result.context = clone(job.context);
-                if (job.userIdentity && round.initialUserId === job.userMessageId) round.userIdentity = clone(job.userIdentity);
-                if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
-            }
-        }
-        return round;
-    }
-    function withLiveChat(chat) {
-        for (const message of chat.messages) for (const result of message.results ?? []) {
-            const job = findJob(result.id);
-            if (!job) continue;
-            result.text = job.text; result.status = job.phase;
-            if (job.extra) result.extra = clone(job.extra);
-            if (job.context) result.context = clone(job.context);
-            const user = chat.messages.find(message => message.id === job.userMessageId && message.role === 'user');
-            if (user && job.userIdentity) user.userIdentity = clone(job.userIdentity);
-            if (job.saveError ?? job.error) result.error = clone(job.saveError ?? job.error);
-        }
-        return chat;
+        return [...jobs.values()].some(job => !job.closed && (job.acceptedId ?? job.requestedRoundId) === roundId);
     }
     function assertIdleChat(id) {
         if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
@@ -116,18 +98,18 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     }
     async function changeChatMessages(id, messageIds, operation, run) {
         if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-        const ownJobs = [...jobs.values()].filter(job => (job.round?.id ?? job.requestedRoundId) === id)
-            .map(job => ({ messageId: job.messageId ?? job.round?.initialAssistantId, resultId: job.resultId, replaceResultId: job.replaceResultId }));
+        const ownJobs = [...jobs.values()].filter(job => !job.closed && (job.acceptedId ?? job.requestedRoundId) === id)
+            .map(job => ({ phase: job.phase, messageId: job.messageId ?? job.round?.initialAssistantId, resultId: job.resultId, replaceResultId: job.replaceResultId }));
         if (messageIds.some(messageId => playMessageIsPending({ id: messageId }, ownJobs))) {
             throw new PlaygroundError('busy', '所选消息正在生成或尚未保存，请结束并保存后再操作。');
         }
-        return withLiveChat(await historyAction(operation, run, true));
+        return session.mutate(id, revision => historyAction(operation, () => run(revision), true));
     }
     function notify(job) {
-        for (const listener of listeners) {
-            try { listener(readJob(job)); }
-            catch (error) { diagnostics?.error('更新剧场演出界面', error); /* A view cannot interrupt a save or request. */ }
-        }
+        if (job.acceptedId) {
+            session.updateResult(job.acceptedId, job.resultId, { status: job.closed ? job.finalStatus : job.phase,
+                context: job.context, ...(job.error ? { error: job.error } : {}) });
+        } else for (const listener of listeners) listener(readJob(job));
     }
     async function historyAction(operation, run, logSuccess = false) {
         try {
@@ -139,8 +121,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function availability({ resultId, chatId } = {}) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
         const job = resultId && findJob(resultId);
-        if (job?.phase === 'save-failed') return { available: false, code: 'unsaved_result', message: '这份回复尚未保存，请先重试保存' };
-        if (job) return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
+        if (job && !job.closed) return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
         if (chatId && hasRoundJob(chatId)) return { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' };
         if (typeof prepareRequest !== 'function') return { available: false, code: 'generation_unavailable', message: PLAY_GENERATION_UNAVAILABLE };
         if (prepareRequest.isReady && !prepareRequest.isReady()) return { available: false, code: 'generation_loading', message: '正在载入酒馆的生成接口…' };
@@ -184,7 +165,13 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
             requestedRoundId: roundId, replaceResultId, chatMode, messageId, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
-            text: '', context, closed: false };
+            context, closed: false };
+        Object.defineProperties(job, {
+            text: { get: () => session.currentResult(job.acceptedId, job.resultId)?.text ?? '',
+                set: text => session.updateResult(job.acceptedId, job.resultId, { text }) },
+            extra: { get: () => session.currentResult(job.acceptedId, job.resultId)?.extra,
+                set: extra => session.updateResult(job.acceptedId, job.resultId, { extra }) },
+        });
         const privateValues = [environment.api?.key, environment.tavern?.settings?.proxy_password];
         const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成',
             { phase: 'preparing', apiMode: environment.api?.mode }, privateValues);
@@ -194,26 +181,37 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let finalStatus = 'complete';
         let resultContext = context;
         try {
-            if (continueResultId) {
-                const currentRound = await abortable(() => chatMode ? history.getChat(roundId) : history.getRound(roundId), job.controller.signal);
-                const results = chatMode ? currentRound.messages.at(-1)?.results : currentRound?.results;
-                if (chatMode ? currentRound.messages.at(-1)?.hidden : currentRound.initialAssistantHidden) {
-                    throw new PlaygroundError('message_hidden', '请先显示此楼层再续写。');
+            if (roundId) {
+                await abortable(() => session.ensureChat(roundId), job.controller.signal);
+                let current = session.currentChat(roundId);
+                if (continueResultId && !current?.messages.flatMap(message => message.results ?? []).some(result => result.id === continueResultId && result.text !== undefined)) {
+                    current = await abortable(() => session.getChat(roundId), job.controller.signal);
                 }
-                const target = results?.find(result => result.id === continueResultId);
-                if (!target) throw new PlaygroundError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
-                if (!target.text.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
-                baseText = target.text;
-                continueExtra = readPlayReasoning(target.extra ?? {});
-                if (target.extra) job.extra = clone(continueExtra);
-                job.text = baseText;
-                assertCurrent(environment);
+                if (continueResultId) {
+                    const assistant = current.messages.find(message => message.results?.some(result => result.id === continueResultId));
+                    if (assistant?.hidden) throw new PlaygroundError('message_hidden', '请先显示此楼层再续写。');
+                    const target = current.messages.flatMap(message => message.results ?? []).find(result => result.id === continueResultId);
+                    if (!target?.text?.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
+                    baseText = target.text; continueExtra = readPlayReasoning(target.extra ?? {});
+                }
             }
-            job.round = await history.begin({ roundId, replaceResultId, continueResultId, characterId, character: environment.character,
-                prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
-                ...(chatMode ? { chatMode, operation, messageId, expectedRevision } : {}),
-                ...(continueResultId ? { expectedText: baseText } : {}) }, { signal: job.controller.signal });
-            let requestPrompt = job.round.prompt;
+            job.controller.signal.throwIfAborted(); assertCurrent(environment);
+            const input = { roundId, newRoundId: uuid(), ownerId: uuid(), userMessageId: uuid(), assistantMessageId: uuid(),
+                userBodyRevision: uuid(), resultBodyRevision: uuid(), replaceResultId, continueResultId, characterId,
+                character: environment.character, prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
+                chatMode, operation: operation ?? (continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send'),
+                messageId, expectedRevision, ...(continueResultId ? { expectedText: baseText } : {}) };
+            job.acceptedId = roundId ?? input.newRoundId;
+            job.messageId = messageId ?? input.assistantMessageId;
+            job.userMessageId = input.operation === 'send' ? input.userMessageId : null;
+            let acceptance;
+            try { acceptance = session.begin(input); }
+            catch (error) { job.acceptedId = null; throw error; }
+            job.initialSave = acceptance.completion;
+            if (continueExtra) job.extra = clone(continueExtra);
+            notify(job);
+            job.round = await abortable(() => acceptance.completion, job.controller.signal);
+            let requestPrompt = chatMode ? undefined : playStartRound(job.round).prompt;
             if (chatMode) {
                 const { history: messages, user, target } = playRequestMessages(playCurrentMessages(job.round));
                 job.messageId = target.messageId;
@@ -221,8 +219,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 environment.branchHistory = messages;
                 environment.requestUser = user;
                 environment.branchMode = true;
-            } else if (job.round.initialUserId) {
-                environment.requestUser = { id: job.round.initialUserId, hidden: job.round.initialUserHidden };
+            } else {
+                const round = playStartRound(job.round);
+                if (round.initialUserId) environment.requestUser = { id: round.initialUserId, hidden: round.initialUserHidden };
             }
             if (!roundId || chatMode && operation === 'send') job.userMessageId = environment.requestUser?.id;
             notify(job);
@@ -233,7 +232,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 const identity = playUserIdentity(context);
                 if (!identity) return;
                 job.controller.signal.throwIfAborted();
-                job.userIdentity = await history.setUserIdentity(job.round.id, job.userMessageId, job.resultId, identity);
+                job.userIdentity = await session.setUserIdentity(job.round.id, job.userMessageId, job.resultId, identity);
                 if (!job.closed) notify(job);
             };
             const request = await abortable(() => prepareRequest({
@@ -301,48 +300,53 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         } catch (error) {
             generationError = error;
             finalStatus = job.controller.signal.aborted || error?.name === 'AbortError' ? 'stopped' : 'failed';
-            if (!job.round) {
-                if (job.controller.signal.aborted) return null;
-                throw error;
-            }
-            if (finalStatus === 'failed') {
+            if (session.isSaveError(error)) {
+                finalStatus = 'stopped'; job.beforeRequestFailure = true;
+            } else if (!job.round) {
+                if (!job.acceptedId) {
+                    jobs.delete(job.resultId); job.phase = 'idle';
+                    for (const listener of listeners) listener(readJob(job));
+                    if (job.controller.signal.aborted) return null;
+                    throw error;
+                }
+                finalStatus = 'stopped';
+                job.beforeRequestFailure = !job.controller.signal.aborted;
+            } else if (finalStatus === 'failed') {
                 job.error = publicError(error, job.phase);
                 if (retryCount) job.error.message += `\n已自动重试 ${retryCount} 次。`;
             }
         } finally {
-            job.closed = true;
-            job.finishedAt = now();
-            diagnostic?.finish(finalStatus, generationError, { phase: job.phase, receivedCharacters: job.text.length });
-            if (job.round) { job.phase = 'saving'; notify(job); }
-            if (!job.round) { jobs.delete(job.resultId); job.phase = 'idle'; notify(job); }
+            job.closed = true; job.finalStatus = finalStatus; job.finishedAt = now();
+            diagnostic?.finish(finalStatus, session.isSaveError(generationError) ? undefined : generationError,
+                { phase: job.phase, receivedCharacters: job.text.length });
+        }
+        if (!job.acceptedId || !session.currentResult(job.acceptedId, job.resultId)) {
+            jobs.delete(job.resultId); job.phase = 'idle';
+            for (const listener of listeners) listener(readJob(job));
+            return null;
         }
         const update = { text: job.text, status: finalStatus, finishedAt: job.finishedAt, context: resultContext,
-            ...(job.extra ? { extra: job.extra } : {}),
-            ...(job.error ? { error: job.error } : {}) };
+            ...(job.extra ? { extra: job.extra } : {}), ...(job.error ? { error: job.error } : {}) };
+        job.phase = 'idle';
+        const saving = session.finish(job.acceptedId, job.resultId, update, !job.beforeRequestFailure);
+        jobs.delete(job.resultId);
+        publish({ roundId: job.acceptedId, resultId: job.resultId, phase: 'idle', type: 'content' });
+        if (job.beforeRequestFailure) return null;
+        if (job.controller.signal.aborted && !job.round) return null;
         try {
-            const round = await history.saveResult(job.round.id, job.resultId, update);
+            await saving.completion;
             diagnostics?.info('小剧场回复已保存', { phase: 'saving', savedAt: now() });
-            return { roundId: round.id, characterId: round.characterId,
-                result: clone(round.savedResult ?? round.results.find(result => result.id === job.resultId)) };
         } catch (error) {
-            diagnostics?.error('保存小剧场回复', error, { phase: 'saving' });
-            // Deletion in another window is final; a late generation must not
-            // recreate it or leave an impossible save retry blocking new sends.
             if (isRemovedResult(error)) return null;
-            job.saveError = publicError(error, 'saving');
-            job.pendingUpdate = update;
-            job.phase = 'save-failed';
-            throw new PlaygroundError('history_save_failed', job.saveError.message);
-        } finally {
-            if (!job.pendingUpdate) { jobs.delete(job.resultId); job.phase = 'idle'; }
-            notify(job);
         }
+        const { bodyRevision, ...result } = session.currentResult(job.acceptedId, job.resultId);
+        return { roundId: job.acceptedId, characterId: session.currentChat(job.acceptedId).characterId, result };
     }
 
     return {
-        availability,
+        availability, session, publish,
         getState,
-        getStates: () => [...jobs.values()].map(readJob),
+        getStates: () => [...jobs.values()].filter(job => !job.closed).map(readJob),
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         send({ characterId, character, prompt, origin = null }) { return start({ characterId, character, prompt, origin }); },
         sendChat(chatId, { characterId, character, prompt, origin = null, expectedRevision }) {
@@ -357,59 +361,65 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         continueChat(chatId, messageId, resultId, target = {}) {
             return start({ ...target, roundId: chatId, messageId, continueResultId: resultId, chatMode: true, operation: 'continue' });
         },
-        listChats: characterId => historyAction('读取聊天历史目录', () => history.listChats(characterId)),
-        getChatPreview: (id, options) => historyAction('读取历史记录预览', () => history.getChatPreview(id, options)),
-        getChatSearch: (id, options) => historyAction('搜索聊天内容', () => history.getChatSearch(id, options)),
-        async getChat(id, options) { return withLiveChat(await historyAction('读取分支聊天', () => history.getChat(id, options))); },
-        async getChatWindow(id, options) {
-            const window = await historyAction('读取分支聊天显示范围', () => history.getChatWindow(id, options));
-            window.chat = withLiveChat(window.chat);
-            return window;
-        },
+        listChats: characterId => historyAction('读取聊天历史目录', () => session.listChats(characterId)),
+        getChatPreview: (id, options) => historyAction('读取历史记录预览', () => session.directory(id, options)),
+        getChatSearch: (id, options) => historyAction('搜索聊天内容', () => session.directory(id, { ...options, search: true })),
+        getChat: (id, options) => historyAction('读取分支聊天', () => session.getChat(id, options)),
+        getChatWindow: (id, options) => historyAction('读取分支聊天显示范围', () => session.getChatWindow(id, options)),
+        ensureChat: (id, options) => session.ensureChat(id, options),
         async finishUnfinishedChat(id) {
             assertIdleChat(id);
-            const chat = await history.getChat(id);
-            for (const message of chat.messages) for (const result of message.results ?? []) {
-                if (result.status === 'unfinished') await historyAction('结束未完成回复', () => history.saveResult(id, result.id,
-                    { status: 'stopped', finishedAt: now() }));
-            }
+            await session.mutate(id, async () => {
+                const chat = await history.getChat(id);
+                for (const message of chat.messages) for (const result of message.results ?? []) {
+                    if (result.status === 'unfinished') await historyAction('结束未完成回复', () => history.saveResult(id, result.id,
+                        { status: 'stopped', finishedAt: now() }));
+                }
+                return history.getChat(id);
+            });
         },
         createBranch(id, messageId, revision) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            return historyAction('创建分支', () => history.createBranch(id, messageId, revision), true);
+            return session.mutate(id, revision => historyAction('创建分支', () => history.createBranch(id, messageId, revision), true), revision);
         },
         setMessageVersion(id, messageId, resultId, expectedResultId, options = {}) {
             if (options.playSelection) {
                 if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             } else assertIdleChat(id);
-            return historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId, options));
+            return session.mutate(id, () => historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId, options)));
         },
         renameChat(id, name, revision) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            return historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true);
+            return session.mutate(id, revision => historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true), revision);
         },
         setMessagesHidden(id, messageIds, hidden, revision) {
-            return changeChatMessages(id, messageIds, '修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, revision));
+            return changeChatMessages(id, messageIds, '修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, session.revision(id, revision)));
         },
-        editMessage(id, messageId, update) {
-            return changeChatMessages(id, [messageId], '保存聊天消息修改', () => history.editMessage(id, messageId, update));
+        async editMessage(id, messageId, update) {
+            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+            if (playMessageIsPending(session.currentChat(id)?.messages.find(message => message.id === messageId), [...jobs.values()])) throw new PlaygroundError('busy', '所选消息正在生成或尚未保存，请结束并保存后再操作。');
+            return session.edit(id, messageId, update).chat;
         },
         removeMessage(id, messageId, revision) {
-            return changeChatMessages(id, [messageId], '删除聊天消息', () => history.removeMessage(id, messageId, revision));
+            return changeChatMessages(id, [messageId], '删除聊天消息', () => history.removeMessage(id, messageId, session.revision(id, revision)));
         },
         truncateChat(id, messageId, revision) {
             assertIdleChat(id);
-            return historyAction('删除所选消息及后续对话', () => history.truncateChat(id, messageId, revision), true);
+            return session.mutate(id, revision => historyAction('删除所选消息及后续对话', () => history.truncateChat(id, messageId, revision), true), revision);
         },
         deleteChat(id, revision, options) {
             assertIdleChat(id);
-            return historyAction('删除该聊天', () => history.deleteChat(id, revision, options), true);
+            return session.mutate(id, revision => historyAction('删除该聊天', () => history.deleteChat(id, revision, options), true), revision);
         },
         addChatFavorite(input) {
             assertIdleChat(input.chatId);
-            return historyAction('收藏该聊天', () => history.addChatFavorite(input), true);
+            return session.mutate(input.chatId, revision => historyAction('收藏该聊天', () => history.addChatFavorite({ ...input, expectedRevision: revision }), true), input.expectedRevision);
         },
-        syncChatFavorite(id, input) { return historyAction('更新聊天收藏', () => history.syncChatFavorite(id, input)); },
+        async syncChatFavorite(id, input) {
+            const favorite = await history.getFavoriteWindow(id, { metadata: true });
+            if (favorite.source.type === 'chat') await session.flush(favorite.source.chatId);
+            return historyAction('更新聊天收藏', () => history.syncChatFavorite(id, input));
+        },
         generateAnother(roundId, target = {}) { return start({ ...target, roundId }); },
         regenerate(roundId, resultId, target = {}) {
             if (!resultId) throw new PlaygroundError('result_missing', '请先选择要重新生成的结果');
@@ -429,29 +439,8 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             for (const job of active) stopJob(job);
             return active.length;
         },
-        async retrySave(resultId) {
-            const pending = [...jobs.values()].filter(job => job.pendingUpdate);
-            if (!resultId && pending.length > 1) throw new PlaygroundError('save_target_required', '请选择要重新保存的回复');
-            const job = resultId ? findJob(resultId) : pending[0];
-            if (!job) return null;
-            if (job.phase !== 'save-failed') throw new PlaygroundError('busy', '这份回复正在生成或保存，请稍后再试');
-            job.phase = 'saving';
-            notify(job);
-            try {
-                const round = await history.saveResult(job.round.id, job.resultId, job.pendingUpdate);
-                jobs.delete(job.resultId); job.pendingUpdate = null;
-                diagnostics?.info('小剧场回复重新保存成功');
-                return round;
-            } catch (error) {
-                diagnostics?.error('重试保存小剧场回复', error, { phase: 'saving' });
-                if (isRemovedResult(error)) { jobs.delete(job.resultId); job.pendingUpdate = null; return null; }
-                job.saveError = publicError(error, 'saving');
-                throw new PlaygroundError('history_save_failed', job.saveError.message);
-            }
-            finally { job.phase = job.pendingUpdate ? 'save-failed' : 'idle'; notify(job); }
-        },
-        listCharacters: () => historyAction('读取演出角色列表', () => history.listCharacters()),
-        listRounds: characterId => historyAction('读取演出历史目录', () => history.listRounds(characterId)),
+        listCharacters: () => historyAction('读取演出角色列表', () => session.listCharacters()),
+        listRounds: characterId => historyAction('读取演出历史目录', () => session.listRounds(characterId)),
         listFavorites: () => historyAction('读取演出收藏列表', () => history.listFavorites()),
         getFavorite: id => historyAction('读取演出收藏', () => history.getFavorite(id)),
         async addFavorite(input) {
@@ -459,6 +448,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             if (findJob(input.resultId)) {
                 throw new PlaygroundError('busy', '请在这份回复结束并保存后收藏');
             }
+            await session.flush(input.roundId);
             return historyAction('收藏演出记录', () => history.addFavorite(input), true);
         },
         editFavorite(id, update, revision) {
@@ -475,40 +465,38 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         },
         async editPrompt(roundId, text, expectedText) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            const round = await historyAction('保存提示词修改', () => history.editPrompt(roundId, text, expectedText), true);
-            return withLiveResults(round);
+            if (typeof text !== 'string' || !text.trim()) throw new PlayHistoryError('invalid_history', '提示词不能为空。');
+            const round = session.currentRound(roundId);
+            session.edit(roundId, round?.initialUserId, { text, expectedText });
+            return session.currentRound(roundId);
         },
         async editResult(roundId, resultId, text, expectedText) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            const job = findJob(resultId);
-            if (job && job.phase !== 'save-failed') throw new PlaygroundError('busy', '这条回复正在生成或保存，请结束后再编辑。');
-            // A failed final save must be settled before replacing its text, so
-            // retrying the generation save can never restore the pre-edit body.
-            if (job?.pendingUpdate) await this.retrySave(job.resultId);
-            return historyAction('保存回复修改', () => history.editResult(roundId, resultId, text, expectedText), true);
+            if (typeof text !== 'string' || !text.trim()) throw new PlayHistoryError('invalid_history', '回复正文不能为空。');
+            if (findJob(resultId) && !findJob(resultId).closed) throw new PlaygroundError('busy', '这条回复正在生成或保存，请结束后再编辑。');
+            const round = session.currentRound(roundId);
+            session.edit(roundId, round?.initialAssistantId, { text, resultId, expectedText }, { select: round?.initialIsLast });
+            return session.currentRound(roundId);
         },
         async removePrompt(roundId, expectedText) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             if (hasRoundJob(roundId)) {
                 throw new PlaygroundError('busy', '这轮回复正在生成或尚未保存，请结束并保存后再删除。');
             }
-            const round = await historyAction('删除用户消息', () => history.removePrompt(roundId, expectedText), true);
-            return round && withLiveResults(round);
+            const round = await session.mutate(roundId, () => historyAction('删除用户消息', () => history.removePrompt(roundId, expectedText), true));
+            return round;
         },
         async removeReply(roundId, expectedResults) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             if (hasRoundJob(roundId)) {
                 throw new PlaygroundError('busy', '这条回复正在生成或尚未保存，请结束并保存后再删除。');
             }
-            return historyAction('删除 AI 消息及全部版本', () => history.removeReply(roundId, expectedResults), true);
+            return session.mutate(roundId, () => historyAction('删除 AI 消息及全部版本', () => history.removeReply(roundId, expectedResults), true));
         },
-        async getRound(roundId) {
-            const round = await historyAction('读取演出记录', () => history.getRound(roundId));
-            return withLiveResults(round);
-        },
+        getRound: id => historyAction('读取演出记录', () => session.getRound(id)),
         async createRoundReader() {
-            const read = await historyAction('读取演出记录', () => history.createRoundReader());
-            return async id => withLiveResults(await historyAction('读取演出记录', () => read(id)));
+            const read = await session.createRoundReader();
+            return id => historyAction('读取演出记录', () => read(id));
         },
     };
 }

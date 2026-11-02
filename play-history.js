@@ -96,7 +96,7 @@ export function playCurrentMessages(chat) {
 
 // Existing playground APIs expose only the original pair, derived from the
 // same chat. This is a view of the data, never a second saved transcript.
-function startRound(chat) {
+export function playStartRound(chat) {
     const messages = chat.startMessageIds.map(id => chat.messages.find(message => message.id === id)).filter(Boolean);
     return { format: 1, id: chat.id, characterId: chat.characterId, createdAt: chat.createdAt,
         origin: chat.origin, prompt: messages.find(message => message.role === 'user')?.text ?? null,
@@ -108,6 +108,72 @@ function startRound(chat) {
         initialUserHidden: !!messages.find(message => message.role === 'user')?.hidden,
         initialAssistantHidden: !!messages.find(message => message.role === 'assistant')?.hidden,
         initialIsLast: !messages.some(message => message.role === 'assistant') || chat.messages.at(-1)?.id === messages.find(message => message.role === 'assistant')?.id };
+}
+
+const startRound = playStartRound;
+
+export function preparePlayGeneration(value, input) {
+    const chat = clone(value);
+    const context = readPlayContext(input.context);
+    const result = { id: input.resultId, startedAt: input.startedAt, finishedAt: null,
+        status: 'unfinished', text: '', context, bodyRevision: input.resultBodyRevision };
+    const existing = chat.messages.find(message => message.results?.some(result => result.id === input.resultId));
+    if (existing && !input.continueResultId) {
+        const saved = existing.results.find(result => result.id === input.resultId);
+        const user = chat.messages.find(message => message.id === input.userMessageId);
+        if (saved.startedAt !== input.startedAt || JSON.stringify(saved.context) !== JSON.stringify(context)
+            || input.operation === 'send' && (user?.text !== input.prompt || existing.id !== input.assistantMessageId)) {
+            throw new PlayHistoryError('chat_conflict', '当前回复版本已改变，请重新读取后再操作。');
+        }
+        return chat;
+    }
+    let assistant;
+    if (input.operation === 'send') {
+        assert(isText(input.prompt), '请先输入消息');
+        if (chat.messages.some(message => playMessageIsPending(message))) {
+            throw new PlayHistoryError('chat_busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
+        }
+        const user = { id: input.userMessageId, role: 'user', text: input.prompt, origin: readPlayOrigin(input.origin),
+            createdAt: input.startedAt, bodyRevision: input.userBodyRevision, userIdentity: playUserIdentity(context) };
+        assistant = { id: input.assistantMessageId, role: 'assistant', createdAt: input.startedAt,
+            results: [result], selectedResultId: result.id };
+        chat.messages.push(user, assistant);
+        if (!chat.startMessageIds.some(id => chat.messages.some(message => message.id === id))) {
+            chat.startMessageIds = [user.id, assistant.id];
+        }
+    } else {
+        assistant = input.chatMode ? chat.messages.at(-1)
+            : chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.role === 'assistant');
+        if (assistant && (assistant !== chat.messages.at(-1) || input.messageId && assistant.id !== input.messageId)) {
+            throw new PlayHistoryError('message_not_last', '只能对聊天末尾的 AI 楼层操作，请先从较早楼层创建分支。');
+        }
+        if (!chat.messages.some(message => chat.startMessageIds.includes(message.id) && message.role === 'user')) {
+            throw new PlayHistoryError('prompt_missing', '这条用户消息已删除，无法使用原提示词生成。');
+        }
+        if (!assistant) {
+            assistant = { id: input.assistantMessageId, role: 'assistant', createdAt: input.startedAt, results: [], selectedResultId: result.id };
+            chat.messages.push(assistant);
+            chat.startMessageIds = chat.startMessageIds.filter(id => chat.messages.some(message => message.id === id));
+            chat.startMessageIds.push(assistant.id);
+        }
+        const targetId = input.continueResultId ?? input.replaceResultId;
+        const target = assistant.results.find(result => result.id === (targetId ?? assistant.selectedResultId));
+        if (input.chatMode && targetId && targetId !== assistant.selectedResultId) {
+            throw new PlayHistoryError('chat_conflict', '当前回复版本已改变，请重新读取后再操作。');
+        }
+        if (input.operation === 'continue') {
+            if (!target) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+            if (assistant.hidden) throw new PlayHistoryError('message_hidden', '请先显示此楼层再续写。');
+            assert(isText(target.text), '这份回复没有正文，无法续写。');
+            if (input.expectedText !== undefined && target.text !== input.expectedText) throw new PlayHistoryError('edit_conflict', '这条回复已在其他窗口修改，请重新读取后再续写。');
+            Object.assign(target, { status: 'unfinished', finishedAt: null, context }); delete target.error;
+        } else {
+            if (input.operation === 'regenerate') replaceResult(assistant.results, input.replaceResultId, result);
+            else { assert(input.operation === 'another'); assistant.results.push(result); }
+            assistant.selectedResultId = result.id;
+        }
+    }
+    return chat;
 }
 
 function readFavoriteSource(value) {
@@ -290,8 +356,12 @@ function randomId() {
 }
 
 /** readFile returns null only for HTTP 404. Other read failures must throw. */
-export function createPlayHistory({ readFile, writeFile, removeFile, withLock = run => run(), uuid = randomId, onWarning = () => {} }) {
+export function createPlayHistory({ readFile, writeFile, removeFile, enqueueCleanup, withLock = run => run(), uuid = randomId, onWarning = () => {} }) {
     let queue = Promise.resolve();
+    let retired = [];
+    function retire(names, operation) {
+        if (enqueueCleanup) retired.push({ names, operation });
+    }
     const bodyCache = new Map();
     let cachedBodyCharacters = 0;
     function dropCachedBody(name) {
@@ -345,7 +415,10 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 // from writing. Once a commit starts, let it finish completely.
                 signal?.throwIfAborted(); stopWaiting();
                 return run();
-            }, signal);
+            }, signal).finally(() => {
+                const tasks = retired; retired = [];
+                for (const task of tasks) enqueueCleanup(task.names, task.operation);
+            });
         });
         queue = next;
         if (!signal) return next;
@@ -365,26 +438,36 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             throw new PlayHistoryError('invalid_history', '演出记录目录无法解析，未覆盖原文件', { cause: error });
         }
     }
-    async function readRoundFromRow(row, retry = true) {
+    async function readRoundFromRow(row, retry = true, withChat = false) {
         if (!row) throw new PlayHistoryError('round_missing', '这轮演出记录已不存在');
         const text = await readFile(playRoundFile(row.id, row.revision));
         // Another tab may have committed and cleaned up this revision since
         // our directory read. Retry only when its directory entry has changed.
         if (text === null && retry) {
             const current = (await index()).rounds.find(item => item.id === row.id);
-            if (current && current.revision !== row.revision) return readRoundFromRow(current, false);
+            if (current && current.revision !== row.revision) return readRoundFromRow(current, false, withChat);
         }
         if (text === null) throw new PlayHistoryError('round_missing', '这轮演出记录的正文文件缺失，未覆盖原文件');
         let round;
         try {
             const value = JSON.parse(text);
             if (value.format === 2) {
-                round = startRound(await expandChat(readPlayChat(value, { bodyStored: true }), true));
+                const metadata = readPlayChat(value, { bodyStored: true });
+                const expanded = await expandChat(metadata, true);
+                round = startRound(expanded);
+                if (withChat) round.chat = { ...metadata, revision: row.revision, messages: metadata.messages.map(message =>
+                    expanded.messages.find(loaded => loaded.id === message.id) ?? message) };
                 const initial = value.messages.find(message => value.startMessageIds.includes(message.id) && message.role === 'assistant');
                 round.initialIsLast = !initial || value.messages.at(-1)?.id === initial.id;
             } else round = readPlayRound(value);
         }
-        catch (cause) { throw new PlayHistoryError('invalid_history', '这轮演出记录无法解析，未覆盖原文件', { cause }); }
+        catch (cause) {
+            if (retry && cause.code === 'body_missing') {
+                const current = (await index()).rounds.find(item => item.id === row.id);
+                if (current && current.revision !== row.revision) return readRoundFromRow(current, false, withChat);
+            }
+            throw new PlayHistoryError('invalid_history', '这轮演出记录无法解析，未覆盖原文件', { cause });
+        }
         assert(round.id === row.id && round.characterId === row.characterId && round.createdAt === row.createdAt);
         return round;
     }
@@ -538,7 +621,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         await writeIndex(directory);
         // Cleanup is not part of the save transaction. Never remove a revision
         // whose directory commit was not acknowledged or verified.
-        if (previous && removeFile) {
+        if (previous && enqueueCleanup) retire([fileName(previous.id, previous.revision)], '清理演出记录的旧文件');
+        else if (previous && removeFile) {
             try { await removeFile(fileName(previous.id, previous.revision)); }
             catch (error) { onWarning('清理演出记录的旧文件', error); }
         }
@@ -682,12 +766,21 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 lastPlayedAt: playedAt && Date.parse(playedAt) > Date.parse(previous?.lastPlayedAt ?? '')
                     ? playedAt : previous?.lastPlayedAt ?? playedAt ?? chat.createdAt });
         const retained = new Set(bodyRefs(document));
-        if (removeFile) for (const name of existing) {
+        if (enqueueCleanup) retire([...existing].filter(name => !retained.has(name)), '清理聊天的旧正文文件');
+        else if (removeFile) for (const name of existing) {
             if (retained.has(name)) continue;
             try { await removeFile(name); dropCachedBody(name); }
             catch (error) { onWarning('清理聊天的旧正文文件', error); }
         }
         return { ...clone(chat), revision: row.revision };
+    }
+
+    function cachedRound(chat) {
+        const value = clone(chat);
+        for (const message of value.messages) for (const target of message.role === 'user' ? [message] : message.results) {
+            if (target.text === undefined) target.text = bodyCache.get(playBodyFile(target.id, target.bodyRevision));
+        }
+        return startRound(value);
     }
 
     function assertChatRevision(chat, revision) {
@@ -711,59 +804,47 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             else if (playSelection && !chat.startMessageIds.includes(chat.messages.at(-1)?.id)) {
                 throw new PlayHistoryError('message_not_last', '这层已有后续对话，请先创建分支再切换版本。');
             }
-            const before = JSON.stringify(readPlayChat(chat, { bodyStored }));
+            const before = readPlayChat(chat, { bodyStored });
             await run(chat);
-            if (JSON.stringify(readPlayChat(chat, { bodyStored })) === before) return chat;
+            const after = readPlayChat(chat, { bodyStored });
+            for (const message of after.messages) for (const target of message.role === 'user' ? [message] : message.results) {
+                const previous = before.messages.find(item => item.id === message.id);
+                const source = message.role === 'user' ? previous : previous?.results.find(item => item.id === target.id);
+                if (source?.text === undefined && source?.bodyRevision === target.bodyRevision) delete target.text;
+            }
+            if (JSON.stringify(after) === JSON.stringify(before)) return chat;
             return commitChat(directory, chat);
         });
     }
 
     function beginChat(input, signal) {
-        assert(isId(input.roundId) && isId(input.resultId) && isDate(input.startedAt));
-        if (input.operation === 'send') assert(isText(input.prompt), '请先输入消息');
         return serialize(async () => {
             const directory = await index();
-            const chat = await readChatFromRow(directory.rounds.find(row => row.id === input.roundId));
-            const owner = directory.characters.find(character => character.id === chat.characterId);
-            if (!owner?.avatar || owner.avatar !== input.character?.avatar || (input.characterId && input.characterId !== owner.id)) {
-                throw new PlayHistoryError('other_character', '这条聊天不属于本次选择的角色，请重新选择角色。');
-            }
-            assertChatRevision(chat, input.expectedRevision); assertChatIdle(chat);
-            const result = { id: input.resultId, startedAt: input.startedAt, finishedAt: null,
-                status: 'unfinished', text: '', context: readPlayContext(input.context), bodyRevision: uuid() };
-            let assistant;
-            if (input.operation === 'send') {
-                const user = { id: uuid(), role: 'user', text: input.prompt, origin: readPlayOrigin(input.origin),
-                    createdAt: input.startedAt, bodyRevision: uuid(), userIdentity: playUserIdentity(input.context) };
-                assistant = { id: uuid(), role: 'assistant', createdAt: input.startedAt,
-                    results: [result], selectedResultId: result.id };
-                chat.messages.push(user, assistant);
-                if (!chat.startMessageIds.some(id => chat.messages.some(message => message.id === id))) {
-                    chat.startMessageIds = [user.id, assistant.id];
+            let owner = directory.characters.find(character => character.avatar === input.character?.avatar);
+            let chat;
+            if (input.roundId) {
+                chat = await readChatFromRow(directory.rounds.find(row => row.id === input.roundId));
+                if (!owner || owner.id !== chat.characterId || input.characterId && owner.id !== input.characterId) {
+                    throw new PlayHistoryError('other_character', '这条聊天不属于本次选择的角色，请重新选择角色。');
                 }
+                if (!chat.messages.some(message => message.results?.some(result => result.id === input.resultId)
+                    && !input.continueResultId)) assertChatRevision(chat, input.expectedRevision);
             } else {
-                assistant = chat.messages.at(-1);
-                if (assistant?.role !== 'assistant' || assistant.id !== input.messageId) {
-                    throw new PlayHistoryError('message_not_last', '只能对聊天末尾的 AI 楼层操作，请先从较早楼层创建分支。');
+                if (input.characterId && owner?.id !== input.characterId) {
+                    throw new PlayHistoryError('other_character', '这张角色卡与选择的演出记录不对应，请重新选择角色。');
                 }
-                const target = assistant.results.find(item => item.id === assistant.selectedResultId);
-                if (target.id !== (input.continueResultId ?? input.replaceResultId ?? target.id)) {
-                    throw new PlayHistoryError('chat_conflict', '当前回复版本已改变，请重新读取后再操作。');
+                if (!owner) {
+                    owner = { id: input.ownerId, avatar: input.character.avatar, name: input.character.name };
+                    directory.characters.push(owner);
                 }
-                if (input.operation === 'continue') {
-                    if (assistant.hidden) throw new PlayHistoryError('message_hidden', '请先显示此楼层再续写。');
-                    assert(isText(target.text), '这份回复没有正文，无法续写。');
-                    if (target.text !== input.expectedText) throw new PlayHistoryError('edit_conflict', '这条回复已在其他窗口修改，请重新读取后再续写。');
-                    Object.assign(target, { status: 'unfinished', finishedAt: null, context: result.context });
-                    delete target.error;
-                } else {
-                    if (input.operation === 'regenerate') replaceResult(assistant.results, input.replaceResultId, result);
-                    else { assert(input.operation === 'another'); assistant.results.push(result); }
-                    assistant.selectedResultId = result.id;
-                }
+                const row = directory.rounds.find(row => row.id === input.newRoundId);
+                chat = row ? await readChatFromRow(row) : { format: 2, id: input.newRoundId, characterId: owner.id,
+                    createdAt: input.startedAt, name: '', origin: readPlayOrigin(input.origin), source: null, startMessageIds: [], messages: [] };
             }
             owner.name = input.character.name;
-            return commitChat(directory, chat, input.startedAt);
+            const next = preparePlayGeneration(chat, input);
+            if (JSON.stringify(next) === JSON.stringify(chat)) return chat;
+            return commitChat(directory, next, input.startedAt);
         }, signal);
     }
 
@@ -786,11 +867,20 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
         },
         async getChat(id, { selectedResultId } = {}) {
             assert(isId(id));
-            const current = (await index()).rounds.find(item => item.id === id);
-            if (current?.kind === 'chat') return readChatFromRow(current);
+            const row = (await index()).rounds.find(item => item.id === id);
+            const chat = await readChatFromRow(row);
+            if (row.kind !== 'chat') {
+                const assistant = chat.messages.find(message => message.role === 'assistant');
+                if (assistant?.results.some(result => result.id === selectedResultId)) assistant.selectedResultId = selectedResultId;
+                chat.legacy = true;
+            }
+            return chat;
+        },
+        ensureChat(id, { selectedResultId } = {}) {
+            assert(isId(id));
             return serialize(async () => {
                 const directory = await index(), row = directory.rounds.find(item => item.id === id);
-                const chat = await readChatFromRow(row);
+                const chat = await readChatFromRow(row, true, { bodyStored: row?.kind === 'chat' });
                 if (row.kind === 'chat') return chat;
                 const assistant = chat.messages.find(message => message.role === 'assistant');
                 if (assistant?.results.some(result => result.id === selectedResultId)) assistant.selectedResultId = selectedResultId;
@@ -832,7 +922,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     source: { chatId: id, messageId }, startMessageIds: source.startMessageIds.map(id => ids.get(id)).filter(Boolean), messages }, now);
             });
         },
-        async setUserIdentity(id, messageId, resultId, identity) {
+        async setUserIdentity(id, messageId, resultId, identity, { withChat = false } = {}) {
             assert(isId(messageId) && isId(resultId));
             const userIdentity = readUserIdentity(identity);
             assert(userIdentity);
@@ -844,7 +934,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 assert(result.status === 'unfinished' && result.startedAt === message.createdAt);
                 message.userIdentity = userIdentity;
             }, { allowPending: true });
-            return chat.messages.find(message => message.id === messageId)?.userIdentity ?? null;
+            const confirmed = chat.messages.find(message => message.id === messageId)?.userIdentity ?? null;
+            return withChat ? { identity: confirmed, chat } : confirmed;
         },
         setMessageVersion(id, messageId, resultId, expectedResultId, { playSelection = false } = {}) {
             assert(isId(messageId) && isId(resultId));
@@ -946,13 +1037,13 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
             return directory.rounds.filter(round => round.characterId === characterId && !round.branched && round.hasStartPair !== false)
                 .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
         },
-        async getRound(id) {
+        async getRound(id, { withChat = false } = {}) {
             assert(isId(id));
-            return readRoundFromRow((await index()).rounds.find(round => round.id === id));
+            return readRoundFromRow((await index()).rounds.find(round => round.id === id), true, withChat);
         },
-        async createRoundReader() {
+        async createRoundReader({ withChat = false } = {}) {
             const directory = await index();
-            return id => readRoundFromRow(directory.rounds.find(row => row.id === id));
+            return id => readRoundFromRow(directory.rounds.find(row => row.id === id), true, withChat);
         },
         async listFavorites() {
             return (await index()).favorites.sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt) || b.id.localeCompare(a.id));
@@ -1070,70 +1161,21 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 }
             });
         },
-        begin({ roundId, replaceResultId, continueResultId, expectedText, characterId, character, prompt, origin = null, resultId, startedAt, context,
-            chatMode, operation, messageId, expectedRevision }, { signal } = {}) {
-            if (chatMode) return beginChat(clone({ roundId, replaceResultId, continueResultId, expectedText, characterId, character,
-                prompt, origin, resultId, startedAt, context, operation, messageId, expectedRevision }), signal);
-            // Copy caller-owned values before waiting for any other write.
-            const input = clone({ roundId, replaceResultId, continueResultId, expectedText, characterId, character, prompt, origin, resultId, startedAt, context: readPlayContext(context) });
-            assert(isText(input.character?.avatar) && isText(input.character?.name));
-            assert(isId(input.resultId) && isDate(input.startedAt));
-            if (input.roundId !== undefined) assert(isId(input.roundId));
-            if (input.replaceResultId !== undefined) assert(isId(input.replaceResultId) && isId(input.roundId));
-            if (input.continueResultId !== undefined) assert(isId(input.continueResultId) && isId(input.roundId));
-            if (!input.roundId) assert(isText(input.prompt), '请先输入小剧场提示词');
-            return serialize(async () => {
-                const directory = await index();
-                let owner = directory.characters.find(item => item.avatar === input.character.avatar);
-                if (input.characterId && owner?.id !== input.characterId) {
-                    throw new PlayHistoryError('other_character', '这张角色卡与选择的演出记录不对应，请重新选择角色。');
-                }
-                let round;
-                if (input.roundId) {
-                    round = await readRoundFromRow(directory.rounds.find(item => item.id === input.roundId));
-                    if (directory.rounds.find(item => item.id === input.roundId)?.kind === 'chat') {
-                        const chat = await readChatFromRow(directory.rounds.find(item => item.id === input.roundId));
-                        const initial = chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.role === 'assistant');
-                        if (initial && chat.messages.at(-1) !== initial) throw new PlayHistoryError('message_not_last', '这层已有后续对话，请先创建分支再生成或续写。');
-                    }
-                    if (!owner || round.characterId !== owner.id) {
-                        throw new PlayHistoryError('other_character', '这轮记录不属于本次选择的角色，请重新选择角色。');
-                    }
-                    if (round.prompt === null) throw new PlayHistoryError('prompt_missing', '这条用户消息已删除，无法使用原提示词生成。');
-                } else {
-                    if (!owner) {
-                        owner = { id: uuid(), avatar: input.character.avatar, name: input.character.name };
-                        directory.characters.push(owner);
-                    }
-                    round = { format: 1, id: uuid(), characterId: owner.id, prompt: input.prompt,
-                        origin: readPlayOrigin(input.origin), createdAt: input.startedAt, results: [], userIdentity: playUserIdentity(input.context) };
-                }
-                owner.name = input.character.name;
-                if (input.continueResultId) {
-                    if (round.initialAssistantHidden) throw new PlayHistoryError('message_hidden', '请先显示此楼层再续写。');
-                    const target = round.results.findIndex(item => item.id === input.continueResultId);
-                    if (target < 0) throw new PlayHistoryError('result_missing', '这份结果已在其他窗口删除或替换，请重新打开记录后再试。');
-                    const existing = round.results[target];
-                    if (!existing.text.trim()) throw new PlayHistoryError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
-                    if (input.expectedText !== undefined && existing.text !== input.expectedText) {
-                        throw new PlayHistoryError('edit_conflict', '这份结果已在其他窗口修改，请重新读取后再续写。');
-                    }
-                    round.results[target] = { ...existing, status: 'unfinished', finishedAt: null, context: input.context };
-                    delete round.results[target].error;
-                    return commitRound(directory, round);
-                }
-                assert(!round.results.some(result => result.id === input.resultId), '生成编号重复，请重新发送');
-                const result = { id: input.resultId, startedAt: input.startedAt, finishedAt: null,
-                    status: 'unfinished', text: '', context: input.context };
-                if (input.replaceResultId) {
-                    // Replacement keeps the slot but uses a fresh generation ID,
-                    // so a late save from the old request cannot overwrite it.
-                    replaceResult(round.results, input.replaceResultId, result);
-                } else round.results.push(result);
-                return commitRound(directory, round);
-            }, signal);
+        begin(input, { signal } = {}) {
+            const value = clone(input);
+            assert(isText(value.character?.avatar) && isText(value.character?.name));
+            assert(isId(value.resultId) && isDate(value.startedAt));
+            value.context = readPlayContext(value.context);
+            value.operation ??= value.continueResultId ? 'continue' : value.replaceResultId ? 'regenerate' : value.roundId ? 'another' : 'send';
+            value.newRoundId ??= uuid(); value.ownerId ??= uuid();
+            value.userMessageId ??= uuid(); value.assistantMessageId ??= uuid();
+            value.resultBodyRevision ??= uuid(); value.userBodyRevision ??= uuid();
+            for (const key of ['newRoundId', 'ownerId', 'userMessageId', 'assistantMessageId', 'resultBodyRevision', 'userBodyRevision']) assert(isId(value[key]));
+            if (value.roundId !== undefined) assert(isId(value.roundId));
+            const begin = value.roundId ? api.ensureChat(value.roundId).then(() => beginChat(value, signal)) : beginChat(value, signal);
+            return begin.then(chat => value.returnChat || value.chatMode ? chat : startRound(chat));
         },
-        saveResult(roundId, resultId, update) {
+        saveResult(roundId, resultId, update, { withChat = false } = {}) {
             assert(isId(roundId) && isId(resultId));
             const patch = clone(update);
             return serialize(async () => {
@@ -1150,9 +1192,14 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     const message = chat.messages.find(message => message.results?.some(result => result.id === resultId));
                     const result = message?.results.find(result => result.id === resultId);
                     if (!result) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
-                    const savedView = async saved => document.startMessageIds.includes(message.id)
-                        ? readRoundFromRow(directory.rounds.find(item => item.id === roundId))
-                        : { id: roundId, characterId: chat.characterId, savedResult: readResult(saved) };
+                    const savedView = saved => {
+                        for (const message of chat.messages) for (const item of message.role === 'user' ? [message] : message.results) {
+                            if (item.text === undefined) item.text = bodyCache.get(playBodyFile(item.id, item.bodyRevision));
+                        }
+                        const view = document.startMessageIds.includes(message.id) ? cachedRound(chat)
+                            : { id: roundId, characterId: chat.characterId, savedResult: readResult(saved) };
+                        return withChat ? { ...view, chat: clone(chat), revision: chat.revision ?? row.revision } : view;
+                    };
                     result.text = await readBody(result.id, result.bodyRevision);
                     const next = { ...readResult({ ...result, ...patch, id: result.id, startedAt: result.startedAt,
                         context: patch.context ? { ...result.context, ...readPlayContext(patch.context) } : result.context }), bodyRevision: result.bodyRevision };
@@ -1166,7 +1213,8 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                     if (JSON.stringify(readResult(next)) === JSON.stringify(readResult(result))) return savedView(result);
                     if (next.text !== result.text) next.bodyRevision = uuid();
                     message.results[message.results.indexOf(result)] = next;
-                    await commitChat(directory, chat);
+                    const committed = await commitChat(directory, chat);
+                    chat.revision = committed.revision;
                     return savedView(next);
                 }
                 const round = await readRoundFromRow(row);
@@ -1187,33 +1235,17 @@ export function createPlayHistory({ readFile, writeFile, removeFile, withLock = 
                 return commitRound(directory, round);
             });
         },
-        editPrompt(roundId, text, expectedText) {
-            assert(isId(roundId) && typeof expectedText === 'string');
-            assert(isText(text), '提示词不能为空。');
-            return serialize(async () => {
-                const directory = await index();
-                const round = await readRoundFromRow(directory.rounds.find(item => item.id === roundId));
-                if (round.prompt === null) throw new PlayHistoryError('prompt_missing', '这条用户消息已删除。请保留当前草稿，重新打开记录后核对。');
-                if (round.prompt === text) return clone(round);
-                if (round.prompt !== expectedText) throw new PlayHistoryError('edit_conflict', '这条用户消息已在其他窗口修改。请保留当前草稿，重新打开编辑框后核对内容。');
-                round.prompt = text;
-                return commitRound(directory, round);
-            });
+        async editPrompt(roundId, text, expectedText) {
+            const chat = await api.ensureChat(roundId);
+            const user = chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.role === 'user');
+            if (!user) throw new PlayHistoryError('prompt_missing', '这条用户消息已删除。请保留当前草稿，重新打开记录后核对。');
+            return cachedRound(await api.editMessage(roundId, user.id, { text, expectedText }));
         },
-        editResult(roundId, resultId, text, expectedText) {
-            assert(isId(roundId) && isId(resultId) && typeof expectedText === 'string');
-            assert(isText(text), '回复正文不能为空。');
-            return serialize(async () => {
-                const directory = await index();
-                const round = await readRoundFromRow(directory.rounds.find(item => item.id === roundId));
-                const result = round.results.find(item => item.id === resultId);
-                if (!result) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
-                if (result.status === 'unfinished') throw new PlayHistoryError('result_unfinished', '这条回复尚未完成保存，请先结束生成并保存后再编辑。');
-                if (result.text === text) return clone(round);
-                if (result.text !== expectedText) throw new PlayHistoryError('edit_conflict', '这条回复已在其他窗口修改。请保留当前草稿，重新打开编辑框后核对内容。');
-                result.text = text;
-                return commitRound(directory, round);
-            });
+        async editResult(roundId, resultId, text, expectedText) {
+            const chat = await api.ensureChat(roundId);
+            const assistant = chat.messages.find(message => chat.startMessageIds.includes(message.id) && message.results?.some(result => result.id === resultId));
+            if (!assistant) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+            return cachedRound(await api.editMessage(roundId, assistant.id, { text, resultId, expectedText }));
         },
         removePrompt(roundId, expectedText) {
             assert(isId(roundId) && typeof expectedText === 'string');

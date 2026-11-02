@@ -168,7 +168,9 @@ test('窗口读取遇到旧正文已清理时重读新修订，旧对子沿用�
     assert.equal(window.chat.messages[0].text, '另一窗口刚修改的正文');
     const round = await f.store.getRound(chat.id);
     useLegacyRound(f, round);
-    const legacy = await f.createStore().getChatWindow(chat.id, { selectedResultId: round.results[1].id });
+    const legacyStore = f.createStore();
+    await legacyStore.ensureChat(chat.id, { selectedResultId: round.results[1].id });
+    const legacy = await legacyStore.getChatWindow(chat.id);
     assert.equal(legacy.chat.messages[1].selectedResultId, round.results[1].id);
     assert.equal(legacy.chat.messages[1].results.length, 2);
     assert.equal(f.directory().rounds[0].kind, 'chat');
@@ -177,7 +179,11 @@ test('窗口读取遇到旧正文已清理时重读新修订，旧对子沿用�
 test('旧对子在存储入口转换，保留编号、时间、全部版本和原选择；目录不拆版本', async () => {
     const f = memoryFiles(), seeded = await seed(f), round = await f.store.getRound(seeded.id);
     useLegacyRound(f, round);
-    const chat = await f.store.getChat(round.id, { selectedResultId: round.results[0].id });
+    const before = f.writes.length;
+    await f.store.getChat(round.id, { selectedResultId: round.results[0].id });
+    assert.equal(f.writes.length, before);
+    await f.store.ensureChat(round.id, { selectedResultId: round.results[0].id });
+    const chat = await f.store.getChat(round.id);
     assert.equal(chat.format, 2); assert.equal(chat.messages.length, 2);
     assert.equal(chat.messages[1].results.length, 2);
     assert.equal(chat.messages[1].selectedResultId, chat.messages[1].results[0].id);
@@ -331,10 +337,11 @@ test('迁移和编辑提交失败保留旧指向；另一窗口的变化不会�
     useLegacyRound(f, saved);
     const oldIndex = f.files.get(PLAY_HISTORY_INDEX);
     f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
-    await assert.rejects(f.store.getChat(round.id), /模拟保存失败/);
+    await assert.rejects(f.store.ensureChat(round.id), /模拟保存失败/);
     assert.equal(f.files.get(PLAY_HISTORY_INDEX), oldIndex);
     assert.equal((await f.store.getRound(round.id)).results[0].text, '原文');
     f.io.beforeWrite = null;
+    await f.store.ensureChat(round.id);
     const chat = await f.store.getChat(round.id);
     await f.createStore().renameChat(chat.id, '另一窗口', chat.revision);
     const current = await f.store.getChat(chat.id);

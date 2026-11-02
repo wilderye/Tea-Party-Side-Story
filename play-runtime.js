@@ -4,6 +4,7 @@ import { createNativePlayPreparer } from './play-prompt.js';
 import { readPlaySettings, readPlayContinuationSettings, readPlayRetrySettings } from './play-settings.js';
 import { createPlayDisplay } from './play-processing.js';
 import { createPlayChatFavorites } from './play-chat-favorites.js';
+import { createPlaySession } from './play-session.js';
 
 export function readPlayTarget(context) {
     if (context.groupId !== undefined && context.groupId !== null && context.groupId !== '') {
@@ -65,9 +66,14 @@ export function capturePlayEnvironment(context, settings, requested = {}) {
 
 /** Wire native prompt preparation, independent storage and chat identity. */
 export function createPlayRuntime(ctx, settings, history, { prepareRequest = createNativePlayPreparer(ctx), loadRegex,
-    onError = () => {}, diagnostics } = {}) {
+    onError = () => {}, onSaveError = onError, diagnostics } = {}) {
     history ??= createBrowserPlayHistory(ctx, diagnostics);
-    const playground = createPlayground({ history, prepareRequest, diagnostics, enabled: () => settings.enabled !== false,
+    let playground;
+    const session = createPlaySession(history, {
+        onSaveError: error => { diagnostics?.error('保存小剧场内容', error); onSaveError(error.message); },
+        onChange: event => playground?.publish(event),
+    });
+    playground = createPlayground({ history, session, prepareRequest, diagnostics, enabled: () => settings.enabled !== false,
         uuid: () => ctx().uuidv4(),
         captureEnvironment: target => {
             const environment = capturePlayEnvironment(ctx(), settings, target);
@@ -103,7 +109,12 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         return createPlayDisplayRegex(context, modules, character, prepareRequest.capture(character));
     });
     const display = createPlayDisplay(ctx, settings, loadDisplayRegex, diagnostics);
-    const chatFavorites = createPlayChatFavorites(history, display);
+    const chatFavorites = createPlayChatFavorites({ ...history,
+        getChat: id => session.getChat(id), getChatMetadata: id => session.getChatMetadata(id) }, display);
+    globalThis.addEventListener?.('beforeunload', event => {
+        if (!session.hasUnsaved() && !playground.getStates().length) return;
+        event.preventDefault(); event.returnValue = '';
+    });
     function legacySelection(id, options) {
         if (!options?.selectedResultId) {
             try {
@@ -121,23 +132,28 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
         getChatWindow(id, options) {
             return playground.getChatWindow(id, legacySelection(id, options));
         },
+        ensureChat: (id, options) => playground.ensureChat(id, legacySelection(id, options)),
         getChatPreview: (id, options) => playground.getChatPreview(id, legacySelection(id, options)),
         getChatSearch: (id, options) => playground.getChatSearch(id, legacySelection(id, options)),
         async createChatDirectoryReader() {
-            const read = await history.createChatDirectoryReader();
+            const read = await session.createChatDirectoryReader();
             return (id, options) => read(id, legacySelection(id, options));
         },
         getFavorite: id => chatFavorites.read(id),
         getFavoriteWindow: (id, options) => chatFavorites.read(id, options),
-        getChatMetadata: id => history.getChatMetadata(id),
+        getChatMetadata: id => session.getChatMetadata(id),
         async syncFavorite(id, options) {
-            try { return await chatFavorites.sync(id, options); }
-            catch (error) { diagnostics?.error('更新聊天收藏', error); throw error; }
+            try {
+                const favorite = await history.getFavoriteWindow(id, { metadata: true });
+                if (favorite.source?.type === 'chat' && !favorite.frozen) await session.flush(favorite.source.chatId);
+                return await chatFavorites.sync(id, options);
+            }
+            catch (error) { if (!session.isSaveError(error)) diagnostics?.error('更新聊天收藏', error); throw error; }
         },
-        favoriteChat: id => chatFavorites.add(id),
+        async favoriteChat(id) { await session.flush(id); return chatFavorites.add(id); },
         deleteChat: (id, revision) => {
             if (!playground.availability({ chatId: id }).available) throw new PlaygroundError('busy', '请结束并保存这条聊天后再删除。');
-            return chatFavorites.removeChat(id, revision);
+            return session.mutate(id, revision => chatFavorites.removeChat(id, revision), revision);
         },
         addManualFavorite({ characterAvatar, title, text, firstLine }) {
             const card = ctx().characters?.find(character => character.avatar === characterAvatar);

@@ -397,9 +397,11 @@ async function verify(page, url, viewport) {
     await input.fill('本分支保存失败检查');await button('发送消息').click();
     await page.waitForFunction(()=>runtime.getStates().some(job=>job.phase==='generating'));
     await page.evaluate(()=>{window.failSave=true;emitGeneration('保存失败仍保留的正文');finishGeneration('保存失败仍保留的正文');});
-    await branch.getByRole('button',{name:'重试保存',exact:true}).waitFor();
-    assert.equal(await button('发送消息').isDisabled(),true,'保存失败时本分支不接受新发送');
-    await page.evaluate(()=>window.failSave=false);await branch.getByRole('button',{name:'重试保存',exact:true}).click();
+    await branch.getByText('保存失败仍保留的正文',{exact:true}).waitFor();
+    await page.waitForFunction(()=>runtime.getStates().length===0);
+    assert.equal(await branch.getByRole('button',{name:'重试保存',exact:true}).count(),0);
+    await page.evaluate(()=>window.failSave=false);
+    await page.evaluate(id=>runtime.session.flush(id),longId);
     await page.waitForFunction(()=>runtime.getStates().length===0);
     await branch.getByText('保存失败仍保留的正文',{exact:true}).waitFor();
     await page.evaluate(async id=>{
@@ -509,12 +511,15 @@ async function verifyRequestedControls(page, url, viewport) {
     assert.equal(await ai.getByRole('textbox', { name: '回复原文', exact: true }).inputValue(), '尚未保存的回复修改');
     await page.evaluate(() => { window.failSave = true; });
     await ai.getByRole('button', { name: '保存', exact: true }).click();
-    await ai.getByText(/模拟保存失败/).waitFor();
+    await ai.getByText('尚未保存的回复修改', { exact: true }).waitFor();
+    await page.waitForFunction(()=>runtime.session.hasUnsaved());
     await button('历史记录').click(); await directory.waitFor(); await row.locator('.play-history-open').click();
-    assert.equal(await ai.getByRole('textbox', { name: '回复原文', exact: true }).inputValue(), '尚未保存的回复修改');
+    assert.equal(await ai.getByText('尚未保存的回复修改', { exact: true }).count(), 1);
     await page.evaluate(() => { window.failSave = false; });
-    await ai.getByRole('button', { name: '取消', exact: true }).click();
-    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[1].results[0].text, aiOriginal);
+    await ai.getByRole('button', { name: '编辑回复原文', exact: true }).click();
+    await ai.getByRole('button', { name: '保存', exact: true }).click();
+    await page.evaluate(id=>runtime.session.flush(id),a);
+    assert.equal((await page.evaluate(id => runtime.getChat(id), a)).messages[1].results[0].text, '尚未保存的回复修改');
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '删除', exact: true }).click();
     assert.equal(await branch.locator('.play-delete-selected').count(), 0);

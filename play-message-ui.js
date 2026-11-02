@@ -5,7 +5,7 @@ import { restorePlayElementPosition } from './play-reading-position.js';
 
 const activePhases = new Set(['preparing', 'generating', 'retry-wait']);
 export const playResultStatusText = { preparing: '正在准备', generating: '正在生成', 'retry-wait': '等待自动重试',
-    saving: '正在保存', 'save-failed': '尚未保存', unfinished: '未完成', failed: '生成失败', stopped: '已停止' };
+    unfinished: '未完成', failed: '生成失败', stopped: '已停止' };
 
 let replyToolsId = 0, replyToolsDismissalBound = false;
 
@@ -189,16 +189,13 @@ export function createPlayResultMenu() {
 
 /** Keep notices in the reply body, using the existing playground behavior. */
 export function renderPlayReply(output, result, { displayText, job, error, anchor, editing = false, name = result.context?.characterName ?? '' }) {
-    const pendingSave = job?.resultId === result.id && (job.phase === 'save-failed' || job.unsaved && job.phase === 'saving');
-    const retryingSave = pendingSave && job.phase === 'saving';
     const retryMessage = job?.retry && activePhases.has(job.phase)
         ? job.phase === 'retry-wait'
             ? `遇到${job.retry.reason === 'rateLimit' ? ' 429' : '空内容'}，${job.retry.remainingSeconds} 秒后进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
             : `正在进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
         : '';
-    const errorMessage = retryingSave ? '正在保存…' : pendingSave ? result.error?.message || '回复尚未保存，请重试。'
-        : ['failed', 'save-failed'].includes(result.status) ? result.error?.message || '' : '';
-    const renderHtml = ['saving', 'complete', 'stopped', 'failed', 'save-failed'].includes(result.status);
+    const errorMessage = result.status === 'failed' ? result.error?.message || '' : '';
+    const renderHtml = ['complete', 'stopped', 'failed'].includes(result.status);
     const signature = result.text ? JSON.stringify([renderHtml, name, displayText]) : `${result.status}:${!!errorMessage}:${!!retryMessage}`;
     if (!editing && output.signature !== signature) {
         if (result.text) {
@@ -216,8 +213,8 @@ export function renderPlayReply(output, result, { displayText, job, error, ancho
     }
     output.box.dataset.status = result.status;
     error.textContent = retryMessage || errorMessage; error.hidden = !(retryMessage || errorMessage) || editing;
-    error.setAttribute('role', retryingSave || retryMessage ? 'status' : 'alert');
-    error.classList.toggle('is-saving', !!(retryingSave || retryMessage)); error.dataset.readAnchor = `${anchor}/error`;
+    error.setAttribute('role', retryMessage ? 'status' : 'alert');
+    error.classList.toggle('is-saving', !!retryMessage); error.dataset.readAnchor = `${anchor}/error`;
     output.box.append(error);
 }
 

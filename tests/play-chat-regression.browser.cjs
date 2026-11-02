@@ -59,8 +59,8 @@ async function verifyLateReads(page, url) {
 
     // Returning to history must also invalidate an in-flight chat open.
     await page.evaluate(() => {
-        const original = runtime.getChat; let first = true;
-        runtime.getChat = async (...args) => {
+        const original = runtime.getChatWindow; let first = true;
+        runtime.getChatWindow = async (...args) => {
             if (first) { first = false; window.chatHeld = true; await new Promise(resolve => window.releaseChat = resolve); }
             return original(...args);
         };
@@ -72,9 +72,9 @@ async function verifyLateReads(page, url) {
 
     // Closing the panel must not discard the requested destination.
     await page.evaluate(() => {
-        const original = runtime.getChat; let first = true;
+        const original = runtime.getChatWindow; let first = true;
         window.chatHeld = false;
-        runtime.getChat = async (...args) => {
+        runtime.getChatWindow = async (...args) => {
             if (first) { first = false; window.chatHeld = true; await new Promise(resolve => window.releaseChat = resolve); }
             return original(...args);
         };

@@ -61,7 +61,7 @@ async function verifySwitch(page, url) {
     assert.equal(before, 1, '仅切页不保存');
     await button(ai, '编辑回复原文').click();
     await field(ai, 'assistant').waitFor();
-    assert.equal(await field(ai, 'assistant').inputValue(), '从演出记录转到同一消息聊天视图', '新目标在旧保存之后重读');
+    assert.equal(await field(ai, 'assistant').inputValue(), '从演出记录转到同一消息聊天视图', '两页从当前正文打开编辑，不等待后台保存');
     await field(ai, 'assistant').fill('从聊天转回演出记录'); await openRecords(page);
     await button(record(page, ids.a), '编辑回复原文').click();
     assert.equal(await field(record(page, ids.a), 'assistant').inputValue(), '从聊天转回演出记录');
@@ -93,38 +93,36 @@ async function verifyFailure(page, url, sourcePage) {
     await page.evaluate(() => { window.failSave = true; });
     const target = sourcePage === 'chat' ? record(page, ids.a) : branch(page).locator('.play-assistant-message').first();
     await button(target, '编辑回复原文').click();
-    await input.waitFor(); await source.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
-    assert.deepEqual(await input.evaluate(node => ({ start: node.selectionStart, end: node.selectionEnd, scroll: node.scrollTop, value: node.value })), state);
-    assert.equal(await input.evaluate(node => node === originalEditor), true);
+    await field(target, 'assistant').waitFor();
+    await page.waitForFunction(() => saveErrors.length === 1);
+    assert.equal(await input.count(), 0);
+    assert.equal(await page.evaluate(({ id, state }) => runtime.session.currentRound(id).results[0].text === state.value,
+        { id: sourcePage === 'chat' ? ids.first : ids.a, state }), true);
+    await field(target, 'assistant').fill('B 的新草稿');
+    assert.equal(await field(target, 'assistant').inputValue(), 'B 的新草稿');
     assert.equal(await page.locator('.play-feed .play-edit-form').count(), 1);
     if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `cross-page-failure-${sourcePage}-${page.viewportSize().width}.png`) });
     await page.evaluate(() => { window.failSave = false; });
-    await button(source, '保存').click(); await input.waitFor({ state: 'detached' });
+    await page.evaluate(id => runtime.session.flush(id), sourcePage === 'chat' ? ids.first : ids.a);
+    assert.equal(await field(target, 'assistant').inputValue(), 'B 的新草稿');
+    await button(target, '取消').click();
     assert.equal(await page.evaluate(() => captured.length), 0);
 }
 async function verifyRace(page, url) {
     const ids = await setup(page, url);
     const a = record(page, ids.a), b = record(page, ids.hidden);
-    await button(a, '修改提示词').click(); await field(a, 'user').fill('等待保存完成');
+    await button(a, '修改提示词').click(); await field(a, 'user').fill('A 后台保存');
     await page.evaluate(() => { window.holdSave = true; window.resumeSave = null; });
     await button(b, '修改提示词').click(); await page.waitForFunction(() => typeof resumeSave === 'function');
-    await button(a, '编辑回复原文').evaluate(node => node.click());
-    assert.equal(await field(b, 'user').count(), 0);
-    await page.evaluate(() => { window.holdSave = false; resumeSave(); });
     await field(b, 'user').waitFor();
+    assert.equal(await field(a, 'user').count(), 0);
+    await field(b, 'user').fill('B 编辑中的草稿');
+    await page.evaluate(() => { window.holdSave = false; resumeSave(); });
+    await page.evaluate(id => runtime.session.flush(id), ids.a);
     assert.deepEqual(await page.evaluate(() => editWrites.map(write => write.name)), ['editPrompt']);
-    assert.equal(await field(a, 'assistant').count(), 0);
-    await field(b, 'user').fill('新目标读取时被删除');
-    await page.evaluate(() => { window.holdSave = true; window.resumeSave = null; });
-    await button(a, '修改提示词').click(); await page.waitForFunction(() => typeof resumeSave === 'function');
-    await page.evaluate(async id => {
-        const chat = await runtime.getChat(id);
-        const removing = testHistory.removeMessage(id, chat.messages[0].id);
-        window.holdSave = false; resumeSave(); await removing;
-    }, ids.a);
-    await field(b, 'user').waitFor({ state: 'detached' }); await settle(page);
-    assert.equal(await page.locator('.play-feed .play-edit-form').count(), 0);
-    assert.equal((await page.evaluate(id => runtime.getRound(id), ids.hidden)).prompt, '新目标读取时被删除');
+    assert.equal(await field(b, 'user').inputValue(), 'B 编辑中的草稿');
+    await button(b, '保存').click(); await field(b, 'user').waitFor({ state: 'detached' });
+    assert.equal((await page.evaluate(id => runtime.getRound(id), ids.hidden)).prompt, 'B 编辑中的草稿');
 }
 async function verifyCharacterFailure(page, url) {
     const ids = await setup(page, url), source = record(page, ids.a);
@@ -133,11 +131,11 @@ async function verifyCharacterFailure(page, url) {
     await button(panel(page).locator('.play-people'), '测试乙').click();
     await page.evaluate(() => { window.failSave = true; });
     await button(record(page, ids.b), '编辑回复原文').click();
-    await field(source, 'assistant').waitFor();
-    await source.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
-    assert.equal(await field(source, 'assistant').inputValue(), '跨角色保存失败的草稿');
-    assert.equal(await field(record(page, ids.b), 'assistant').count(), 0);
-    await button(source, '取消').click();
+    await field(record(page, ids.b), 'assistant').waitFor();
+    await page.waitForFunction(() => saveErrors.length === 1);
+    assert.equal(await field(source, 'assistant').count(), 0);
+    assert.equal(await page.evaluate(id => runtime.session.currentRound(id).results[0].text, ids.a), '跨角色保存失败的草稿');
+    await button(record(page, ids.b), '取消').click();
     assert.equal(await page.evaluate(() => captured.length), 0);
 }
 async function verifyDeletedSource(page, url, mode) {
@@ -151,11 +149,12 @@ async function verifyDeletedSource(page, url, mode) {
     await page.evaluate(id => testHistory.deleteChat(id), mode === 'chat' ? ids.first : ids.a);
     const target = mode === 'chat' ? record(page, ids.a) : branch(page).locator('.play-assistant-message').first();
     await button(target, '编辑回复原文').click();
-    await input.waitFor(); await source.getByRole('alert').filter({ hasText: /已删除|已不存在/ }).waitFor(); await settle(page);
-    assert.equal(await input.inputValue(), '来源删除之后仍然保留的草稿');
-    assert.equal(await input.evaluate(node => node === originalEditor), true);
+    await field(target, 'assistant').waitFor();
+    await page.waitForFunction(() => saveErrors.some(error => /已删除|已不存在/.test(error))); await settle(page);
+    assert.equal(await input.count(), 0);
+    assert.equal(await page.evaluate(id => runtime.session.currentRound(id).results[0].text, mode === 'chat' ? ids.first : ids.a), '来源删除之后仍然保留的草稿');
     assert.equal(await page.locator('.play-feed .play-edit-form').count(), 1);
-    await button(source, '取消').click(); await input.waitFor({ state: 'detached' });
+    await button(target, '取消').click();
     assert.equal(await page.evaluate(() => captured.length), 0);
 }
 async function verifyRefreshFailure(page, url, mode) {
@@ -171,10 +170,9 @@ async function verifyRefreshFailure(page, url, mode) {
         runtime[mode === 'chat' ? 'editMessage' : 'editPrompt'] = async (...args) => {
             const result = await saving(...args);
             const name = mode === 'chat' ? 'getChat' : 'getRound', read = runtime[name];
-            let failed = false;
             runtime[name] = async (...args) => {
-                if (!failed) { failed = true; throw Error('保存完成后的模拟读取失败'); }
-                return read(...args);
+                window.afterSaveReads = (window.afterSaveReads ?? 0) + 1;
+                throw Error('不应发生保存后重新读取');
             };
             return result;
         };
@@ -182,7 +180,8 @@ async function verifyRefreshFailure(page, url, mode) {
     await button(target, mode === 'chat' ? '编辑回复原文' : '修改提示词').click();
     await target.getByRole('textbox', { name: mode === 'chat' ? '回复原文' : '提示词原文', exact: true }).waitFor();
     assert.equal(await input.count(), 0);
-    assert.equal((await page.evaluate(id => runtime.getRound(id), mode === 'chat' ? ids.first : ids.a)).prompt, '已保存后页面读取出错');
+    assert.equal(await page.evaluate(id => runtime.session.currentRound(id).prompt, mode === 'chat' ? ids.first : ids.a), '已保存后页面读取出错');
+    assert.equal(await page.evaluate(() => window.afterSaveReads ?? 0), 0);
     assert.equal(await page.evaluate(() => editWrites.length), 1);
     await button(target, '取消').click();
 }

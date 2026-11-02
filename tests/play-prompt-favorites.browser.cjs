@@ -48,7 +48,8 @@ async function verify(page, url, viewport) {
     const catalogEntry = id => panel.locator(viewport.width <= 760 ? `.tea-feed-entry[data-id="${id}"]` : `.tea-story[data-id="${id}"]`);
     async function edit(id, text) {
         await user(id).getByRole('button', { name: '修改提示词', exact: true }).click();
-        assert.equal(await star(id).isVisible(), false, '编辑时显示保存和取消，不同时显示收藏按钮');
+        await user(id).getByRole('textbox', { name: '提示词原文', exact: true }).waitFor();
+        assert.equal(await star(id).isDisabled(), true, '编辑期间不能收藏尚未保存的用户消息');
         await user(id).getByRole('textbox', { name: '提示词原文', exact: true }).fill(text);
         await user(id).getByRole('button', { name: '保存', exact: true }).click();
         await user(id).getByRole('button', { name: '修改提示词', exact: true }).waitFor();
@@ -112,9 +113,7 @@ async function verify(page, url, viewport) {
                 separate: boxes.every((box, index) => !index || box.left >= boxes[index - 1].right) };
         });
     });
-    assert.deepEqual(layout.map(item => item.labels), [viewport.width <= 760 ? ['取消收藏', '修改提示词', '更多消息操作'] : ['取消收藏', '修改提示词', '删除用户消息'], viewport.width <= 760
-        ? ['取消收藏', '编辑回复原文', '更多回复操作']
-        : ['创建分支', '查看实际提示词', '删除 AI 消息', '取消收藏', '编辑回复原文']]);
+    assert.deepEqual(layout.map(item => item.labels), [['取消收藏', '修改提示词', '更多消息操作'], ['取消收藏', '编辑回复原文', '更多回复操作']]);
     assert.ok(layout.every(item => item.inside && item.sameRow && item.separate), '用户和 AI 的三个操作按钮在同一行、不重叠、不越界');
     await record(sourceId).evaluate(node => {
         const feed = node.closest('.play-feed'); feed.scrollTop += node.getBoundingClientRect().top - feed.getBoundingClientRect().top - 12;

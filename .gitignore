@@ -81,6 +81,7 @@ tests/*
 !tests/play-prompt-favorites.test.js
 !tests/play-prompt-favorites.browser.cjs
 !tests/play-favorites.test.js
+!tests/play-favorites.browser.cjs
 !tests/play-favorite-navigation.browser.cjs
 !tests/play-manual-favorites.browser.cjs
 README.md
@@ -90,3 +91,5 @@ README.md
 !tests/play-edit-navigation.browser.cjs
 !tests/play-message-editing.test.js
 !tests/play-message-editing.browser.cjs
+!tests/play-session.test.js
+!tests/play-save-flow.browser.cjs

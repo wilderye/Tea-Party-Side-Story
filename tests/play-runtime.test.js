@@ -5,7 +5,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { capturePlayEnvironment, createPlayRuntime, readPlayTarget } from '../play-runtime.js';
 import { createPlayHistory } from '../play-history.js';
 import { createPlayFiles } from '../play-storage.js';
-import { memoryFiles, characterA, contextA } from './play-fixture.js';
+import { memoryFiles, characterA, contextA, deferred } from './play-fixture.js';
 
 test('酒馆文件接口失败保留 HTTP 状态和服务器原文，读取不存在文件仍返回空', async t => {
     const message = '{"error":"ENOSPC: no space left on device"}';
@@ -146,4 +146,31 @@ test('酒馆改名和删卡通知只更新游玩目录，不修改主聊天', as
     await nextTurn();
     assert.equal((await runtime.listCharacters())[0].avatar, null);
     assert.deepEqual(ctx.chat, before);
+});
+
+test('未保存内容及生成任务使用浏览器离开保护，保存失败只通过一个提示出口', async t => {
+    const listeners = new Map(), f = memoryFiles(), ctx = context(), errors = [], logs = [];
+    const previous = globalThis.addEventListener;
+    globalThis.addEventListener = (name, handler) => listeners.set(name, handler);
+    t.after(() => { if (previous) globalThis.addEventListener = previous; else delete globalThis.addEventListener; });
+    const runtime = createPlayRuntime(() => ctx, { enabled: true }, f.store, {
+        prepareRequest: async () => ({ send: async () => '完整回复' }), onSaveError: message => errors.push(message),
+        diagnostics: { start() {}, info() {}, error: (_operation, error) => logs.push(error.message) },
+    });
+    const leaving = () => {
+        const event = { prevented: false, preventDefault() { this.prevented = true; } };
+        listeners.get('beforeunload')(event); return event.prevented;
+    };
+    assert.equal(leaving(), false);
+    const first = await runtime.send({ prompt: '消息' });
+    assert.equal(leaving(), false);
+    const gate = deferred(), edit = f.store.editMessage.bind(f.store);
+    f.store.editMessage = async (...args) => { await gate.promise; return edit(...args); };
+    await runtime.editPrompt(first.roundId, '尚未保存的修改', '消息');
+    assert.equal(leaving(), true); gate.resolve(); await runtime.session.flush(first.roundId);
+    assert.equal(leaving(), false);
+    f.store.editMessage = () => { throw Error('模拟后台保存失败'); };
+    await runtime.editPrompt(first.roundId, '失败保留的修改', '尚未保存的修改'); await nextTurn();
+    assert.equal(leaving(), true);
+    assert.deepEqual(errors, ['模拟后台保存失败']); assert.deepEqual(logs, ['模拟后台保存失败']);
 });

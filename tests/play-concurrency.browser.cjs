@@ -61,7 +61,12 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await a.locator('.play-stop').waitFor();
             await a.getByRole('button', { name: '生成新剧场', exact: true }).click();
             await page.waitForFunction(() => window.modelCalls === 2);
+            await page.evaluate(() => { tasks[0].text('重新生成版本第一段'); tasks[1].text('新增版本第一段'); });
+            await a.getByText('新增版本第一段', { exact: true }).waitFor();
+            await page.evaluate(() => { tasks[1].text('新增版本第二段'); tasks[0].text('重新生成版本第二段'); });
+            await a.getByText('新增版本第二段', { exact: true }).waitFor();
             await a.getByRole('button', { name: '上一个结果', exact: true }).click();
+            await a.getByText('重新生成版本第二段', { exact: true }).waitFor();
             assert.equal(await a.getByRole('button', { name: '重新生成', exact: true }).isDisabled(), true);
             assert.equal(await a.getByRole('button', { name: '停止这份回复', exact: true }).isVisible(), true);
             const selected = await a.locator('.play-result:visible').getAttribute('data-play-result');
@@ -85,6 +90,7 @@ const settle = page => page.evaluate(() => new Promise(resolve => requestAnimati
             await a.getByRole('button', { name: '停止这份回复', exact: true }).click({ position: { x: 3, y: 3 } });
             await page.waitForFunction(() => tasks[0].signal.aborted && runtime.getStates().length === 2);
             assert.deepEqual(await page.evaluate(() => tasks.map(task => task.signal.aborted)), [true, false, false]);
+            await a.getByText('重新生成版本第二段', { exact: true }).waitFor();
             await page.evaluate(() => { tasks[1].text('隐藏版本继续生成'); tasks[2].finish('乙的完成回复 角色标记'); });
             await page.waitForFunction(() => runtime.getStates().length === 1);
             assert.equal(await button('停止所有生成').isEnabled(), true, '最近发送的请求完成后，之前的请求仍控制整体停止');

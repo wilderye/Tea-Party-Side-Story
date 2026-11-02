@@ -1,8 +1,9 @@
-import { createHttpPlayHistory, playHistoryMethods } from './play-storage.js';
+import { createHttpPlayHistory, createPlayCleanup, playHistoryMethods } from './play-storage.js';
 import { createHistoryLock } from './play-storage-lock.js';
 import { serializeDiagnosticError } from './diagnostics.js';
 
 const withLock = createHistoryLock();
+const cleanup = createPlayCleanup();
 
 globalThis.onconnect = ({ ports: [port] }) => {
     const waiting = new Map();
@@ -15,7 +16,7 @@ globalThis.onconnect = ({ ports: [port] }) => {
         try {
             // Headers belong to this call, including while another call waits.
             const history = createHttpPlayHistory(() => headers, undefined, withLock,
-                (operation, error) => port.postMessage({ warning: { operation, error: serializeDiagnosticError(error) } }));
+                (operation, error) => port.postMessage({ warning: { operation, error: serializeDiagnosticError(error) } }), cleanup);
             const value = controller ? await history.begin(args[0], { signal: controller.signal }) : await history[method](...args);
             port.postMessage({ id, value });
         } catch (error) {

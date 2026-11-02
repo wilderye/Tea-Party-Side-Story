@@ -113,6 +113,7 @@ async function verify(page, url, viewport, mode) {
     assert.equal(bodyReads(), 0); assert.equal(mutations.length, beforeRefresh);
     await page.evaluate(async id => {
         const chat = await runtime.getChatMetadata(id), message = chat.messages[0];
+        await runtime.session.loadMessage(id, message.id);
         await runtime.editMessage(id, message.id, { text: '局域网更新后的用户消息', expectedText: '测试小剧场' });
         ui.refresh();
     }, seed.branch);

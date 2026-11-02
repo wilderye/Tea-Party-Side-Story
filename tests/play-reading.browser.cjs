@@ -34,6 +34,13 @@ async function seedLongHistory(page, mode) {
       const round = structuredClone(original);
       round.id = crypto.randomUUID(); round.prompt = `第 ${index + 1} 场的提示词`;
       round.results = [{ ...round.results[0], id: crypto.randomUUID(), text: `第 ${index + 1} 场的正文\n\n继续阅读这一场的小剧场。` }];
+      if (mode === 'states' && index === 178) {
+        const saved = await testHistory.begin({ character: ctx.characters[0], prompt: round.prompt, resultId: round.results[0].id,
+          startedAt: round.createdAt, context: round.results[0].context });
+        await testHistory.saveResult(saved.id, round.results[0].id, { text: round.results[0].text, status: 'complete', finishedAt: round.createdAt });
+        records.set(saved.id, await runtime.getRound(saved.id));
+        continue;
+      }
       if (mode === 'states' && index === 179) round.results[0].text = '<div>网页里的小剧场</div><button id="step">继续</button><span id="count">0</span><script>document.getElementById("step").onclick=()=>document.getElementById("count").textContent=Number(document.getElementById("count").textContent)+1;</script>';
       records.set(round.id, round);
     }
@@ -61,7 +68,7 @@ async function checkHistory(page, mode, viewport) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])'), button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
   await button('剧场演出').click();
-  const targetId = ids.at(-1);
+  const targetId = ['anchor', 'jump', 'automatic'].includes(mode) ? ids[90] : ids.at(-1);
   const target = panel.locator(`[data-record="${targetId}"]`);
   await target.waitFor();
   assert.equal(await page.evaluate(() => progress.started[0]), targetId);
@@ -70,16 +77,12 @@ async function checkHistory(page, mode, viewport) {
   assert.equal(await panel.locator('.play-record:not([hidden])').count(), firstCount, '首屏只读取附近10条，一条慢记录不阻挡其余记录显示');
   assert.equal(await panel.locator('.play-record:not([hidden])').last().locator('.play-message:not([hidden])').last()
     .evaluate(node => getComputedStyle(node).marginBottom), '0px', '加载按钮和隐藏记录不增加末尾消息的留白');
-  const headOffset = record => record.locator('.play-assistant-meta').evaluate(node => {
-    const feedTop = document.querySelector('.play-feed').getBoundingClientRect().top;
-    const tabs = document.querySelector('.play-catalog:not([hidden]) .tea-mobile-tabs');
-    const visibleTop = Math.max(feedTop, tabs?.getClientRects().length ? tabs.getBoundingClientRect().bottom : 0);
-    return node.getBoundingClientRect().top - visibleTop;
-  });
-  const before = await headOffset(target);
   if (mode === 'anchor') {
-    assert.equal(await page.locator('.play-feed').evaluate(feed=>feed.scrollHeight-feed.clientHeight-feed.scrollTop<4),true,
-      '首次打开忽略跨刷新旧位置，从末尾打开');return;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const restored = await page.locator('.play-feed').evaluate(readingPosition);
+    assert.equal(restored.anchor, `${ids[90]}/assistant/head`);
+    assert.ok(Math.abs(restored.offset) < 2, '首次打开恢复已保存的段落位置');
+    return;
   }
   if (mode === 'automatic') {
     for (const [direction, count] of [['earlier', 20], ['earlier', 30]]) {
@@ -142,10 +145,6 @@ async function checkHistory(page, mode, viewport) {
   await page.waitForTimeout(100);
   const prompts = (await panel.locator('.play-record:not([hidden]) .play-user-text').allTextContents()).map(text => text.trim());
   assert.deepEqual(prompts, Array.from({ length: 180 }, (_, index) => `第 ${index + 1} 场的提示词`), '相同创建时间也保持目录顺序');
-  if (mode === 'anchor') {
-    const after = await headOffset(target);
-    assert.ok(Math.abs(after - before) < 2, `补入旧记录不改变阅读位置：${before} -> ${after}`);
-  }
   if (mode === 'states') {
     assert.equal(await editor.inputValue(), '后台读取期间保留的草稿');
     assert.equal(await editor.evaluate(node => node === window.originalEditor), true);
@@ -237,14 +236,20 @@ async function checkWebReopen(page) {
   });
   const open=()=>page.getByRole('button',{name:'打开小剧场面板',exact:true}).click();
   const button=name=>page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button',{name,exact:true}).filter({visible:true});
+  const clickWeb = async () => {
+    await page.waitForFunction(() => document.querySelector('iframe.play-web-output')?.style.height);
+    await page.locator('iframe.play-web-output').evaluate(frame => frame.scrollIntoView({ block: 'center' }));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+    await page.frameLocator('iframe.play-web-output').getByRole('button', { name: '点击我', exact: true }).click();
+  };
   await open();await button('剧场演出').click();
   for(let repeat=0;repeat<3;repeat++) {
-    await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'点击我',exact:true}).click();
+    await clickWeb();
     await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'已点击',exact:true}).waitFor();
     await button('关闭面板').click();await page.locator('.teahouse-dialog').waitFor({state:'detached'});
     await open();
   }
-  await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'点击我',exact:true}).click();
+  await clickWeb();
   await button('茶会选集').click();await button('剧场演出').click();
   await page.frameLocator('iframe.play-web-output').getByRole('button',{name:'已点击',exact:true}).waitFor();
 }
@@ -253,7 +258,8 @@ async function checkStreaming(page) {
   await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
   await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').getByRole('button', { name: '剧场演出', exact: true }).filter({ visible: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.play-record:not([hidden])').length === 2);
-  await page.evaluate(() => { window.streamingTask = runtime.send({ prompt: '大段流式正文的位置验证' }); });
+  await page.getByRole('textbox', { name: '小剧场提示词', exact: true }).fill('大段流式正文的位置验证');
+  await page.getByRole('button', { name: '发送小剧场', exact: true }).click();
   await page.waitForFunction(() => typeof emitGeneration === 'function' && document.querySelectorAll('.play-record:not([hidden])').length === 3);
   await page.evaluate(() => emitGeneration('第一段流式正文'));
   await page.getByText('第一段流式正文', { exact: true }).waitFor();
@@ -276,7 +282,8 @@ async function checkStreaming(page) {
     return { requested, actual: feed.scrollTop };
   });
   assert.ok(Math.abs(movement.actual - movement.requested) < 2, '滚动通知尚未到达时发生尺寸变化，不把用户拉回旧位置');
-  await page.evaluate(async () => { finishGeneration(streamBody); await streamingTask; });
+  await page.evaluate(() => finishGeneration(streamBody));
+  await page.waitForFunction(() => runtime.getState().phase === 'idle');
 }
 
 async function checkContinuationPosition(page, mode) {

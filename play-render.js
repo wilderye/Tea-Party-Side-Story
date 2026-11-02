@@ -60,7 +60,7 @@ function queueHtmlFrame(html, options, container) {
         }
         if (node.parentNode !== container) return;
         activeFrames.add(job);
-        if (frame) return;
+        if (frame) { applyFrameHeight(frame); return; }
         if (node.closest('[hidden],[aria-hidden=true],.tea-panel-surface[data-active=false]')) {
             controller?.abort(); controller = null; return;
         }
@@ -77,12 +77,21 @@ function queueHtmlFrame(html, options, container) {
     return preview;
 }
 
+function applyFrameHeight(frame) {
+    const state = frameSizes.get(frame);
+    if (!state?.height || !frame.isConnected || frame.closest('[hidden],[aria-hidden=true],.tea-panel-surface[data-active=false]')) return;
+    const height = state.height; state.height = null;
+    recordViewEvent(frame, '网页高度变化', { record: frame.closest('.play-record')?.dataset.record, frameHeight: height });
+    frame.style.height = `${height}px`;
+}
+
 globalThis.addEventListener?.('message', event => {
     if (!['teahouse-output-height', 'teahouse-output-resource-error'].includes(event.data?.type)) return;
-    for (const frame of document.querySelectorAll('.tea-panel-surface[data-active=true] iframe.play-web-output, #teahouse-panel iframe.play-web-output')) {
-        if (frame.closest('[hidden],[aria-hidden=true]')) continue;
-        if (frame.contentWindow !== event.source || frameSizes.get(frame) !== event.data.token) continue;
+    for (const frame of document.querySelectorAll('.tea-panel-surface iframe.play-web-output, #teahouse-panel iframe.play-web-output')) {
+        const state = frameSizes.get(frame);
+        if (!state || frame.contentWindow !== event.source || state.token !== event.data.token) continue;
         if (event.data.type === 'teahouse-output-resource-error') {
+            if (frame.closest('[hidden],[aria-hidden=true],.tea-panel-surface[data-active=false]')) continue;
             const index = event.data.index;
             if (!Number.isInteger(index) || index < 0 || index >= Number(frame.dataset.resourceCount)) return;
             if (event.data.kind === 'execution') {
@@ -95,8 +104,7 @@ globalThis.addEventListener?.('message', event => {
         }
         const height = event.data.height;
         if (typeof height === 'number' && Number.isFinite(height) && height > 0 && height <= 100000) {
-            recordViewEvent(frame, '网页高度变化', { record: frame.closest('.play-record')?.dataset.record, frameHeight: Math.ceil(height) });
-            frame.style.height = `${Math.ceil(height)}px`;
+            state.height = Math.ceil(height); applyFrameHeight(frame);
         }
         break;
     }
@@ -109,7 +117,7 @@ function htmlFrame(html, resources) {
     frame.setAttribute('referrerpolicy', 'no-referrer');
     frame.dataset.resourceCount = String(resources.length);
     // getRandomValues also works on the plain HTTP origins used by LAN clients.
-    const token = [...crypto.getRandomValues(new Uint32Array(4))].join('-'); frameSizes.set(frame, token);
+    const token = [...crypto.getRandomValues(new Uint32Array(4))].join('-'); frameSizes.set(frame, { token, height: null });
     const sizing = `document.addEventListener('DOMContentLoaded', () => {
         let last = 0, scheduled = false, changedContent = false;
         let width = innerWidth, viewportHeight = innerHeight;

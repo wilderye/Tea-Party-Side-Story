@@ -40,7 +40,7 @@ test('提示词编辑冲突和保存失败保留原消息，重试不会增加�
     assert.equal(edited.prompt, '重试的修改');
     assert.deepEqual(edited.results, round.results);
     assert.equal((await f.store.listRounds(round.characterId)).length, 1);
-    assert.throws(() => f.store.editPrompt(round.id, ' \n ', edited.prompt), /不能为空/);
+    await assert.rejects(f.store.editPrompt(round.id, ' \n ', edited.prompt), /不能为空/);
 });
 
 test('提示词修改与迟到的回复保存、回复编辑不会互相覆盖', async () => {
@@ -72,7 +72,7 @@ test('用户编辑只更新选中回复的原文，保留归属与时间，迟�
 
 test('编辑冲突和保存失败都保留已保存的正文，重试不新增生成版本', async () => {
     const f = memoryFiles(), round = await f.begin(), id = round.results[0].id;
-    await assert.rejects(f.store.editResult(round.id, id, '提前修改', ''), /尚未完成保存/);
+    await assert.rejects(f.store.editResult(round.id, id, '提前修改', ''), /正在生成或尚未保存/);
     await f.store.saveResult(round.id, id, { status: 'complete', text: '原文', finishedAt: time(1) });
     await f.store.editResult(round.id, id, '窗口一修改', '原文');
     await assert.rejects(f.createStore().editResult(round.id, id, '窗口二修改', '原文'), /其他窗口修改/);
@@ -82,7 +82,7 @@ test('编辑冲突和保存失败都保留已保存的正文，重试不新增�
     f.io.beforeWrite = null;
     const edited = await f.store.editResult(round.id, id, '重试的修改', '窗口一修改');
     assert.equal(edited.results.length, 1); assert.equal(edited.results[0].text, '重试的修改');
-    assert.throws(() => f.store.editResult(round.id, id, '  ', '重试的修改'), /不能为空/);
+    await assert.rejects(f.store.editResult(round.id, id, '  ', '重试的修改'), /不能为空/);
 });
 
 test('新发送始终另起一轮；微调保留原文关联，再生成只给旧轮新增版本', async () => {
@@ -255,6 +255,6 @@ test('续写开始时重置状态为 unfinished，保留已有正文并允许后
 test('续写拒绝不存在的结果和空正文结果', async () => {
     const f = memoryFiles(), round = await f.begin();
     const resultId = round.results[0].id;
-    await assert.rejects(f.begin({ roundId: round.id, continueResultId: randomUUID(), resultId: randomUUID() }), /已在其他窗口删除或替换/);
+    await assert.rejects(f.begin({ roundId: round.id, continueResultId: randomUUID(), resultId: randomUUID() }), /已不存在/);
     await assert.rejects(f.begin({ roundId: round.id, continueResultId: resultId, resultId }), /没有正文，无法续写/);
 });

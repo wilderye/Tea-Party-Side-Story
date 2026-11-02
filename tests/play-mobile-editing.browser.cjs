@@ -155,17 +155,17 @@ async function verifyEditing(page, url, viewport) {
         const savedText = role === 'user' ? '清晨，他重新泡了一壶茶。' : '她推开窗，看见雨后的第一缕阳光。';
         await editor.fill(savedText);
         if (mobile) await setKeyboard(page, keyboardHeight);
-        await page.evaluate(() => { window.failSave = true; });
+        await page.evaluate(() => { window.failSave = true; window.saveErrors = []; });
         await actions.getByRole('button', { name: '保存', exact: true }).click();
-        await record.getByRole('alert').getByText('模拟保存失败', { exact: true }).waitFor();
-        assert.equal(await editor.inputValue(), savedText, '保存失败保留正在修改的文字');
-        assert.equal(await panel.locator('.play-compose').isVisible(), true, '保存失败继续保持编辑状态');
-        if (mobile) {
-            const errorBox = await record.getByRole('alert').boundingBox();
-            assert.ok(errorBox.height > 0, '保存失败显示原因，正文可以滚动查看');
-        }
+        await editor.waitFor({ state: 'detached' });
+        await page.waitForFunction(() => saveErrors.includes('模拟保存失败'));
+        await record.getByText(savedText, { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => runtime.session.hasUnsaved()), true);
+        assert.equal(await panel.locator('.play-compose').isVisible(), true, '后台保存失败不阻挡继续使用输入框');
         await page.evaluate(() => { window.failSave = false; });
+        await record.getByRole('button', { name: button, exact: true }).click();
         await actions.getByRole('button', { name: '保存', exact: true }).click();
+        await page.evaluate(id => runtime.session.flush(id), id);
         await editor.waitFor({ state: 'detached' }); await settle(page);
         assert.equal(await panel.locator('.play-compose').isVisible(), true, '保存后恢复底部输入区域');
         if (mobile) assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '保存后恢复导航');

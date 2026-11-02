@@ -51,6 +51,7 @@ window.rules={globalRules,presetRules,characterRules};
 const settings=JSON.parse(localStorage.getItem('processingSettings')||'null')||{enabled:true,pageSize:5,favorites:{}};
 window.captured=[];window.capturedPrompts=[];
 const runtime=window.runtime=createPlayRuntime(()=>ctx,settings,history,{loadRegex:async()=>engine,
+onSaveError:message=>{(window.saveErrors??=[]).push(message);},
 prepareRequest:async request=>{window.captured.push(request.environment);window.capturedPrompts.push(request.prompt);const identity={userName:ctx.name1,userAvatar:persona.user_avatar};await request.onPersonaResolved?.(identity);return{context:identity,send:({onText,signal})=>new Promise((resolve,reject)=>{
 window.emitGeneration=onText;window.finishGeneration=resolve;
 signal.addEventListener('abort',()=>reject(signal.reason),{once:true});})}}});
@@ -79,7 +80,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-reading-position.js','play-message-editing.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-session.js','play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-reading-position.js','play-message-editing.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-persona-session.js','play-character-context.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -165,17 +166,15 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  await screenshot(page,`user-message-editor-${viewport.width}.png`);
  await editor.fill(' \n ');await action('保存').click();
  await edit.getByRole('alert').getByText('提示词不能为空。',{exact:true}).waitFor();
+ await page.evaluate(()=>window.saveErrors=[]);
  await editor.fill(draft);await page.evaluate(()=>window.failSave=true);await action('保存').click();
- await edit.getByRole('alert').getByText('模拟保存失败',{exact:true}).waitFor();
- assert.equal(await editor.inputValue(),draft);
- assert.equal((await page.evaluate(id=>runtime.getRound(id),id)).prompt,original.prompt);
- await page.evaluate(()=>{window.failSave=false;window.holdSave=true;window.resumeSave=null;});await action('保存').click();
+ await editor.waitFor({state:'detached'});await page.waitForFunction(()=>saveErrors.length===1);
+ assert.equal((await page.evaluate(id=>runtime.session.currentRound(id),id)).prompt,draft);
+ await page.evaluate(()=>{window.failSave=false;window.holdSave=true;window.resumeSave=null;});
+ await record.getByRole('button',{name:'修改提示词',exact:true}).click();
+ await editor.waitFor();await action('保存').click();await editor.waitFor({state:'detached'});
  await page.waitForFunction(()=>typeof window.resumeSave==='function');
- assert.equal(await action('保存').getAttribute('aria-busy'),'true');assert.equal(await editor.isDisabled(),true);
- await panel.getByRole('button',{name:'设置',exact:true}).click();
- assert.equal(await panel.getAttribute('data-mode'),'list','保存用户消息时也不能切走');
- await panel.getByRole('button',{name:'关闭面板',exact:true}).click();
- assert.equal(await panel.isVisible(),true,'保存用户消息时也不能关闭面板');
+ await closeSettings(await openSettings());
  await page.evaluate(()=>{window.holdSave=false;window.resumeSave();});
  await record.locator('.play-user-text').getByText('测试甲 请听 茶客 说话。',{exact:true}).waitFor();
  await record.locator('.play-user-text').getByText('测试甲 与 茶客；测试甲 与 茶客。',{exact:true}).waitFor();
@@ -232,32 +231,26 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
 
 async function verifyUnsavedPromptEdit(page,viewport) {
  const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
+ await page.evaluate(()=>window.saveErrors=[]);
  await panel.getByRole('textbox',{name:'小剧场提示词',exact:true}).fill('检查回复保存失败时修改用户消息');
  await panel.getByRole('button',{name:'发送小剧场',exact:true}).click();
  await page.waitForFunction(()=>runtime.getState().phase==='generating');
- await page.evaluate(()=>{window.failSave=true;window.finishGeneration('完整回复仍然保留在这里。');});
- await page.waitForFunction(()=>runtime.getState().phase==='save-failed');
  const id=await page.evaluate(()=>runtime.getState().roundId),requests=await page.evaluate(()=>captured.length);
+ await page.evaluate(()=>{window.failSave=true;window.finishGeneration('完整回复仍然保留在这里。');});
+ await page.waitForFunction(()=>saveErrors.length===1&&runtime.getStates().length===0);
  const record=panel.locator(`[data-record="${id}"]`);
  await record.getByText('完整回复仍然保留在这里。',{exact:true}).waitFor();
- await page.evaluate(()=>{
-  window.failSave=false;window.savedListCharacters=runtime.listCharacters;
-  runtime.listCharacters=async()=>{throw Error('模拟目录读取失败');};
- });
+ await page.evaluate(()=>window.failSave=false);
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
  await record.getByRole('textbox',{name:'提示词原文',exact:true}).fill('回复保存失败后修改的提示词');
  await record.locator('.play-user-meta .play-edit-actions').getByRole('button',{name:'保存',exact:true}).click();
  await record.locator('.play-user-text').getByText('回复保存失败后修改的提示词',{exact:true}).waitFor();
- await panel.getByText('模拟目录读取失败',{exact:true}).waitFor();
  assert.equal(await record.getByText('完整回复仍然保留在这里。',{exact:true}).isVisible(),true,'即使后续读取目录失败，保存用户消息也不清空尚未保存的回复');
- assert.equal(await record.getByText('模拟保存失败',{exact:true}).isVisible(),true,'回复保留原始保存错误');
- assert.equal(await page.evaluate(()=>runtime.getState().phase),'save-failed');
+ assert.equal(await record.getByText('模拟保存失败',{exact:true}).count(),0);
+ assert.equal(await record.getByRole('button',{name:'重试保存',exact:true}).count(),0);
  assert.equal(await page.evaluate(()=>captured.length),requests);
  await screenshot(page,`unsaved-reply-after-prompt-edit-${viewport.width}.png`);
- await page.evaluate(()=>{runtime.listCharacters=window.savedListCharacters;ui.refresh();});
- await panel.locator('.play-load-error').waitFor({state:'hidden'});
- await record.getByRole('button',{name:'重试保存',exact:true}).click();
- await page.waitForFunction(()=>runtime.getState().phase==='idle');
+ await page.evaluate(id=>runtime.session.flush(id),id);
  const saved=await page.evaluate(id=>runtime.getRound(id),id);
  assert.equal(saved.prompt,'回复保存失败后修改的提示词');
  assert.equal(saved.results[0].text,'完整回复仍然保留在这里。');
@@ -659,20 +652,16 @@ if (require.main === module) (async()=>{
    assert.equal(await edit.isVisible(),true,'其他窗口新增结果后，原消息仍保持编辑状态');
    assert.equal(await editor.inputValue(),'<thinking>思考</thinking>\n修正后的正文');
    assert.equal(await hidden.getByRole('button',{name:'下一个结果',exact:true,includeHidden:true}).isDisabled(),true);
-   await page.evaluate(()=>window.failSave=true);
-   await editAction('保存').click();
-   await edit.getByRole('alert').getByText('模拟保存失败',{exact:true}).waitFor();
-   assert.equal(await editor.inputValue(),'<thinking>思考</thinking>\n修正后的正文');
-   assert.equal((await page.evaluate(id=>runtime.getRound(id),ids.hidden)).results[0].text,'<thinking>找回整段小剧场</thinking>');
-   await page.evaluate(()=>{window.failSave=false;window.holdSave=true;});await editAction('保存').click();
+   await page.evaluate(()=>{window.failSave=true;window.saveErrors=[];});
+   await editAction('保存').click();await editor.waitFor({state:'detached'});
+   await page.waitForFunction(()=>saveErrors.length===1);
+   assert.equal((await page.evaluate(id=>runtime.session.currentRound(id),ids.hidden)).results[0].text,'<thinking>思考</thinking>\n修正后的正文');
+   await page.evaluate(()=>{window.failSave=false;window.holdSave=true;window.resumeSave=null;});
+   await hidden.getByRole('button',{name:'编辑回复原文',exact:true}).click();
+   edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true});
+   await editAction('保存').click();await editor.waitFor({state:'detached'});
    await page.waitForFunction(()=>typeof window.resumeSave==='function');
-   assert.equal(await editAction('保存').textContent(),'','保存过程中也只显示图标');
-   assert.equal(await editAction('保存').getAttribute('aria-busy'),'true');
-   await panel.getByRole('button',{name:'设置',exact:true}).click();
-   assert.equal(await panel.getAttribute('data-mode'),'list','保存时不会切走原消息');
-   await panel.getByRole('button',{name:'关闭面板',exact:true}).click();
-   assert.equal(await panel.isVisible(),true,'保存时不能关闭面板');
-   assert.equal(await editor.isDisabled(),true);
+   await closeSettings(await openSettings());
    await page.evaluate(()=>{window.holdSave=false;window.resumeSave();});
    await hidden.getByText('修正后的正文',{exact:true}).waitFor();
    assert.equal(await panel.locator('.play-compose').isVisible(),true,'保存 AI 消息后恢复底部输入区域');

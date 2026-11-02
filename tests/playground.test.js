@@ -48,20 +48,18 @@ test('生成中也能修改用户消息，保留本次回复，下一次生成�
     await assert.rejects(f.service.editPrompt(first.roundId, '停用后不修改', '修正旧消息'), error => error.code === 'disabled');
 });
 
-test('修改用户消息后重试保存回复，不恢复旧提示词也不丢失尚未保存的回复', async () => {
+test('修改用户消息接收后先显示，后台补存终稿和用户修改，不请求模型', async () => {
     const f = fixture();
     f.control.response = async () => { f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('磁盘错误'); }; return '尚未保存的回复'; };
-    await assert.rejects(f.service.send({ prompt: '原提示词' }), /磁盘错误/);
-    const job = f.service.getState(); f.io.beforeWrite = null;
-    const edited = await f.service.editPrompt(job.roundId, '修改后的提示词', '原提示词');
-    assert.equal(edited.results[0].text, job.text, '保存后的返回值也保留尚未保存的完整回复');
-    assert.equal(edited.results[0].status, 'save-failed');
-    assert.deepEqual(edited.results[0].error, job.error, '原始保存错误不被通用提示替换');
-    assert.equal(f.service.getState().phase, 'save-failed');
-    await f.service.retrySave();
-    const saved = await f.restart().getRound(job.roundId);
-    assert.equal(saved.prompt, '修改后的提示词');
-    assert.equal(saved.results[0].text, '尚未保存的回复');
+    const result = await f.service.send({ prompt: '原提示词' });
+    assert.equal(f.service.session.hasUnsaved(), true);
+    assert.equal(f.service.session.currentRound(result.roundId).results[0].text, '尚未保存的回复');
+    f.io.beforeWrite = null;
+    const edited = await f.service.editPrompt(result.roundId, '修改后的提示词', '原提示词');
+    assert.equal(edited.results[0].status, 'complete');
+    await f.service.session.flush(result.roundId);
+    const saved = await f.store.getRound(result.roundId);
+    assert.equal(saved.prompt, '修改后的提示词'); assert.equal(saved.results[0].text, '尚未保存的回复');
     assert.equal(f.sent.length, 1);
 });
 
@@ -73,14 +71,14 @@ test('其他角色历史可以编辑原文，编辑不再次请求模型', async
     assert.equal(edited.results[0].text, '手动修正正文'); assert.equal(f.sent.length, 1);
 });
 
-test('编辑尚未保存的终稿先完成保存，后续重试不能覆盖用户的修改', async () => {
+test('编辑尚未保存的终稿立即显示，后台先保存终稿再保存修改', async () => {
     const f = fixture();
     f.control.response = async () => { f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('磁盘错误'); }; return '保存失败的原文'; };
-    await assert.rejects(f.service.send({ prompt: '测试' }), /磁盘错误/);
-    const job = f.service.getState(); f.io.beforeWrite = null;
-    await f.service.editResult(job.roundId, job.resultId, '用户修正的正文', job.text);
-    assert.equal(f.service.getState().phase, 'idle'); assert.equal(await f.service.retrySave(), null);
-    assert.equal((await f.service.getRound(job.roundId)).results[0].text, '用户修正的正文');
+    const result = await f.service.send({ prompt: '测试' }); f.io.beforeWrite = null;
+    await f.service.editResult(result.roundId, result.result.id, '用户修正的正文', result.result.text);
+    assert.equal(f.service.session.currentRound(result.roundId).results[0].text, '用户修正的正文');
+    await f.service.session.flush(result.roundId);
+    assert.equal((await f.store.getRound(result.roundId)).results[0].text, '用户修正的正文');
     assert.equal(f.sent.length, 1);
 });
 
@@ -135,7 +133,7 @@ test('无效的第二种续写提示词不改写已有回复状态，也不开�
     const before = await f.store.getRound(first.roundId), preparations = f.prepared.length, writes = f.writes.length;
     f.current.continuation = { mode: 'prompt', prompt: '没有占位符' };
     await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'invalid_continue_prompt');
-    assert.deepEqual(await f.store.getRound(first.roundId), before);
+    assert.equal((await f.store.getRound(first.roundId)).results[0].text, before.results[0].text);
     assert.equal(f.prepared.length, preparations); assert.equal(f.writes.length, writes);
     assert.equal(f.service.getState().phase, 'idle');
 });
@@ -199,9 +197,9 @@ test('本页生成中及尚未保存时禁止删除；旧消息仍然可以删�
     await assert.rejects(f.service.removeReply(job.roundId, current.results), error => error.code === 'busy');
     await f.service.removeReply(old.roundId, [old.result]);
     f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
-    finish.resolve('完整回复'); await assert.rejects(task, /模拟保存失败/);
-    await assert.rejects(f.service.removeReply(job.roundId, current.results), error => error.code === 'busy');
-    f.io.beforeWrite = null; await f.service.retrySave();
+    finish.resolve('完整回复'); await task;
+    await assert.rejects(f.service.removeReply(job.roundId, current.results), /模拟保存失败/);
+    f.io.beforeWrite = null; await f.service.session.flush(job.roundId);
     await f.service.removeReply(job.roundId, (await f.service.getRound(job.roundId)).results);
     assert.equal(f.service.getState().phase, 'idle');
 });
@@ -266,9 +264,10 @@ test('读取和保存演出记录失败留下完整日志，并继续把原错�
     await assert.rejects(f.service.getRound(first.roundId), candidate => candidate === error);
     f.io.beforeRead = null;
     f.io.beforeWrite = () => { throw error; };
-    await assert.rejects(f.service.editResult(first.roundId, first.result.id, '不会写进日志的编辑原文', first.result.text), candidate => candidate === error);
+    await f.service.editResult(first.roundId, first.result.id, '不会写进日志的编辑原文', first.result.text);
+    await assert.rejects(f.service.session.flush(first.roundId), candidate => candidate === error);
     const entries = diagnostics.read().entries;
-    assert.deepEqual(entries.map(entry => entry.operation), ['读取演出记录', '保存回复修改']);
+    assert.deepEqual(entries.map(entry => entry.operation), ['读取演出记录']);
     assert.ok(entries.every(entry => entry.error.cause.message === 'disk full'));
     assert.doesNotMatch(diagnostics.export(), /不会写进日志/);
 });
@@ -313,20 +312,15 @@ test('重新生成失败或停止也替换原结果；没有正文时保留这�
     }
 });
 
-test('重新生成保存失败后可以重试保存，不重复请求或增加结果数量', async () => {
-    const f = fixture(), first = await f.service.send({ prompt: '保存替换结果' });
-    f.control.response = async () => {
-        f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
-        return '替换后尚未保存的内容';
-    };
-    await assert.rejects(f.service.regenerate(first.roundId, first.result.id), /模拟保存失败/);
-    assert.equal(f.service.getState().phase, 'save-failed');
-    assert.equal((await f.service.getRound(first.roundId)).results.length, 1);
-    f.io.beforeWrite = null;
-    await f.service.retrySave();
-    const round = await f.restart().getRound(first.roundId);
-    assert.equal(round.results.length, 1); assert.equal(round.results[0].text, '替换后尚未保存的内容');
-    assert.equal(f.sent.length, 2);
+test('重新生成保存失败保留最终正文，编辑保存补存，不重复请求或增加版本', async () => {
+    const f = fixture(), first = await f.service.send({ prompt: '测试' });
+    f.control.response = async () => { f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('保存失败'); }; return '新正文'; };
+    const result = await f.service.regenerate(first.roundId, first.result.id);
+    assert.equal(f.service.session.currentRound(first.roundId).results.length, 1);
+    assert.equal(result.result.text, '新正文'); f.io.beforeWrite = null;
+    await f.service.editResult(first.roundId, result.result.id, '新正文', '新正文');
+    await f.service.session.flush(first.roundId);
+    assert.equal((await f.store.getRound(first.roundId)).results[0].text, '新正文'); assert.equal(f.sent.length, 2);
 });
 
 test('新发与追加结果只提交本轮文字和当前主聊天，不累加插件旧输入或回复', async () => {
@@ -450,30 +444,19 @@ test('未收到正文时也保存接口原始错误，支持直接抛出的文�
     assert.equal(result.error.message, message);
 });
 
-test('提示词保存失败不请求模型；回复保存失败可独立重试，不再花一次生成', async () => {
-    const f = fixture();
-    f.io.beforeWrite = () => { throw new Error('disk full'); };
-    await assert.rejects(f.service.send({ prompt: '先保存输入' }));
-    assert.equal(f.sent.length, 0);
-    assert.equal(f.service.getState().phase, 'idle');
+test('提示词保存失败不请求模型；回复保存失败保留正文，编辑保存可以恢复', async () => {
+    const f = fixture(); f.io.beforeWrite = () => { throw Error('disk full'); };
+    assert.equal(await f.service.send({ prompt: '先保存输入' }), null); assert.equal(f.sent.length, 0);
+    assert.equal(f.service.getStates().length, 0);
     f.io.beforeWrite = null;
-    f.control.response = async () => {
-        f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw new Error('disk full'); };
-        return '需要保留的完整回复';
-    };
-    await assert.rejects(f.service.send({ prompt: '第二次尝试' }), error => error.code === 'history_save_failed');
-    assert.equal(f.service.getState().phase, 'save-failed');
-    assert.equal(f.service.getState().text, '需要保留的完整回复');
-    assert.equal(f.service.getState().error.message, 'disk full');
-    assert.equal(f.service.availability().available, true);
-    await assert.rejects(f.service.regenerate(f.service.getState().roundId, f.service.getState().resultId), error => error.code === 'unsaved_result');
-    await assert.rejects(f.service.retrySave(), /disk full/);
-    assert.equal(f.service.getState().text, '需要保留的完整回复');
+    f.control.response = async () => { f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('disk full'); }; return '需要保留的完整回复'; };
+    const result = await f.service.send({ prompt: '第二次尝试' });
+    assert.equal(f.service.session.currentRound(result.roundId).results[0].text, '需要保留的完整回复');
+    assert.equal(f.service.availability({ chatId: result.roundId }).available, true);
     f.io.beforeWrite = null;
-    const saved = await f.service.retrySave();
-    assert.equal(saved.results[0].text, '需要保留的完整回复');
-    assert.equal(f.sent.length, 1);
-    assert.equal(f.service.getState().phase, 'idle');
+    await f.service.editResult(result.roundId, result.result.id, result.result.text, result.result.text);
+    await f.service.session.flush(result.roundId);
+    assert.equal((await f.store.getRound(result.roundId)).results[0].text, result.result.text); assert.equal(f.sent.length, 1);
 });
 
 test('连续生成不上传或删除文件，本页实时显示片段，结束后保存完整回复', async t => {
@@ -543,11 +526,12 @@ test('慢速保存只写最终正文，保存期间忽略迟到片段并等待�
         assert.equal(delayed, false, '流式片段没有触发保存');
         assert.equal(f.writes.length, before);
         finish.resolve(); await saving.promise;
-        assert.equal(f.service.getState().phase, 'saving');
-        assert.equal(f.service.getState().text, '完整的最终正文');
-        assert.equal(f.service.availability({ resultId: f.service.getState().resultId }).code, 'busy');
+        assert.equal(f.service.getState().phase, 'idle');
+        const id = f.directory().rounds[0].id;
+        assert.equal(f.service.session.currentRound(id).results[0].text, '完整的最终正文');
+        assert.equal(f.service.availability({ chatId: id }).available, true);
         onText('迟到片段'); await nextTurn();
-        assert.equal(f.service.getState().text, '完整的最终正文');
+        assert.equal(f.service.session.currentRound(id).results[0].text, '完整的最终正文');
     } finally { finish.resolve(); releaseSave.resolve(); }
     const result = await task;
     const savedFiles = f.writes.slice(before);
@@ -586,7 +570,7 @@ test('等待另一窗口保存时可以停止，释放队列后也不会偷偷�
     assert.equal(f.writes.length, 0); assert.equal(f.sent.length, 0);
     release.resolve(); await holder;
     const next = await f.service.send({ prompt: '停止后的正常发送' });
-    assert.equal(f.directory().rounds.length, 1);
+    assert.equal(f.directory().rounds.length, 2);
     assert.equal((await f.store.getRound(next.roundId)).prompt, '停止后的正常发送');
     assert.equal(f.sent.length, 1);
 });
@@ -598,7 +582,11 @@ test('开始写文件后再停止，会完成这次保存并记录停止，不�
     await entered.promise;
     assert.equal(f.service.stop(), true);
     release.resolve();
-    const result = await pending;
+    assert.equal(await pending, null);
+    await nextTurn();
+    const id = f.directory().rounds[0].id;
+    await f.service.session.flush(id);
+    const result = { roundId: id, result: (await f.store.getRound(id)).results[0] };
     assert.equal(result.result.status, 'stopped'); assert.equal(f.sent.length, 0);
     const saved = await f.store.getRound(result.roundId);
     assert.equal(saved.results[0].status, 'stopped');
@@ -682,7 +670,7 @@ test('续写返回空增量时报错 empty_response 并保留原正文', async (
     assert.equal(saved.results[0].text, '完整前文');
 });
 
-test('生成、追加结果、重新生成和续写在准备阶段均先通知 roundId=null，落库后才通知 roundId', async () => {
+test('生成、追加结果、重新生成和续写接收前通知空编号，接收后通知稳定编号', async () => {
     const f = fixture();
     const roundIdTransitions = [];
     f.service.subscribe(job => {
@@ -697,14 +685,10 @@ test('生成、追加结果、重新生成和续写在准备阶段均先通知 r
     // 4. continueResult
     await f.service.continueResult(first.roundId, replaced.result.id);
 
-    // 每次操作开始时处于 preparing 且 roundId 必须为 null，等 history.begin 落库后才转为真实的 roundId
-    const preparingEvents = roundIdTransitions.filter(e => e.phase === 'preparing');
-    // 每个操作都有 2 个 preparing 事件：第一个 roundId 为 null，第二个 roundId 为有效 ID
-    assert.equal(preparingEvents.length, 8);
-    for (let i = 0; i < 4; i++) {
-        assert.equal(preparingEvents[i * 2].roundId, null, `第 ${i + 1} 个操作在落库前 roundId 必须为 null`);
-        assert.equal(preparingEvents[i * 2 + 1].roundId, first.roundId, `第 ${i + 1} 个操作在落库后 roundId 必须为真实 ID`);
-    }
+    const preparingEvents = roundIdTransitions.filter(event => event.phase === 'preparing');
+    assert.ok(preparingEvents.some(event => event.roundId === null));
+    assert.ok(preparingEvents.filter(event => event.roundId).every(event => event.roundId === first.roundId));
+    assert.equal((await f.store.getRound(first.roundId)).results.length, 2);
 });
 
 test('续写读取前文期间立即阻止重复请求，停止后不发送也不改变原结果', async () => {
@@ -721,7 +705,7 @@ test('续写读取前文期间立即阻止重复请求，停止后不发送也�
     assert.equal(await task, null);
     f.io.beforeRead = null; gate.resolve(); await nextTurn();
     assert.equal(f.sent.length, 1, '只有最初的生成请求');
-    assert.deepEqual(await f.store.getRound(first.roundId), before);
+    assert.equal((await f.store.getRound(first.roundId)).results[0].text, before.results[0].text);
     assert.equal(f.service.getState().phase, 'idle');
 });
 
@@ -729,19 +713,17 @@ test('续写等待读取时切换聊天或另一窗口编辑，均不会发送�
     for (const change of ['chat', 'text']) {
         const f = fixture(), first = await f.service.send({ prompt: '提示词' });
         if (change === 'chat') {
-            const read = f.store.getRound.bind(f.store);
-            f.store.getRound = async id => {
-                const round = await read(id);
-                f.current.chatId = 'changed-main-chat'; return round;
-            };
-            await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'chat_changed');
+            const read = f.store.ensureChat.bind(f.store);
+            f.store.ensureChat = async (...args) => { const chat = await read(...args); f.current.chatId = 'changed-main-chat'; return chat; };
+            const fresh = createPlayground({ history: f.store, captureEnvironment: () => f.current, isCurrent: environment => f.current.chatId === environment.chatId, prepareRequest: async () => ({ send: async () => '不应请求' }) });
+            await assert.rejects(fresh.continueResult(first.roundId, first.result.id), error => error.code === 'chat_changed');
         } else {
             const begin = f.store.begin.bind(f.store);
             f.store.begin = async (input, options) => {
                 await f.store.editResult(first.roundId, first.result.id, '另一窗口的新正文', first.result.text);
                 return begin(input, options);
             };
-            await assert.rejects(f.service.continueResult(first.roundId, first.result.id), error => error.code === 'edit_conflict');
+            assert.equal(await f.service.continueResult(first.roundId, first.result.id), null);
             assert.equal((await f.store.getRound(first.roundId)).results[0].text, '另一窗口的新正文');
         }
         assert.equal(f.sent.length, 1);

@@ -2,12 +2,36 @@ import { createPlayHistory, PlayHistoryError } from './play-history.js';
 import { createHistoryLock, HISTORY_FILE_TIMEOUT } from './play-storage-lock.js';
 
 const readMethods = ['listCharacters', 'listRounds', 'getRound', 'createRoundReader', 'listFavorites', 'getFavorite',
-    'getFavoriteWindow', 'getChatPreview', 'getChatSearch', 'createChatDirectoryReader', 'getChatWindow', 'getChatMetadata', 'getMessageBody'];
+    'getFavoriteWindow', 'getChatPreview', 'getChatSearch', 'createChatDirectoryReader', 'getChatWindow', 'getChatMetadata', 'getMessageBody', 'getChat'];
 export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editPrompt', 'editResult', 'renameCharacter',
     'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
-    'listChats', 'getChat', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
-    'addChatFavorite', 'syncChatFavorite', 'setMessagesHidden', 'setUserIdentity'];
-const workerVersion = 15;
+    'listChats', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
+    'addChatFavorite', 'syncChatFavorite', 'setMessagesHidden', 'setUserIdentity', 'ensureChat'];
+const workerVersion = 16;
+
+export function createPlayCleanup() {
+    const tasks = [];
+    let running = false;
+    async function drain() {
+        if (running) return;
+        running = true;
+        try {
+            while (tasks.length) {
+                const { names, removeFile, onWarning, operation } = tasks.shift();
+                for (const name of names) {
+                    try { await removeFile(name); }
+                    catch (error) { onWarning?.(operation, error); }
+                }
+            }
+        } finally { running = false; }
+    }
+    return (names, removeFile, onWarning, operation) => {
+        if (!names.length) return;
+        if (tasks.length >= 64) { onWarning?.(operation, new Error('清理队列已满')); return; }
+        tasks.push({ names: [...names], removeFile, onWarning, operation });
+        void drain();
+    };
+}
 
 // Shared by the page and the HTTP worker. A timeout includes reading the body.
 export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {
@@ -43,9 +67,13 @@ export function createPlayFiles(getHeaders, beforeWrite = async () => {}) {
 
 // The page fallback and the shared worker use the same HTTP lock and history
 // rules. Reading files never opens the lock database or requires a worker.
-export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistoryLock(), onWarning) {
+export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistoryLock(), onWarning, cleanup = createPlayCleanup()) {
     let check;
     return createPlayHistory({ ...createPlayFiles(getHeaders, () => check()), uuid, onWarning,
+        enqueueCleanup: (names, operation) => {
+            const headers = new Headers(getHeaders());
+            cleanup(names, createPlayFiles(() => headers).removeFile, onWarning, operation);
+        },
         withLock: (run, signal) => withLock(async assertOwner => {
             check = assertOwner;
             try { return await run(); }
@@ -56,7 +84,12 @@ export function createHttpPlayHistory(getHeaders, uuid, withLock = createHistory
 export function createBrowserPlayHistory(ctx, diagnostics) {
     const onWarning = (operation, error) => diagnostics?.warn(operation, error);
     if (globalThis.navigator?.locks?.request) {
-        return createPlayHistory({ ...createPlayFiles(() => ctx().getRequestHeaders()), uuid: () => ctx().uuidv4(), onWarning,
+        const files = createPlayFiles(() => ctx().getRequestHeaders()), cleanup = createPlayCleanup();
+        return createPlayHistory({ ...files, uuid: () => ctx().uuidv4(), onWarning,
+            enqueueCleanup: (names, operation) => {
+                const headers = new Headers(ctx().getRequestHeaders());
+                cleanup(names, createPlayFiles(() => headers).removeFile, onWarning, operation);
+            },
             withLock: (run, signal) => navigator.locks.request('teahouse-play-history', { signal }, run) });
     }
     const local = createHttpPlayHistory(() => ctx().getRequestHeaders(), () => ctx().uuidv4(), undefined, onWarning);
@@ -76,9 +109,6 @@ export function createBrowserPlayHistory(ctx, diagnostics) {
         if (workerUnavailable) return null;
         if (connecting) return connecting;
         connecting = new Promise(resolve => { ready = resolve; });
-        // Wait for module support/loading before dispatching any write. Only
-        // initialization failure may fall back automatically; an unacknowledged
-        // write is left for the existing save-retry flow, never replayed here.
         try {
             worker = new SharedWorker(new URL(`./play-storage-worker.js?v=${workerVersion}`, import.meta.url),
                 { type: 'module', name: `teahouse-play-history-v${workerVersion}` });

@@ -283,12 +283,12 @@ async function verifyProseScope(page, url) {
         (await import('/play-render.js')).renderPlayText(panel,
             '网页前的说明。\n\n第二段说明。\n\n```html\n<div>独立网页回复</div><button id="step">继续</button><span id="count">0</span><script>document.getElementById("step").onclick=()=>document.getElementById("count").textContent=Number(document.getElementById("count").textContent)+1;</script>\n```',
             'scope-test', true);
-        window.scopeFrame = panel.querySelector('iframe');
         window.scopeAppearance = (await import('/appearance.js')).createAppearance(panel);
         scopeAppearance.apply('default');
     });
     const webpage = page.frameLocator('#teahouse-panel iframe');
     await webpage.getByRole('button', { name: '继续', exact: true }).click();
+    await page.locator('#teahouse-panel iframe').evaluate(frame => { window.scopeFrame = frame; });
     const result = await page.evaluate(async () => {
         scopeAppearance.apply('tavern');
         const frame = document.querySelector('#teahouse-panel iframe'), paragraph = document.querySelector('#teahouse-panel .tea-body > p + p');

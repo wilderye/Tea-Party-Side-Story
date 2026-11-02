@@ -140,7 +140,7 @@ test('准备失败、停止和最终保存失败仍保留已确认身份，迟�
         const state = service.getState(); if (action === 'stop') service.stop(state.resultId);
         gate.resolve();
         if (action === 'save-fail') {
-            await assert.rejects(task, /模拟保存失败/); f.io.beforeWrite = null; await service.retrySave(state.resultId);
+            await task; f.io.beforeWrite = null; await service.session.flush(state.roundId);
         } else await task;
         assert.deepEqual((await f.createStore().getChat(state.roundId)).messages[0].userIdentity, identityA);
     }
@@ -162,9 +162,13 @@ test('身份保存失败阻止模型请求，不混入配置或提示词内容',
         return { send: async () => { sends++; return '正文'; } };
     });
     const result = await service.send({ prompt: '正常消息' });
-    assert.equal(sends, 0); assert.equal(result.result.status, 'failed');
-    const raw = readRawChat(f, result.roundId);
-    assert.equal(raw.messages[0].userIdentity, null);
+    assert.equal(sends, 0); assert.equal(result, null);
+    const id = (await service.listRounds((await service.listCharacters())[0].id))[0].id;
+    assert.equal(service.session.currentRound(id).results[0].status, 'stopped');
+    assert.equal(service.session.currentRound(id).results[0].error, undefined);
+    await service.session.flush(id);
+    const raw = readRawChat(f, id);
+    assert.deepEqual(raw.messages[0].userIdentity, identityA);
     for (const text of f.files.values()) { assert.ok(!text.includes('private-key')); assert.ok(!text.includes('private-prompt')); }
 });
 

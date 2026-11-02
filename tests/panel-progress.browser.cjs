@@ -82,7 +82,7 @@ async function read(page, mobile) {
         else panel.querySelectorAll('.tea-story')[1]?.click();
     }, mobile);
     await settle(page);
-    await page.locator(mobile ? '.tea-list' : '.tea-reading').evaluate(node => { node.scrollTop = 740; });
+    await page.locator('.tea-panel-surface[data-active=true]').locator(mobile ? '.tea-list' : '.tea-reading').evaluate(node => { node.scrollTop = 740; });
     await settle(page);
     const saved = await snapshot(page);
     assert.ok(saved[mobile ? 'listScroll' : 'readingScroll'] > 700, '先滚动到长正文内部再测试恢复');
@@ -152,7 +152,7 @@ async function verifyProgress(page, mobile) {
     await page.evaluate(async () => {
         const round = await runtime.getRound(seed.a), result = round.results[0];
         await runtime.addFavorite({ roundId: round.id, resultId: result.id, startedAt: result.startedAt,
-            expectedText: result.text, firstLine: '虚构演出记录收藏' });
+            expectedText: result.text, text: result.text.replace(/<[^>]+>/g, ''), firstLine: '虚构演出记录收藏' });
     });
     await button('我的收藏').click();
     await button('演出记录').click();
@@ -164,7 +164,16 @@ async function verifyProgress(page, mobile) {
     const favoriteScroll = await favoriteReader.evaluate(node => node.scrollTop);
     assert.ok(favoriteScroll > 200);
     await button('关闭面板').click();
+    await page.evaluate(() => {
+        const read = runtime.getFavoriteWindow.bind(runtime);
+        const ready = new Promise(resolve => window.resumeFavoriteRead = resolve);
+        runtime.getFavoriteWindow = async (...args) => { await ready; return read(...args); };
+    });
     await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click(); await settle(page);
+    await favoriteReader.getByText('正在读取收藏…', { exact: true }).waitFor();
+    await page.evaluate(() => resumeFavoriteRead());
+    await favoriteReader.getByText('阅读位置验证第24段。', { exact: true }).waitFor();
+    await settle(page);
     assert.ok(Math.abs(await favoriteReader.evaluate(node => node.scrollTop) - favoriteScroll) < 2, '演出记录收藏关闭后恢复正文位置');
     if (mobile) await button('返回收藏目录').click();
     await button('茶会选集').click(); await settle(page);
