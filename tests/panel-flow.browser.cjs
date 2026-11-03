@@ -34,6 +34,74 @@ async function settle(page) {
   let frames=0;const tick=()=>++frames===8?resolve():requestAnimationFrame(tick);requestAnimationFrame(tick);
  }));
 }
+async function verifyLibraryTags(page, mobile) {
+ const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
+ const button = name => panel.getByRole('button', { name, exact: true }).filter({ visible: true });
+ const tagsSource = '开头 <char><user>{{char}}{{user}} <story>标签</story>\n\n' + '中间正文。'.repeat(260) + '\n\n结尾 <char><user>{{char}}{{user}} 完毕。';
+ await page.evaluate(body => {
+  const state = window.fixture;
+  state.community.clear();
+  state.manuscripts.clear();
+  state.community.set('test:story-standalone', { id: 'test:story-standalone', title: '选集独立故事', type: 'standalone', body, publishedAt: '2026-01-10T00:00:00Z' });
+  state.community.set('test:story-preset', { id: 'test:story-preset', title: '选集随文故事', type: 'preset', body, publishedAt: '2026-01-11T00:00:00Z' });
+  state.manuscripts.set('local:story-local', { id: 'local:story-local', title: '手稿故事', type: 'standalone', body, publishedAt: '2026-01-12T00:00:00Z' });
+  state.settings.favorites = { 'test:story-standalone': 1, 'test:story-preset': 2 };
+  window.ui.refresh();
+ }, tagsSource);
+ await settle(page);
+
+ if (mobile) {
+  const entry = panel.locator('.tea-feed-entry[data-id="test:story-standalone"]');
+  assert.ok((await entry.locator('.tea-body').innerText()).includes('<char><user>{{char}}{{user}} <story>标签</story>'), '手机选集预览保留四种占位符');
+  await entry.getByRole('button', { name: '展开全文：选集独立故事' }).click();
+  await settle(page);
+  assert.ok((await entry.locator('.tea-body').innerText()).includes('结尾 <char><user>{{char}}{{user}} 完毕。'), '手机展开全文保留占位符');
+ } else {
+  await panel.locator('.tea-story', { hasText: '选集独立故事' }).click();
+  const reading = panel.locator('.tea-reading .tea-body');
+  assert.ok((await reading.innerText()).includes('<char><user>{{char}}{{user}} <story>标签</story>'), '电脑选集独立剧场保留四种占位符');
+  assert.ok((await reading.innerText()).includes('结尾 <char><user>{{char}}{{user}} 完毕。'));
+  await panel.locator('.tea-story', { hasText: '选集随文故事' }).click();
+  assert.ok((await reading.innerText()).includes('<char><user>{{char}}{{user}} <story>标签</story>'), '电脑选集随文剧场保留四种占位符');
+ }
+
+ await button('我的收藏').click();
+ await settle(page);
+ if (!mobile) await panel.locator('.tea-story').first().click();
+ const favBody = mobile
+  ? panel.locator('.tea-feed-entry[data-id="test:story-standalone"] .tea-body')
+  : panel.locator('.tea-reading .tea-body');
+ assert.ok((await favBody.innerText()).includes('<char><user>{{char}}{{user}} <story>标签</story>'), '我的收藏保留四种占位符');
+
+ await button('亲笔手稿').click();
+ await settle(page);
+ if (!mobile) await panel.locator('.tea-story').first().click();
+ const localBody = mobile
+  ? panel.locator('.tea-feed-entry[data-id="local:story-local"] .tea-body')
+  : panel.locator('.tea-reading .tea-body');
+ assert.ok((await localBody.innerText()).includes('<char><user>{{char}}{{user}} <story>标签</story>'), '亲笔手稿保留四种占位符');
+
+ if (mobile) {
+  await panel.locator('.tea-feed-entry[data-id="local:story-local"]').getByRole('button', { name: '编辑手稿' }).click();
+ } else {
+  await button('编辑手稿').click();
+ }
+ await settle(page);
+ assert.equal(await panel.locator('textarea').inputValue(), tagsSource, '编辑手稿读取原始占位符与标签');
+ await button('保存手稿').click();
+ await settle(page);
+
+ if (mobile) {
+  await panel.locator('.tea-feed-entry[data-id="local:story-local"]').getByRole('button', { name: '在酒馆中游玩' }).click();
+ } else {
+  await button('在酒馆中游玩').click();
+ }
+ assert.equal(await page.locator('#send_textarea').inputValue(), tagsSource, '游玩填入原文完整保留占位符');
+
+ await page.reload();
+ await panel.waitFor();
+}
+
 async function verifyLayout(page,mobile) {
  const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
  const button=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});

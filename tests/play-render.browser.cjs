@@ -47,9 +47,9 @@ const server = http.createServer(async (request, response) => {
             response.setHeader('Content-Type','text/javascript');
             return response.end(await fs.readFile(path.join(tavern, 'node_modules',name.slice(6))));
         }
-        if (/^\/(?:[\w-]+\.(?:js|css)|vendor\/markdown-it.js)$/.test(name)) {
-            response.setHeader('Content-Type',name.endsWith('.css')?'text/css':'text/javascript');
-            return response.end(await fs.readFile(path.join(root,name.slice(1))));
+        if (/^\/(?:[\w-]+\.(?:js|css)|vendor\/markdown-it.js|assets\/(?:fonts\/)?[\w.-]+)$/.test(name)) {
+            response.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : name.endsWith('.svg') ? 'image/svg+xml' : name.endsWith('.woff2') ? 'font/woff2' : 'text/javascript');
+            return response.end(await fs.readFile(path.join(root, name.slice(1))));
         }
         response.statusCode=404;response.end();
     } catch(error) { response.statusCode=500;response.end(error.message); }
@@ -102,6 +102,7 @@ async function main() {
                 assert.ok((await page.locator('#output').innerText()).includes('😄'));
                 assert.equal(await page.evaluate(()=>hostCalls),0);
                 if(process.env.TEA_QA_DIR){await fs.mkdir(process.env.TEA_QA_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.TEA_QA_DIR,`details-${path.basename(directory)}-${viewport.width}.png`)});}
+                await testTheatrePanelTagPreservation(page, viewport.width < 500);
                 const boundary=await page.evaluate(()=>[
                     '```text\n<script>bad()</script>\n```',
                     '    <script>bad()</script>',
@@ -145,6 +146,66 @@ async function main() {
         await testLogPrivacy(browser,url);
         if(helper) await testInstalledResources(browser,url);
     } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
+}
+async function testTheatrePanelTagPreservation(page, mobile) {
+    const testBody = '剧场正文 <char><user>{{char}}{{user}} <story>内容</story>\n\n<details><summary>折叠</summary>正文</details>';
+    await page.evaluate(async ({ testBody }) => {
+        const { createTheatrePanel } = await import('/panel.js');
+        const community = new Map([
+            ['test:tag-item', { id: 'test:tag-item', title: '标签测试条目', type: 'standalone', body: testBody, publishedAt: '2026-01-01T00:00:00Z' }]
+        ]);
+        const state = {
+            settings: { enabled: true, pageSize: 5, favorites: {} },
+            community,
+            manuscripts: new Map(),
+            status: '',
+            personalError: '',
+            get entries() { return this.community; }
+        };
+        let finish;
+        const context = {
+            POPUP_TYPE: { TEXT: 1, CONFIRM: 2 },
+            POPUP_RESULT: { AFFIRMATIVE: 1, CANCELLED: 0 },
+            callGenericPopup: async () => false,
+            Popup: class {
+                constructor(panel) {
+                    this.dlg = document.createElement('dialog');
+                    this.dlg.className = 'popup';
+                    this.dlg.innerHTML = '<div class="popup-body"><div class="popup-content"></div></div>';
+                    this.dlg.querySelector('.popup-content').append(panel);
+                }
+                show() { document.body.append(this.dlg); this.dlg.showModal(); return new Promise(r => finish = r); }
+                async complete() { try { this.dlg.close(); } catch {} this.dlg.remove(); finish?.(); }
+            }
+        };
+        const ui = createTheatrePanel(() => context, state, {
+            loaded: Promise.resolve(),
+            saveSettings() {},
+            toggleFavorite() {},
+            updateLibrary() {},
+            async saveManuscript() {},
+            async deleteManuscript() {}
+        });
+        window.__panelTestInstance = ui;
+        ui.open();
+    }, { testBody });
+
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
+    const bodyLocator = mobile
+        ? panel.locator('.tea-feed-entry[data-id="test:tag-item"] .tea-body')
+        : panel.locator('.tea-reading .tea-body');
+
+    assert.equal(await bodyLocator.locator('details').count(), 0, '小剧场正文不得生成 HTML details 折叠元素');
+    const text = await bodyLocator.innerText();
+    assert.ok(text.includes('<char><user>{{char}}{{user}}'), '小剧场正文完整保留四种占位符文字');
+    assert.ok(text.includes('<story>内容</story>'), '小剧场正文保留普通标签文字');
+    assert.ok(text.includes('<details><summary>折叠</summary>正文</details>'), '小剧场正文把 HTML 标签作为文字显示');
+
+    await page.evaluate(async () => {
+        await window.__panelTestInstance?.close();
+        delete window.__panelTestInstance;
+        document.querySelectorAll('dialog.popup').forEach(d => { try { d.close(); } catch {} d.remove(); });
+    });
 }
 async function testHiddenHeight(page) {
     await page.evaluate(() => {

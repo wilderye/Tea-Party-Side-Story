@@ -1,5 +1,5 @@
 import { findEntries, isManuscript, reconcileRandomOrder } from './library.js';
-import { renderTavernProse } from './play-tavern-render.js';
+import { renderMarkdown } from './markdown.js';
 import { createAppearance } from './appearance.js';
 import { createViewDiagnostics } from './view-diagnostics.js';
 import { element, textButton, glyph, iconButton, copyText, createPageJump } from './ui.js';
@@ -1137,7 +1137,7 @@ export function createTheatrePanel(ctx, state, actions) {
         }
         return buttons;
     }
-    function markdownBody(item) { const body = element('div', undefined, 'tea-body'); renderTavernProse(body, item.body); return body; }
+    function markdownBody(item) { const body = element('div', undefined, 'tea-body'); body.innerHTML = renderMarkdown(item.body); return body; }
     function renderReader(workspace, item) {
         const reading = element('div', undefined, 'tea-reading tea-scroll'); reading.dataset.id = item.id;
         reading.append(articleHeader(item, null, true), markdownBody(item)); workspace.append(reading);

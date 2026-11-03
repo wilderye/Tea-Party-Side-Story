@@ -152,3 +152,11 @@ test('回复正文隐藏英文标签时，代码和转义示例仍按原样显�
         '<p>&lt;regard&gt;转义&lt;/regard&gt; &lt;regard&gt;字符实体&lt;/regard&gt;</p>\n');
     assert.equal(render('<script>alert(1)</script><img src=x onerror="alert(1)">'), '<p>alert(1)</p>\n');
 });
+
+test('正文、行内代码与代码块中四种名字占位符及提示词标签原样可见', () => {
+    const source = '正文 <char><user>{{char}}{{user}} <story>内容</story>\n\n`行内 <char><user>{{char}}{{user}} <story>内容</story>`\n\n```text\n代码块 <char><user>{{char}}{{user}} <story>内容</story>\n```';
+    const html = renderMarkdown(source);
+    assert.match(html, /正文 &lt;char&gt;&lt;user&gt;\{\{char\}\}\{\{user\}\} &lt;story&gt;内容&lt;\/story&gt;/);
+    assert.match(html, /<code>行内 &lt;char&gt;&lt;user&gt;\{\{char\}\}\{\{user\}\} &lt;story&gt;内容&lt;\/story&gt;<\/code>/);
+    assert.match(html, /代码块 &lt;char&gt;&lt;user&gt;\{\{char\}\}\{\{user\}\} &lt;story&gt;内容&lt;\/story&gt;/);
+});
