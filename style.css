@@ -346,9 +346,9 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .tea-empty-title { text-align:center; font:700 28px/40px var(--tea-display); }
 :is(#teahouse-panel,.tea-panel-surface) .tea-workspace>.tea-empty { text-align:center; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-empty { white-space:pre-line; }
-#teahouse-edge { position:fixed; left:0; top:40dvh; z-index:1000; width:24px; height:64px; padding:0; border:1px solid var(--SmartThemeBorderColor); border-left:0; border-radius:0 8px 8px 0; background:var(--SmartThemeBlurTintColor); color:var(--SmartThemeBodyColor); cursor:pointer; opacity:.7; }
+#teahouse-edge { position:fixed; left:6px; top:40dvh; z-index:1000; width:24px; height:36px; padding:0; display:flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--SmartThemeQuoteColor,var(--SmartThemeBodyColor)); font-size:13px; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35)); cursor:pointer; opacity:var(--tea-edge-opacity,.5); transition:opacity .15s ease; }
 #teahouse-edge:hover,#teahouse-edge:focus-visible { opacity:1; }
-#teahouse-edge[data-side="right"] { left:auto; right:0; border-left:1px solid var(--SmartThemeBorderColor); border-right:0; border-radius:8px 0 0 8px; }
+#teahouse-edge[data-side="right"] { left:auto; right:6px; }
 .teahouse-edge-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .teahouse-edge-row>.checkbox_label { flex:none; }
 .teahouse-edge-sides { display:flex; flex:none; gap:2px; padding:2px; border:1px solid var(--SmartThemeBorderColor); border-radius:6px; background:color-mix(in srgb,var(--SmartThemeBodyColor) 5%,transparent); }
@@ -362,6 +362,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 @media(pointer:coarse) {
     .teahouse-edge-side span { min-height:44px; display:flex; align-items:center; justify-content:center; }
 }
+.teahouse-edge-opacity-row { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--SmartThemeBodyColor); }
+.teahouse-edge-opacity-row[hidden] { display:none; }
+.teahouse-edge-opacity-row input[type=range] { flex:1; margin:0; cursor:pointer; }
+.teahouse-edge-opacity-row span:last-child { min-width:38px; text-align:right; font-variant-numeric:tabular-nums; }
+.teahouse-edge-opacity-row:has(input:disabled) { opacity:.5; cursor:default; }
 .teahouse-settings-controls { display:flex; flex-direction:column; gap:8px; padding:8px 0; }
 .teahouse-settings-controls .checkbox_label { margin:0; }
 .teahouse-settings-controls .menu_button { width:fit-content; white-space:nowrap; }

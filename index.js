@@ -22,6 +22,7 @@ settings.showGore = settings.showGore === true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
 if (!['left', 'right'].includes(settings.edgeSide)) settings.edgeSide = 'left';
+settings.edgeOpacity ??= 0.5;
 settings.lastFavoriteId ??= null;
 if (!['time', 'random'].includes(settings.sortMode)) settings.sortMode = 'time';
 const saveSettings = () => ctx().saveSettingsDebounced();
@@ -236,7 +237,7 @@ function syncEntrances() {
     if (settings.enabled && settings.edgeEnabled) {
         const edge = textButton('', () => ui.open()); edge.id = 'teahouse-edge'; edge.title = '茶话会小剧场';
         edge.setAttribute('aria-label', '打开茶话会小剧场');
-        edge.dataset.side = settings.edgeSide;
+        edge.dataset.side = settings.edgeSide; edge.style.setProperty('--tea-edge-opacity', String(settings.edgeOpacity ?? 0.5));
         const icon = element('i', undefined, `fa-solid fa-chevron-${settings.edgeSide === 'right' ? 'left' : 'right'}`); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
         document.body.append(edge);
     }
@@ -288,6 +289,12 @@ function refreshSettings() {
         input.checked = settings[name]; input.disabled = name !== 'enabled' && !settings.enabled;
     }
     settingsSection.edgeSides.hidden = !settings.edgeEnabled;
+    if (settingsSection.edgeOpacityRow) {
+        settingsSection.edgeOpacityRow.hidden = !settings.edgeEnabled;
+        settingsSection.edgeOpacityInput.value = String(Math.round((settings.edgeOpacity ?? 0.5) * 100));
+        settingsSection.edgeOpacityValue.textContent = `${settingsSection.edgeOpacityInput.value}%`;
+        settingsSection.edgeOpacityInput.disabled = !settings.enabled || !settings.edgeEnabled;
+    }
     for (const input of settingsSection.edgeSideInputs) {
         input.checked = settings.edgeSide === input.value;
         input.disabled = !settings.enabled || !settings.edgeEnabled;
@@ -326,6 +333,23 @@ if (settingsHost) {
         settingsSection.edgeSideInputs.push(input);
     }
     edgeRow.append(settingsSection.edgeSides); controls.append(edgeRow);
+    const opacityRow = element('div', undefined, 'teahouse-edge-opacity-row');
+    const opacityInput = element('input');
+    opacityInput.type = 'range'; opacityInput.min = '10'; opacityInput.max = '100'; opacityInput.step = '5';
+    opacityInput.value = String(Math.round((settings.edgeOpacity ?? 0.5) * 100));
+    const opacityValue = element('span', `${opacityInput.value}%`);
+    opacityInput.addEventListener('input', () => {
+        opacityValue.textContent = `${opacityInput.value}%`;
+        const val = Number(opacityInput.value) / 100;
+        settings.edgeOpacity = val; saveSettings();
+        const edge = document.querySelector('#teahouse-edge');
+        if (edge) edge.style.setProperty('--tea-edge-opacity', String(val));
+    });
+    opacityRow.append(element('span', '透明度'), opacityInput, opacityValue);
+    controls.append(opacityRow);
+    settingsSection.edgeOpacityRow = opacityRow;
+    settingsSection.edgeOpacityInput = opacityInput;
+    settingsSection.edgeOpacityValue = opacityValue;
     settingsSection.open = textButton('打开剧场', () => ui.open()); settingsSection.open.id = 'teahouse-open';
     settingsSection.open.classList.add('menu_button'); controls.append(settingsSection.open);
     settingsSection.update = textButton('更新茶会选集', updateLibrary);
