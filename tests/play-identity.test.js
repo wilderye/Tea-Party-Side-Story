@@ -6,7 +6,7 @@ import { createPlayground } from '../playground.js';
 import { createIndependentPlayScope } from '../play-independent.js';
 import { createPlayChatFavorites } from '../play-chat-favorites.js';
 import { playRoundFile, playFavoriteFile, readPlayChat, readPlayRound, PLAY_HISTORY_INDEX } from '../play-history.js';
-import { playMessageIdentity } from '../play-message-context.js';
+import { playMessageIdentity, playChatMessageIdentity } from '../play-message-context.js';
 
 const identityA = { name: '用户甲', avatar: '用户甲.png' };
 const identityB = { name: '用户乙', avatar: '用户乙.png' };
@@ -110,6 +110,32 @@ test('旧记录只从同轮最初生成信息补齐，读取不写文件，版�
     const old = readPlayRound({ format: 1, id: chat.id, characterId: chat.characterId, createdAt: chat.createdAt,
         origin: chat.origin, prompt: '旧消息', results: (await f.store.getRound(chat.id)).results });
     assert.deepEqual(old.userIdentity, identityA);
+});
+
+test('用户消息显示所选回复版本的人设，没有对应版本时使用发送时的人设', async () => {
+    const f = memoryFiles(), chat = await seed(f), favorites = createPlayChatFavorites(f.store);
+    const id = randomUUID();
+    await f.begin({ roundId: chat.id, resultId: id, startedAt: time(2), context: contextFor(identityB) });
+    await f.store.saveResult(chat.id, id, { text: '第二份回复', status: 'complete', finishedAt: time(3) });
+    let current = await f.store.getChat(chat.id);
+    assert.equal(current.messages[1].selectedResultId, id);
+    assert.deepEqual(playChatMessageIdentity(current.messages, current.messages[0]), identityB);
+    const favorite = await favorites.add(chat.id);
+    assert.equal(favorite.messages[0].speakerName, identityB.name);
+    assert.equal(favorite.messages[0].speakerAvatar, identityB.avatar);
+    await f.store.setMessageVersion(chat.id, current.messages[1].id, current.messages[1].results[0].id, id);
+    current = await f.store.getChat(chat.id);
+    assert.deepEqual(playChatMessageIdentity(current.messages, current.messages[0]), identityA);
+    assert.equal((await favorites.sync(favorite.id)).messages[0].speakerName, identityA.name, '收藏跟随来源聊天当前所选版本');
+    const lone = { ...current.messages[0] };
+    assert.deepEqual(playChatMessageIdentity([lone], lone), identityA, 'AI 回复删除后使用发送时的人设');
+    const unknown = { ...lone, userIdentity: null };
+    assert.deepEqual(playChatMessageIdentity([unknown], unknown), { name: '用户', avatar: null });
+    const legacy = structuredClone(current);
+    legacy.messages[1].results[0].context = { ...contextA };
+    legacy.messages[0].userIdentity = identityB;
+    assert.deepEqual(playChatMessageIdentity(legacy.messages, legacy.messages[0]), identityB, '没有人设信息的旧版本使用发送时的人设');
+    assert.deepEqual(playMessageIdentity({ userIdentity: identityA }, { context: contextFor(identityB) }), identityB);
 });
 
 test('旧收藏即使来源修订未变也修正身份，冻结收藏保持已有信息', async () => {

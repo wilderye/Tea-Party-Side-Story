@@ -1,5 +1,5 @@
 import { favoriteCacheKey } from './play-history.js';
-import { playMessageDepths, playMessageIdentity } from './play-message-context.js';
+import { playMessageDepths, playChatMessageIdentity } from './play-message-context.js';
 
 /** Resolve only missing processed bodies, outside the storage write lock. */
 export function createPlayChatFavorites(history, display) {
@@ -48,7 +48,7 @@ export function createPlayChatFavorites(history, display) {
                     if (message.role !== 'user') return true;
                     const source = sourceMessages.get(message.messageId);
                     if (!source) return false;
-                    const identity = playMessageIdentity(source);
+                    const identity = playChatMessageIdentity(chat.messages, source);
                     return message.speakerName === identity.name && (message.speakerAvatar || null) === identity.avatar;
                 });
                 if (favorite.sourceRevision === chat.revision && identitiesMatch) return options ? history.getFavoriteWindow(id, options) : history.getFavorite(id);

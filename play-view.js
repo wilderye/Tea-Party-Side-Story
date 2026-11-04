@@ -168,7 +168,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function updateUserMessage(round, view) {
         const userEditor = recordEditor(view, 'user'), userHidden = round.prompt === null && !userEditor;
         if (view.user.hidden !== userHidden) view.user.hidden = userHidden;
-        const identity = playMessageIdentity(round);
+        const identity = playMessageIdentity(round, selectedResult(round));
         const context = { userName: identity.name };
         const signature = JSON.stringify(identity);
         if (view.userSignature !== signature) {
@@ -780,7 +780,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function createRecord(round) {
         const owner = roundCharacter(round);
-        const user = playMessageIdentity(round);
+        const user = playMessageIdentity(round, selectedResult(round));
         const item = element('article', undefined, 'play-record'); item.dataset.record = round.id;
         item.setAttribute('aria-label', `${messageTime(round.createdAt)} 的小剧场`);
         const userMessage = element('section', undefined, 'play-message play-user-message'); userMessage.setAttribute('aria-label', `${user.name} 发送的小剧场提示词`);

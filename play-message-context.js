@@ -52,6 +52,11 @@ export function playUserIdentity(context) {
         avatar: typeof context.userAvatar === 'string' && context.userAvatar.trim() ? context.userAvatar : null };
 }
 
-export function playMessageIdentity(message) {
-    return message.userIdentity ?? { name: '用户', avatar: null };
+export function playMessageIdentity(message, result) {
+    return playUserIdentity(result?.context) ?? message.userIdentity ?? { name: '用户', avatar: null };
+}
+
+export function playChatMessageIdentity(messages, message) {
+    const reply = messages[messages.indexOf(message) + 1];
+    return playMessageIdentity(message, reply?.role === 'assistant' ? reply.results?.find(result => result.id === reply.selectedResultId) : null);
 }

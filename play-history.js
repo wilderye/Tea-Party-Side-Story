@@ -1,6 +1,6 @@
 // The directory is committed after a complete round file. A failed upload
 // therefore never replaces a readable round with half of a new version.
-import { playMessageDepths, playMessageIsPending, playUserIdentity, playMessageIdentity } from './play-message-context.js';
+import { playMessageDepths, playMessageIsPending, playUserIdentity, playChatMessageIdentity } from './play-message-context.js';
 
 export const PLAY_HISTORY_INDEX = 'teahouse-play-index.json';
 const idPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -707,7 +707,7 @@ export function createPlayHistory({ readFile, writeFile, removeFile, enqueueClea
                 cacheBody(file, suppliedEntry.text);
                 cached.set(key, entry); next.cache.push(entry);
             }
-            const userIdentity = playMessageIdentity(message);
+            const userIdentity = playChatMessageIdentity(chat.messages, message);
             messages.push({ ...identity, role: message.role, createdAt: message.createdAt,
                 speakerName: message.role === 'user' ? userIdentity.name : character?.name ?? favorite.characterName,
                 speakerAvatar: message.role === 'user' ? userIdentity.avatar ?? '' : character?.avatar ?? '' });

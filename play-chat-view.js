@@ -1,5 +1,5 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
-import { playMessageDepths, playHiddenRanges, playMessageIsPending, playMessageIdentity } from './play-message-context.js';
+import { playMessageDepths, playHiddenRanges, playMessageIsPending, playChatMessageIdentity } from './play-message-context.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText, playTextPreview } from './play-render.js';
@@ -409,7 +409,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function messageHeader(message) {
         const index = chat.messages.findIndex(item => item.id === message.id);
-        const identity = message.role === 'user' ? playMessageIdentity(message) : owner();
+        const identity = message.role === 'user' ? playChatMessageIdentity(chat.messages, message) : owner();
         const head = element('header', undefined, `play-message-meta play-${message.role === 'user' ? 'user' : 'assistant'}-meta`);
         head.append(createCharacterAvatar(ctx, identity ?? { name: '角色', avatar: null }, 'play-message-avatar', message.role === 'user' ? 'persona' : 'avatar'));
         const heading = element('div', undefined, 'play-message-identity');
@@ -471,7 +471,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         }
         messageViews.set(message.id, view); view.message = message;
         const { node, body, head, tools, output, error } = view;
-        const identity = message.role === 'user' ? playMessageIdentity(message) : owner();
+        const identity = message.role === 'user' ? playChatMessageIdentity(chat.messages, message) : owner();
         const headerSignature = JSON.stringify([chat.messages.indexOf(message), message.hidden, message.createdAt, identity?.name, identity?.avatar]);
         if (view.headerSignature !== headerSignature) {
             const updated = messageHeader(message); head.replaceChildren(...updated.childNodes, tools); view.headerSignature = headerSignature;
@@ -985,7 +985,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         else if (structureChanged && visible) renderChat(position(false));
         if (suspended && result) resumeNeedsRender = true;
         if (!visible || mobile.matches && browsing) return;
-        if (message) changedMessages.add(message.id);
+        if (message) {
+            changedMessages.add(message.id);
+            const previous = chat.messages[chat.messages.indexOf(message) - 1];
+            if (previous?.role === 'user') changedMessages.add(previous.id);
+        }
         if (job.userMessageId) changedMessages.add(job.userMessageId);
         if (renderFrame) return;
         renderFrame = requestAnimationFrame(() => {

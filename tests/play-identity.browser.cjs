@@ -79,11 +79,11 @@ async function verify(page, url, viewport) {
     await page.evaluate(() => { window.targetIdentity = { userName: '目标乙', userAvatar: 'target.png' }; ctx.name1 = '主聊天丙'; persona.user_avatar = 'host.png'; ctx.eventSource.emit(ctx.eventTypes.PERSONA_CHANGED); });
     await button(branch, '生成新版本').click();
     await finish(page, '乙生成的新版本');
-    await header(branch.locator('.play-user-message').first(), '茶客', 'user.png');
+    await header(branch.locator('.play-user-message').first(), '目标乙', 'target.png');
     await button(branch, '上一个结果').click(); await settle(page);
     await header(branch.locator('.play-user-message').first(), '茶客', 'user.png');
     await button(branch, '下一个结果').click(); await settle(page);
-    await header(branch.locator('.play-user-message').first(), '茶客', 'user.png');
+    await header(branch.locator('.play-user-message').first(), '目标乙', 'target.png');
     const input = branch.getByRole('textbox', { name: '分支聊天输入', exact: true });
     await input.fill('目标角色的新消息'); await button(branch, '发送消息').click();
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
