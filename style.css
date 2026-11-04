@@ -346,8 +346,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .tea-empty-title { text-align:center; font:700 28px/40px var(--tea-display); }
 :is(#teahouse-panel,.tea-panel-surface) .tea-workspace>.tea-empty { text-align:center; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-empty { white-space:pre-line; }
-#teahouse-edge { position:fixed; left:2px; top:40dvh; z-index:1000; width:24px; height:36px; padding:0; display:flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--SmartThemeQuoteColor,var(--SmartThemeBodyColor)); font-size:13px; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35)); cursor:pointer; opacity:var(--tea-edge-opacity,.8); transition:opacity .15s ease; }
-#teahouse-edge:hover,#teahouse-edge:focus-visible { opacity:1; }
+#teahouse-edge { position:fixed; left:2px; top:40dvh; z-index:1000; width:24px; height:36px; padding:0; display:flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--SmartThemeQuoteColor,var(--SmartThemeBodyColor)); font-size:13px; filter:drop-shadow(0 1px 2px rgba(0,0,0,.35)); cursor:pointer; opacity:var(--tea-edge-opacity,1); transition:opacity .15s ease; }
+#teahouse-edge:focus-visible { opacity:1; }
+@media(hover:hover) {
+    #teahouse-edge:hover { opacity:1; }
+}
 #teahouse-edge[data-side="right"] { left:auto; right:2px; }
 .teahouse-edge-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .teahouse-edge-row>.checkbox_label { flex:none; }
@@ -371,10 +374,17 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 .teahouse-settings-controls .checkbox_label { margin:0; }
 .teahouse-settings-controls .menu_button { width:fit-content; white-space:nowrap; }
 @media(min-width:761px) {
-    #teahouse-edge { left:0; width:20px; height:52px; border:1px solid color-mix(in srgb,var(--SmartThemeBotMesBlurTintColor,var(--SmartThemeChatTintColor,#282c34)) 100%,#1e2225); border-left:none; border-radius:0 12px 12px 0; background:color-mix(in srgb,var(--SmartThemeBotMesBlurTintColor,var(--SmartThemeChatTintColor,#282c34)) 100%,#1e2225); color:var(--SmartThemeBodyColor,#faf7ee); font-size:7px; filter:none; box-shadow:2px 3px 8px rgba(0,0,0,.28); opacity:var(--tea-edge-opacity,1); transition:width .2s cubic-bezier(.16,1,.3,1),box-shadow .2s ease,opacity .15s ease; }
-    #teahouse-edge[data-side="right"] { left:auto; right:0; border-left:1px solid color-mix(in srgb,var(--SmartThemeBotMesBlurTintColor,var(--SmartThemeChatTintColor,#282c34)) 100%,#1e2225); border-right:none; border-radius:12px 0 0 12px; box-shadow:-2px 3px 8px rgba(0,0,0,.28); }
-    #teahouse-edge:hover,#teahouse-edge:focus-visible { width:26px; opacity:1; box-shadow:3px 4px 12px rgba(0,0,0,.38); }
-    #teahouse-edge[data-side="right"]:hover,#teahouse-edge[data-side="right"]:focus-visible { box-shadow:-3px 4px 12px rgba(0,0,0,.38); }
+    #teahouse-edge { --tea-edge-tint:var(--SmartThemeBotMesBlurTintColor,var(--SmartThemeChatTintColor,#282c34)); left:0; width:20px; height:52px; border-radius:0 12px 12px 0; background:var(--tea-edge-tint); color:var(--SmartThemeBodyColor,#faf7ee); font-size:7px; filter:none; box-shadow:2px 3px 8px rgba(0,0,0,.28); transition:width .2s cubic-bezier(.16,1,.3,1),box-shadow .2s ease,opacity .15s ease; }
+    @supports (color:rgb(from red r g b / 1)) {
+        #teahouse-edge { background:rgb(from var(--tea-edge-tint) r g b / 1); }
+    }
+    #teahouse-edge[data-side="right"] { left:auto; right:0; border-radius:12px 0 0 12px; box-shadow:-2px 3px 8px rgba(0,0,0,.28); }
+    #teahouse-edge:focus-visible { width:26px; box-shadow:3px 4px 12px rgba(0,0,0,.38); }
+    #teahouse-edge[data-side="right"]:focus-visible { box-shadow:-3px 4px 12px rgba(0,0,0,.38); }
+}
+@media(min-width:761px) and (hover:hover) {
+    #teahouse-edge:hover { width:26px; box-shadow:3px 4px 12px rgba(0,0,0,.38); }
+    #teahouse-edge[data-side="right"]:hover { box-shadow:-3px 4px 12px rgba(0,0,0,.38); }
 }
 @media(min-width:761px) {
     :is(#teahouse-panel,.tea-panel-surface).tea-catalog-collapsed:is([data-mode=list],[data-mode=settings]) { grid-template-columns:0 minmax(0,1fr); }

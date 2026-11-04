@@ -22,8 +22,12 @@ settings.showGore = settings.showGore === true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
 if (!['left', 'right'].includes(settings.edgeSide)) settings.edgeSide = 'left';
-if (settings.edgeOpacity === 0.5) settings.edgeOpacity = null;
-const defaultEdgeOpacity = () => (typeof window !== 'undefined' && window.innerWidth >= 761 ? 1 : 0.8);
+if (!(typeof settings.edgeOpacity === 'number' && settings.edgeOpacity >= 0.1 && settings.edgeOpacity <= 1)) settings.edgeOpacity = null;
+if (!settings.edgeOpacityMigrated) {
+    if ([0.5, 0.8].includes(settings.edgeOpacity)) settings.edgeOpacity = null;
+    settings.edgeOpacityMigrated = true;
+}
+const defaultEdgeOpacity = 1;
 settings.lastFavoriteId ??= null;
 if (!['time', 'random'].includes(settings.sortMode)) settings.sortMode = 'time';
 const saveSettings = () => ctx().saveSettingsDebounced();
@@ -238,7 +242,7 @@ function syncEntrances() {
     if (settings.enabled && settings.edgeEnabled) {
         const edge = textButton('', () => ui.open()); edge.id = 'teahouse-edge'; edge.title = '茶话会小剧场';
         edge.setAttribute('aria-label', '打开茶话会小剧场');
-        edge.dataset.side = settings.edgeSide; edge.style.setProperty('--tea-edge-opacity', String(settings.edgeOpacity ?? defaultEdgeOpacity()));
+        edge.dataset.side = settings.edgeSide; edge.style.setProperty('--tea-edge-opacity', String(settings.edgeOpacity ?? defaultEdgeOpacity));
         const icon = element('i', undefined, `fa-solid fa-chevron-${settings.edgeSide === 'right' ? 'left' : 'right'}`); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
         document.body.append(edge);
     }
@@ -292,7 +296,7 @@ function refreshSettings() {
     settingsSection.edgeSides.hidden = !settings.edgeEnabled;
     if (settingsSection.edgeOpacityRow) {
         settingsSection.edgeOpacityRow.hidden = !settings.edgeEnabled;
-        settingsSection.edgeOpacityInput.value = String(Math.round((settings.edgeOpacity ?? defaultEdgeOpacity()) * 100));
+        settingsSection.edgeOpacityInput.value = String(Math.round((settings.edgeOpacity ?? defaultEdgeOpacity) * 100));
         settingsSection.edgeOpacityValue.textContent = `${settingsSection.edgeOpacityInput.value}%`;
         settingsSection.edgeOpacityInput.disabled = !settings.enabled || !settings.edgeEnabled;
     }
@@ -337,7 +341,7 @@ if (settingsHost) {
     const opacityRow = element('div', undefined, 'teahouse-edge-opacity-row');
     const opacityInput = element('input');
     opacityInput.type = 'range'; opacityInput.min = '10'; opacityInput.max = '100'; opacityInput.step = '5';
-    opacityInput.value = String(Math.round((settings.edgeOpacity ?? defaultEdgeOpacity()) * 100));
+    opacityInput.value = String(Math.round((settings.edgeOpacity ?? defaultEdgeOpacity) * 100));
     const opacityValue = element('span', `${opacityInput.value}%`);
     opacityInput.addEventListener('input', () => {
         opacityValue.textContent = `${opacityInput.value}%`;
@@ -346,7 +350,9 @@ if (settingsHost) {
         const edge = document.querySelector('#teahouse-edge');
         if (edge) edge.style.setProperty('--tea-edge-opacity', String(val));
     });
-    opacityRow.append(element('span', '透明度'), opacityInput, opacityValue);
+    const opacityLabel = element('span', '不透明度'); opacityLabel.id = 'teahouse-edge-opacity-label';
+    opacityInput.setAttribute('aria-labelledby', opacityLabel.id);
+    opacityRow.append(opacityLabel, opacityInput, opacityValue);
     controls.append(opacityRow);
     settingsSection.edgeOpacityRow = opacityRow;
     settingsSection.edgeOpacityInput = opacityInput;
