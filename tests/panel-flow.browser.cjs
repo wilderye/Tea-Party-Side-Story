@@ -175,6 +175,16 @@ async function verifyLayout(page,mobile) {
    assert.equal(page.url(),'http://tea.test/');
    await verifyLayout(page,mobile);
    const visibleButton=name=>panel.getByRole('button',{name,exact:true}).filter({visible:true});
+   if(!mobile){
+    await visibleButton('我的收藏').click();await settle(page);
+    await visibleButton('亲笔手稿').click();await settle(page);
+    await page.setViewportSize({width:1332,height:700});await settle(page);
+    await visibleButton('我的收藏').click();await settle(page);
+    const list=await panel.locator('.tea-list').evaluate(n=>({height:n.clientHeight,scrollHeight:n.scrollHeight}));
+    assert.ok(list.scrollHeight<=list.height+1,'在其他页面缩小窗口后，回到我的收藏重新分页，目录不出现滚动条');
+    await page.setViewportSize({width:1332,height:896});await settle(page);
+    await visibleButton('茶会选集').click();await settle(page);
+   }
    await page.evaluate(isMobile=>{window.fixture.settings[isMobile?'mobileFontSize':'fontSize']=isMobile?15:21;window.ui.refresh();},mobile);
    await visibleButton('设置').click();
    assert.equal(await panel.getByRole('combobox',{name:'正文字号'}).inputValue(),mobile?'16':'22','原先保存的奇数字号显示为相邻偶数');

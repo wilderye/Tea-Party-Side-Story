@@ -217,7 +217,16 @@ async function verify(page, url, viewport) {
     assert.equal(selectedRound.origin.id, source.id, '保留选集来源');
     assert.equal(await page.evaluate(() => ctx.characterId), 0, '酒馆主聊天仍为甲');
     assert.deepEqual(await page.evaluate(() => ctx.chat), [{ mes: '原聊天', is_user: false }]);
-    return { viewport, url, checks: '原篇目收藏、改写另存、原文保留、取消与重收藏、保存失败与重复点击、刷新恢复、三个按钮布局、选集填入所选角色并保留各自草稿及主聊天' };
+
+    await button('历史记录').click(); await panel.locator(`[data-chat-id="${selectedId}"] .play-history-open`).click();
+    await panel.locator('.play-branch-page').waitFor();
+    await button('我的收藏').click();
+    if (viewport.width > 760) { await catalogEntry(copy.id).click(); await button('在插件中游玩').click(); }
+    else await catalogEntry(copy.id).getByRole('button', { name: '在插件中游玩', exact: true }).click();
+    await input.waitFor();
+    assert.equal(await input.inputValue(), copy.body, '从历史聊天页进入收藏后，独立剧场原文填入演出输入框');
+    assert.equal(await input.evaluate(node => document.activeElement === node), true);
+    return { viewport, url, checks: '原篇目收藏、改写另存、原文保留、取消与重收藏、保存失败与重复点击、刷新恢复、三个按钮布局、选集填入所选角色并保留各自草稿及主聊天、历史聊天页回到演出页填入收藏' };
 }
 
 (async () => {

@@ -670,6 +670,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!state.settings.enabled || !actions.playground || !await canLeave()) return;
         const view = getPlayView();
         if (!await view.fillFromEntry(item)) return;
+        if (playRoute !== 'play') { chatView?.deactivate(); chatActive = false; chatReturns.length = 0; playRoute = 'play'; }
         showScope('play');
         view.focusInput();
     }
@@ -818,7 +819,8 @@ export function createTheatrePanel(ctx, state, actions) {
                 if (mode === 'record' || !media.matches) { reader?.resume(); if (reader) void reader.load(favoriteRows.get(catalog.selectedId)); }
                 else reader?.suspend();
             }
-            restoreCatalogPosition(); restoringCatalog = false; return;
+            restoreCatalogPosition(); restoringCatalog = false;
+            observeLayout(); measureBodies(); return;
         }
         if (catalogState) catalogRenders.set(panel, catalogState); else catalogRenders.delete(panel);
         viewDiagnostics?.activate('render');
@@ -929,18 +931,22 @@ export function createTheatrePanel(ctx, state, actions) {
         appendStatus();
         mobileNavigation?.sync(scope, resetPosition);
         restoreCatalogPosition();
-        const list = panel.querySelector('.tea-list');
         const search = catalogSearch();
         if (focused && search) {
             search.focus({ preventScroll: true });
             search.setSelectionRange(...selection);
         }
         else if (focusKey) [...panel.querySelectorAll('button, select, input[role="switch"]')].find(b => b.getAttribute('aria-label') === focusKey && b.getClientRects().length)?.focus({ preventScroll: true });
+        observeLayout();
+        measureBodies();
+    }
+    function observeLayout() {
+        observer?.disconnect();
+        const list = panel.querySelector('.tea-list');
         if (list) observer?.observe(list);
         const settingsArea = panel.querySelector('.tea-settings');
         if (settingsArea) observer?.observe(settingsArea);
         for (const body of panel.querySelectorAll('.tea-feed-entry .tea-body')) observer?.observe(body);
-        measureBodies();
     }
     function emptyText() {
         if (isRecordFavorites()) return favoriteLoadError || (!favoriteLoaded ? '正在读取收藏…'
