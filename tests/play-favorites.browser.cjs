@@ -97,7 +97,7 @@ async function screenshot(page,name){
    await page.waitForFunction(()=>runtime.getState().phase==='idle');await record.getByText('模拟接口失败',{exact:true}).waitFor();
    assert.equal((await page.evaluate(id=>runtime.getRound(id),ids.a)).results.length,2);
    await record.getByRole('button',{name:'重新生成',exact:true}).click();await page.waitForFunction(()=>runtime.getState().phase==='generating');
-   await page.evaluate(()=>emitGeneration('停止时收到的片段'));await record.getByRole('button',{name:'停止这份回复',exact:true}).click();
+   await page.evaluate(()=>emitGeneration('停止时收到的片段'));await button('停止所有生成').click();
    await page.waitForFunction(()=>runtime.getState().phase==='idle');
    await record.getByRole('button',{name:'编辑回复原文',exact:true}).waitFor();
    const stopped=(await page.evaluate(id=>runtime.getRound(id),ids.a)).results[0];
