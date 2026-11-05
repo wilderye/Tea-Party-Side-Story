@@ -247,14 +247,17 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
         currentRound: id => entry(id).chat ? playStartRound(clone(entry(id).chat)) : null,
         currentResult: (id, resultId) => clone(result(id, resultId)),
         async loadMessage(id, messageId, resultId) {
-            const item = entry(id), message = item.chat?.messages.find(message => message.id === messageId);
-            const target = resultId ? message?.results.find(result => result.id === resultId) : message;
-            if (!target) throw new PlayHistoryError('message_missing', '这条消息已删除，请保留草稿并重新读取。');
-            if (target.text === undefined) {
+            const item = entry(id);
+            while (true) {
+                const message = item.chat?.messages.find(message => message.id === messageId);
+                const target = resultId ? message?.results.find(result => result.id === resultId) : message;
+                if (!target) throw new PlayHistoryError('message_missing', '这条消息已删除，请保留草稿并重新读取。');
+                if (target.text !== undefined) return clone(item.chat);
                 const revision = target.bodyRevision, text = await history.getMessageBody(target.id, revision);
-                if (target.bodyRevision === revision && target.text === undefined) target.text = text;
+                const currentMessage = item.chat?.messages.find(message => message.id === messageId);
+                const current = resultId ? currentMessage?.results.find(result => result.id === resultId) : currentMessage;
+                if (current?.bodyRevision === revision && current.text === undefined) current.text = text;
             }
-            return clone(item.chat);
         },
         character: id => clone(owners.get(entry(id).chat?.characterId)),
         getChat: (id, options) => read(id, 'getChat', options),

@@ -48,6 +48,9 @@ const panel = page => page.locator('.tea-panel-surface[data-active=true]');
 const button = (page, name) => panel(page).getByRole('button', { name, exact: true }).filter({ visible: true });
 const bodyReads = () => reads.filter(name => name.startsWith('teahouse-play-body-')).length;
 const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+async function waitForFavoriteSync(page) {
+    await page.locator('.play-favorite-reading[data-active=true] div.play-favorite-source-notice').waitFor({ state: 'hidden' });
+}
 async function screenshot(page, name) {
     if (!process.env.TEA_QA_DIR) return;
     await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
@@ -104,12 +107,13 @@ async function verify(page, url, viewport, mode) {
     if (viewport.width <= 760) await panel(page).locator(`.tea-story[data-id="${favorite.id}"]`).click();
     const reader = panel(page).locator('.play-favorite-reading[data-active=true]');
     await reader.locator('.play-favorite-content > .play-message').nth(23).waitFor();
-    await page.waitForFunction(() => document.querySelector('.play-favorite-reading[data-active=true] .play-favorite-source-notice')?.hidden === true);
+    await waitForFavoriteSync(page);
     await settle(page);
     assert.equal(await reader.locator('.play-favorite-content > .play-message').count(), 24);
     assert.equal(bodyReads(), 24);
     reads.length = 0; const beforeRefresh = mutations.length;
     await page.evaluate(() => ui.refresh()); await settle(page);
+    await waitForFavoriteSync(page);
     assert.equal(bodyReads(), 0); assert.equal(mutations.length, beforeRefresh);
     await page.evaluate(async id => {
         const chat = await runtime.getChatMetadata(id), message = chat.messages[0];
@@ -118,6 +122,7 @@ async function verify(page, url, viewport, mode) {
         ui.refresh();
     }, seed.branch);
     await reader.getByText('局域网更新后的用户消息', { exact: true }).waitFor();
+    await waitForFavoriteSync(page);
     reads.length = 0;
     await reader.getByRole('button', { name: '显示更多聊天内容', exact: true }).click();
     await reader.getByText('局域网回复14', { exact: true }).waitFor();
@@ -126,8 +131,54 @@ async function verify(page, url, viewport, mode) {
     for (let i = 12; i < 15; i++) await reader.getByText(`局域网回复${i}`, { exact: true }).waitFor();
     assert.ok(await panel(page).evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     await screenshot(page, `lan-favorite-${mode}-${viewport.width}.png`);
+    await verifyPendingRefresh(page, favorite.id, seed.branch);
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ url, viewport, mode, capabilities, checks: '演出、历史预览、分支24条、聊天收藏24条、未变刷新、来源更新、显示更多仅新增范围', errors }));
+    console.log(JSON.stringify({ url, viewport, mode, capabilities, checks: '演出、历史预览、分支24条、聊天收藏24条、未变刷新、来源更新、显示更多仅新增范围、同步期间合并刷新及离开保护', errors }));
+}
+async function verifyPendingRefresh(page, favoriteId, chatId) {
+    for (const scenario of ['updated', 'failed', 'suspended', 'disposed']) {
+        const proof = await page.evaluate(async ({ favoriteId, chatId, scenario }) => {
+            const { createPlayFavoriteReader } = await import('/play-favorites-view.js');
+            const row = (await runtime.listFavorites()).find(row => row.id === favoriteId);
+            let release, started, calls = 0, pending = true;
+            const entered = new Promise(resolve => started = resolve), gate = new Promise(resolve => release = resolve);
+            const reader = createPlayFavoriteReader({ ...runtime, async syncFavorite(...args) {
+                calls++;
+                const value = await runtime.syncFavorite(...args);
+                if (pending) {
+                    pending = false; started(); await gate;
+                    if (scenario === 'failed') throw Error('模拟旧同步失败');
+                }
+                return value;
+            } }, { onChange() {}, onRemove() {}, notify() {} });
+            document.body.append(reader.node);
+            const loading = reader.load(row); await entered;
+            const chat = await runtime.getChat(chatId), message = chat.messages[0];
+            const text = `同步期间修改的用户消息-${scenario}`;
+            await runtime.editMessage(chatId, message.id, { text, expectedText: message.text });
+            await runtime.session.flush(chatId);
+            for (let repeat = 0; repeat < 3; repeat++) await reader.load(row);
+            const before = calls;
+            if (scenario === 'suspended') reader.suspend();
+            if (scenario === 'disposed') reader.dispose();
+            release(); await loading;
+            const after = calls;
+            if (scenario === 'suspended') { reader.resume(); await reader.load(row); }
+            window.pendingFavoriteProof = { reader, text };
+            return { before, after };
+        }, { favoriteId, chatId, scenario });
+        assert.equal(proof.before, 1, `${scenario}：旧同步结束前不并发启动新同步`);
+        if (scenario === 'suspended' || scenario === 'disposed') assert.equal(proof.after, 1, `${scenario}：离开后不继续刷新`);
+        else assert.equal(proof.after, 2, `${scenario}：多个刷新请求合并为一次补充同步`);
+        if (scenario !== 'disposed') {
+            await page.waitForFunction(() => {
+                const { reader, text } = pendingFavoriteProof;
+                return reader.node.querySelector('.play-favorite-content')?.textContent.includes(text)
+                    && reader.node.querySelector('div.play-favorite-source-notice')?.hidden;
+            });
+        }
+        await page.evaluate(() => { pendingFavoriteProof.reader.dispose(); delete window.pendingFavoriteProof; });
+    }
 }
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

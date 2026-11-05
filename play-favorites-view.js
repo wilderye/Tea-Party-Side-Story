@@ -190,7 +190,8 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         lastRow = row;
         if (!active) { needsRefresh = true; return; }
         if (editor) return;
-        if (!force && row.revision === loadingRevision) return;
+        if (!force && row.revision === loadingRevision) { needsRefresh = true; return; }
+        needsRefresh = false;
         const unchanged = !force && value?.id === row.id && row.revision === requestedRevision;
         if (unchanged && (value?.format !== 2 || value.frozen || !playground.syncFavorite)) { render(); return; }
         const id = ++loadingId; requestedRevision = row.revision;
@@ -221,7 +222,12 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
             requestedRevision = null; signature = null;
             const retry = iconButton('refresh', '重新读取收藏', () => void load(row, true));
             body.replaceChildren(element('p', error.message, 'play-result-error'), retry);
-        } finally { if (id === loadingId) loadingRevision = null; }
+        } finally {
+            if (id === loadingId) {
+                loadingRevision = null;
+                if (active && needsRefresh && lastRow) await load(lastRow);
+            }
+        }
     }
     return { node, load, setNavigation,
         suspend() { if (!active) return; active = false; loadingId++; loadingRevision = null; needsRefresh = true; },

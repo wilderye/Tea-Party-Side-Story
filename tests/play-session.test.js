@@ -68,6 +68,59 @@ test('旧读取晚于本地编辑返回时不能覆盖新正文，也不能清�
     save.resolve(); await f.session.flush(f.chat.id);
 });
 
+async function pendingMessage(role) {
+    const f = await fixture(), session = createPlaySession(f.store);
+    const chat = await session.getChatMetadata(f.chat.id), message = chat.messages.find(message => message.role === role);
+    const resultId = message.results?.[0].id, original = f.chat.messages.find(item => item.id === message.id);
+    const text = resultId ? original.results[0].text : original.text;
+    const gate = deferred(), entered = deferred(), read = f.store.getMessageBody.bind(f.store), reads = [];
+    f.store.getMessageBody = async (...args) => {
+        reads.push(args); const text = await read(...args); entered.resolve(); await gate.promise; return text;
+    };
+    const loading = session.loadMessage(chat.id, message.id, resultId); await entered.promise;
+    return { ...f, session, chat, message, resultId, text, gate, loading, reads,
+        body: chat => { const current = chat.messages.find(item => item.id === message.id); return resultId ? current?.results.find(result => result.id === resultId)?.text : current?.text; } };
+}
+
+for (const role of ['user', 'assistant']) {
+    test(`${role} 正文读取期间重新读取同版本目录，正文仍可编辑保存`, async () => {
+        const f = await pendingMessage(role);
+        await f.session.getChatMetadata(f.chat.id); f.gate.resolve();
+        assert.equal(f.body(await f.loading), f.text);
+        assert.equal(f.reads.length, 1);
+        f.session.edit(f.chat.id, f.message.id, { resultId: f.resultId, text: '读取后保存的新文字', expectedText: f.text });
+        await f.session.flush(f.chat.id);
+        assert.equal(f.body(await f.createStore().getChat(f.chat.id)), '读取后保存的新文字');
+    });
+
+    test(`${role} 正文读取期间来源版本改变，改读新版本而不恢复旧正文`, async () => {
+        const f = await pendingMessage(role);
+        await f.createStore().editMessage(f.chat.id, f.message.id, { resultId: f.resultId, text: '另一窗口保存的新文字', expectedText: f.text });
+        await f.session.getChatMetadata(f.chat.id); f.gate.resolve();
+        assert.equal(f.body(await f.loading), '另一窗口保存的新文字');
+        assert.equal(f.reads.length, 2);
+        assert.notEqual(f.reads[0][1], f.reads[1][1]);
+    });
+
+    test(`${role} 迟到的正文读取不覆盖本地编辑`, async () => {
+        const f = await pendingMessage(role);
+        await f.session.getChat(f.chat.id);
+        f.session.edit(f.chat.id, f.message.id, { resultId: f.resultId, text: '本地已编辑的文字', expectedText: f.text });
+        f.gate.resolve();
+        assert.equal(f.body(await f.loading), '本地已编辑的文字');
+        await f.session.flush(f.chat.id);
+        assert.equal(f.body(await f.createStore().getChat(f.chat.id)), '本地已编辑的文字');
+    });
+
+    test(`${role} 正文读取期间消息删除，不恢复消息并报告已删除`, async () => {
+        const f = await pendingMessage(role);
+        await f.createStore().removeMessage(f.chat.id, f.message.id, f.chat.revision);
+        await f.session.getChatMetadata(f.chat.id); f.gate.resolve();
+        await assert.rejects(f.loading, error => error.code === 'message_missing');
+        assert.equal(f.session.currentChat(f.chat.id).messages.some(message => message.id === f.message.id), false);
+    });
+}
+
 test('后台保存中的下一条先显示，模型请求等前序终稿及本次消息保存完成', async () => {
     const f = await fixture(), saveGate = deferred(), saving = deferred(), requests = [], events = [];
     const save = f.store.saveResult.bind(f.store);
