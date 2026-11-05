@@ -1,4 +1,4 @@
-export function createPlayMessageEditing({ onChange = () => {}, onReveal = session => session.reveal(), onError = () => {} } = {}) {
+export function createPlayMessageEditing({ onChange = () => {}, onReveal = session => session.reveal(), onError = () => {}, confirmDiscard = () => true } = {}) {
     let current = null, operation = null;
     const editing = {
         get current() { return current; },
@@ -27,7 +27,10 @@ export function createPlayMessageEditing({ onChange = () => {}, onReveal = sessi
         },
         cancel(session = current) {
             if (!session || session !== current || editing.busy) return Promise.resolve(false);
-            return run(async () => { await finish(session, 'cancel'); return true; });
+            return run(async () => {
+                if (session.editor.dirty && !await confirmDiscard()) return false;
+                await finish(session, 'cancel'); return true;
+            });
         },
     };
     function run(work) {

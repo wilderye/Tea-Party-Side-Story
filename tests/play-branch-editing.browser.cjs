@@ -50,78 +50,102 @@ async function verify(page, url, viewport, nativeSizing) {
     await draft.fill('尚未发送的草稿。');
     const mobile = viewport.width <= 760, mainChat = await page.evaluate(() => structuredClone(ctx.chat));
     const catalog = panel.locator('.play-catalog:not([hidden])');
+    const sheet = panel.locator('.play-edit-sheet');
     for (const role of ['user', 'assistant']) {
         const item = scope.locator(`.play-${role}-message`).nth(1), meta = item.locator('.play-message-meta');
         const name = role === 'user' ? '修改用户消息' : '编辑回复原文', label = role === 'user' ? '用户消息原文' : '回复原文';
-        const editor = item.getByRole('textbox', { name: label, exact: true });
+        const editor = (mobile ? sheet : item).getByRole('textbox', { name: label, exact: true });
+        const actions = mobile ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : item.locator('.play-header-actions .play-edit-actions');
         await button(item, name).click(); await settle(page);
         const original = await editor.inputValue();
-        assert.equal(await editor.evaluate(node => document.activeElement === node), true, '点开分支编辑后聚焦文字框');
+        assert.equal(await editor.evaluate(node => document.activeElement === node), !mobile, '桌面端聚焦文字框，手机端不自动弹出输入法');
         if (mobile) {
-            const feedBox = await feed.boundingBox(), head = await meta.boundingBox();
-            assert.ok(head.y >= feedBox.y - 1 && head.y + head.height <= feedBox.y + feedBox.height, '旧消息移到可见正文区域');
-            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true, '分支编辑与演出记录一样保留导航');
-            assert.equal(await scope.locator('.play-chat-heading').isVisible(), true, '编辑时保留分支标题和关闭聊天页面按钮');
-            assert.equal(await catalog.locator('.tea-brand').isVisible(), true, '茶话会顶栏保留');
-        }
-        await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
-        assert.ok((await editor.boundingBox()).height < 150, '手机与桌面短文都按内容显示紧凑编辑框');
-        const field = await editor.boundingBox(), head = await meta.boundingBox(), actions = await item.locator('.play-edit-actions').boundingBox();
-        assert.ok(actions.y >= head.y && actions.y + actions.height <= head.y + head.height + 1 && actions.y + actions.height <= field.y + 1,
-            '保存和取消位于消息头部');
-        assert.equal(await editor.evaluate(node => getComputedStyle(node).fieldSizing === 'content'), nativeSizing);
-        await screenshot(page, `branch-${role}-short-${viewport.width}-${nativeSizing}.png`);
-        await editor.fill(longText); await settle(page);
-        assert.ok(await editor.evaluate(node => node.scrollHeight > node.clientHeight));
-        const beforeActions = await item.locator('.play-edit-actions').boundingBox();
-        await editor.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle(page);
-        assert.equal((await item.locator('.play-edit-actions').boundingBox()).y, beforeActions.y, '编辑框内部滚动不带走保存和取消');
-        assert.ok(Math.abs(await editor.evaluate(node => parseFloat(getComputedStyle(node).maxHeight)) - viewport.height * .75) < 1);
-        const before = await meta.boundingBox(), dimensions = await feed.evaluate(node => ({ max: node.scrollHeight - node.clientHeight, top: node.scrollTop }));
-        const delta = dimensions.top + 50 <= dimensions.max ? 50 : -50;
-        const brand = mobile ? await catalog.locator('.tea-brand').boundingBox() : null;
-        await feed.evaluate((node, delta) => { node.scrollTop += delta; }, delta); await settle(page);
-        assert.ok(Math.abs(before.y - (await meta.boundingBox()).y - delta) < 2, '正文滚动带动整条消息移动，消息头部没有粘住');
-        if (mobile) assert.equal((await catalog.locator('.tea-brand').boundingBox()).y, brand.y, '正文滚动不移动顶栏');
-        const scroll = await feed.evaluate(node => node.scrollTop);
-        // Dispatch input without Playwright scrolling the offscreen field into view.
-        await editor.evaluate(node => { node.value += '\n追加一段。'; node.dispatchEvent(new Event('input', { bubbles: true })); }); await settle(page);
-        assert.ok(Math.abs(await feed.evaluate(node => node.scrollTop) - scroll) < 2, '输入不把正文强行拉回消息开头');
-        if (mobile) {
-            const keyboardHeight = Math.min(430, viewport.height - 180), editorHeight = (await editor.boundingBox()).height;
+            const surface = await panel.boundingBox(), box = await sheet.boundingBox(), head = await sheet.locator('.play-edit-sheet-head').boundingBox();
+            for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(box[key] - surface[key]) <= 1, '分支编辑页覆盖整个面板');
+            assert.equal((await sheet.locator('h2').textContent()).trim(), '编辑');
+            assert.equal(await sheet.locator('.play-edit-sheet-head').getByRole('button').count(), 2, '顶栏只有保存和取消');
+            for (const action of ['保存', '取消']) {
+                const position = await button(actions, action).boundingBox();
+                assert.ok(position.y >= head.y - 1 && position.y + position.height <= head.y + head.height + 1 && position.x > box.x + box.width / 2, `${action}在右上角`);
+            }
+            const field = await editor.boundingBox();
+            assert.ok(field.y >= head.y + head.height - 1 && Math.abs(field.y + field.height - (box.y + box.height)) <= 2, '输入框占满剩余空间');
+            assert.equal(await sheet.evaluate(node => [...node.parentElement.children].every(child => child === node || child.inert)), true, '编辑页下方的内容不可操作');
+            assert.equal(await item.locator('textarea').count(), 0, '手机端不在消息内显示编辑框');
+            assert.equal(await editor.evaluate(node => getComputedStyle(node).fieldSizing === 'content'), false, '手机端输入框不按内容伸缩');
+            const height = field.height;
+            await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
+            assert.ok(Math.abs((await editor.boundingBox()).height - height) <= 1, '短文不改变输入框高度');
+            await screenshot(page, `branch-${role}-short-${viewport.width}-${nativeSizing}.png`);
+            await editor.fill(longText); await settle(page);
+            assert.ok(Math.abs((await editor.boundingBox()).height - height) <= 1, '长文不改变输入框高度');
+            assert.ok(await editor.evaluate(node => node.scrollHeight > node.clientHeight));
+            const keyboardHeight = Math.min(430, viewport.height - 180);
             await page.evaluate(height => {
                 Object.defineProperty(visualViewport, 'height', { configurable: true, value: height });
                 Object.defineProperty(visualViewport, 'offsetTop', { configurable: true, value: 32 });
                 visualViewport.dispatchEvent(new Event('resize'));
             }, keyboardHeight); await settle(page);
             assert.equal((await panel.boundingBox()).height, keyboardHeight);
-            assert.ok(Math.abs((await editor.boundingBox()).height - editorHeight) < 1, '不根据面板剩余空间单独缩放分支编辑框');
-            assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
+            const shrunk = await editor.boundingBox(), shrunkPanel = await panel.boundingBox();
+            assert.ok(shrunk.height < height - 100 && shrunk.y + shrunk.height <= shrunkPanel.y + shrunkPanel.height + 1, '键盘出现后输入框跟着面板变矮');
             await editor.press('Control+End'); await editor.pressSequentially(' 继续输入。');
             assert.ok((await editor.inputValue()).endsWith(' 继续输入。'));
             await screenshot(page, `branch-${role}-keyboard-${viewport.width}-${nativeSizing}.png`);
             await page.evaluate(() => { delete visualViewport.height; delete visualViewport.offsetTop; visualViewport.dispatchEvent(new Event('resize')); });
-            await page.setViewportSize({ width: viewport.width, height: keyboardHeight }); await settle(page);
-            assert.ok((await editor.boundingBox()).height <= keyboardHeight * .75 + 1, '布局视口缩小时沿用酒馆 75dvh 上限');
-            await page.setViewportSize(viewport); await settle(page);
+            await settle(page);
+            assert.ok(Math.abs((await editor.boundingBox()).height - height) <= 1, '收起键盘后恢复输入框高度');
+        } else {
+            assert.equal(await editor.evaluate(node => node.selectionStart === node.value.length), true, '桌面端光标在末尾');
+            await editor.fill('雨停了。\n他把茶杯放回桌上。'); await settle(page);
+            assert.ok((await editor.boundingBox()).height < 150, '桌面短文按内容显示紧凑编辑框');
+            const field = await editor.boundingBox(), head = await meta.boundingBox(), position = await actions.boundingBox();
+            assert.ok(position.y >= head.y && position.y + position.height <= head.y + head.height + 1 && position.y + position.height <= field.y + 1,
+                '保存和取消位于消息头部');
+            assert.equal(await editor.evaluate(node => getComputedStyle(node).fieldSizing === 'content'), nativeSizing);
+            await screenshot(page, `branch-${role}-short-${viewport.width}-${nativeSizing}.png`);
+            await editor.fill(longText); await settle(page);
+            assert.ok(await editor.evaluate(node => node.scrollHeight > node.clientHeight));
+            const beforeActions = await actions.boundingBox();
+            await editor.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle(page);
+            assert.equal((await actions.boundingBox()).y, beforeActions.y, '编辑框内部滚动不带走保存和取消');
+            assert.ok(Math.abs(await editor.evaluate(node => parseFloat(getComputedStyle(node).maxHeight)) - viewport.height * .75) < 1);
+            const before = await meta.boundingBox(), dimensions = await feed.evaluate(node => ({ max: node.scrollHeight - node.clientHeight, top: node.scrollTop }));
+            const delta = dimensions.top + 50 <= dimensions.max ? 50 : -50;
+            await feed.evaluate((node, delta) => { node.scrollTop += delta; }, delta); await settle(page);
+            assert.ok(Math.abs(before.y - (await meta.boundingBox()).y - delta) < 2, '正文滚动带动整条消息移动，消息头部没有粘住');
+            const scroll = await feed.evaluate(node => node.scrollTop);
+            // Dispatch input without Playwright scrolling the offscreen field into view.
+            await editor.evaluate(node => { node.value += '\n追加一段。'; node.dispatchEvent(new Event('input', { bubbles: true })); }); await settle(page);
+            assert.ok(Math.abs(await feed.evaluate(node => node.scrollTop) - scroll) < 2, '输入不把正文强行拉回消息开头');
         }
-        await button(item.locator('.play-header-actions .play-edit-actions'), '取消').click(); await settle(page);
+        const edited = await editor.inputValue();
+        await page.evaluate(() => {
+            window.confirmCalls = [];
+            ctx.callGenericPopup = async content => { confirmCalls.push(content.textContent); return confirmCalls.length > 1 ? 1 : 0; };
+        });
+        await button(actions, '取消').click(); await settle(page);
+        assert.equal(await editor.inputValue(), edited, '选择不放弃时保留编辑内容');
+        await button(actions, '取消').click(); await editor.waitFor({ state: 'detached' }); await settle(page);
+        assert.deepEqual(await page.evaluate(() => confirmCalls), ['放弃修改？', '放弃修改？'], '有修改时取消先确认');
         if (mobile) {
+            assert.equal(await sheet.count(), 0, '取消后关闭编辑页');
             assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
             assert.equal(await scope.locator('.play-chat-heading').isVisible(), true);
         }
         assert.equal(await draft.inputValue(), '尚未发送的草稿。');
         await button(item, name).click(); assert.equal(await editor.inputValue(), original, '取消不修改原文');
+        if (mobile) assert.ok(await editor.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop < 2), '打开时显示末尾');
         const text = role === 'user' ? '清晨，他重新泡了一壶茶。' : '她推开窗，看见雨后的第一缕阳光。';
         await editor.fill(text); await page.evaluate(() => { window.failSave = true; window.saveErrors = []; });
-        await button(item.locator('.play-header-actions .play-edit-actions'), '保存').click();
+        await button(actions, '保存').click();
         await editor.waitFor({ state: 'detached' });
         await page.waitForFunction(() => saveErrors.includes('模拟保存失败'));
         await item.getByText(text, { exact: true }).waitFor();
         assert.equal(await page.evaluate(() => runtime.session.hasUnsaved()), true);
         if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
         await page.evaluate(() => { window.failSave = false; });
-        await button(item, name).click(); await button(item.locator('.play-header-actions .play-edit-actions'), '保存').click();
+        await button(item, name).click(); await button(actions, '保存').click();
         await page.evaluate(id => runtime.session.flush(id), id);
         await editor.waitFor({ state: 'detached' }); await item.getByText(text, { exact: true }).waitFor();
         if (mobile) assert.equal(await catalog.locator('.tea-mobile-tab-slot').isVisible(), true);
@@ -181,26 +205,29 @@ async function verifyOperations(page, url, viewport) {
     for (const item of [firstUser, firstAi]) assert.equal(await button(item, item === firstUser ? '修改用户消息' : '编辑回复原文').isEnabled(), true);
     assert.equal(await latest.locator('[data-chat-action=edit]').isDisabled(), true);
     assert.equal(await latest.locator('.play-count').isDisabled(), true);
+    const mobile = viewport.width <= 760, sheet = panel.locator('.play-edit-sheet');
+    const editScope = item => mobile ? sheet : item, editActions = item => mobile ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : item.locator('.play-edit-actions');
     await button(firstUser, '修改用户消息').click();
-    const userEditor = firstUser.getByRole('textbox', { name: '用户消息原文', exact: true }); await userEditor.fill('生成期间改过的旧用户消息');
+    const userEditor = editScope(firstUser).getByRole('textbox', { name: '用户消息原文', exact: true }); await userEditor.fill('生成期间改过的旧用户消息');
     const showPrompt = async item => {
         await button(item, '更多回复操作').click();
         const prompt = button(item, '查看实际提示词'); assert.equal(await prompt.isEnabled(), true);
         await prompt.click(); await panel.getByRole('dialog', { name: '实际发送的提示词', exact: true }).waitFor();
         await button(panel, '关闭提示词查看').click();
     };
-    await showPrompt(firstAi);
+    if (!mobile) await showPrompt(firstAi);
     await page.evaluate(() => ui.refresh()); await settle(page);
-    assert.equal(await userEditor.inputValue(), '生成期间改过的旧用户消息'); await showPrompt(firstAi);
+    assert.equal(await userEditor.inputValue(), '生成期间改过的旧用户消息');
+    if (!mobile) await showPrompt(firstAi);
     await page.evaluate(() => emitGeneration('编辑期间仍然显示新收到的回复'));
     await latest.getByText('编辑期间仍然显示新收到的回复', { exact: true }).waitFor();
     assert.equal(await userEditor.inputValue(), '生成期间改过的旧用户消息');
-    assert.equal(await latest.locator('.play-stop').isVisible(), true, '编辑期间仍可停止当前生成');
+    if (!mobile) assert.equal(await latest.locator('.play-stop').isVisible(), true, '编辑期间仍可停止当前生成');
     await screenshot(page, `branch-generating-edit-${viewport.width}.png`);
-    await button(firstUser.locator('.play-edit-actions'), '保存').click(); await userEditor.waitFor({ state: 'detached' });
+    await button(editActions(firstUser), '保存').click(); await userEditor.waitFor({ state: 'detached' });
     await button(firstAi, '编辑回复原文').click();
-    await firstAi.getByRole('textbox', { name: '回复原文', exact: true }).fill('生成期间改过的旧 AI 消息');
-    await button(firstAi.locator('.play-edit-actions'), '保存').click();
+    await editScope(firstAi).getByRole('textbox', { name: '回复原文', exact: true }).fill('生成期间改过的旧 AI 消息');
+    await button(editActions(firstAi), '保存').click();
     await firstAi.getByText('生成期间改过的旧 AI 消息', { exact: true }).waitFor();
     await button(firstAi, '更多回复操作').click(); await button(firstAi, '隐藏楼层').click();
     await firstAi.locator('.play-hidden-mark').waitFor({ state: 'attached' });

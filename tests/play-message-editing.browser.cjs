@@ -249,12 +249,36 @@ async function verifyTouch(page, url, mode) {
     if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `touch-${mode}-${page.viewportSize().width}.png`) });
     await button(item, '取消').click(); assert.equal(await page.evaluate(() => captured.length), 0);
 }
+async function verifySheetTouch(page, url, mode) {
+    const ids = await setup(page, url);
+    if (mode === 'chat') await openChat(page, ids.first);
+    const item = mode === 'chat' ? branch(page).locator('.play-assistant-message').first() : record(page, ids.a).locator('.play-assistant-message');
+    const sheet = panel(page).locator('.play-edit-sheet'), feed = (mode === 'chat' ? branch(page) : panel(page)).locator('.play-feed').filter({ visible: true }).first();
+    await button(item, '编辑回复原文').click(); const input = field(sheet, 'assistant');
+    await input.fill('第一个段落，窗外的雨停了。\n\n'.repeat(100)); await input.evaluate(node => { node.scrollTop = 550; node.blur(); });
+    const client = await page.context().newCDPSession(page);
+    const state = () => Promise.all([input.evaluate(node => node.scrollTop), feed.evaluate(node => node.scrollTop)]);
+    const box = await input.boundingBox(), before = await state();
+    await gesture(page, client, box.x + box.width / 2, box.y + Math.min(160, box.height * .3), 130);
+    const after = await state();
+    assert.ok(Math.abs(after[0] - before[0]) > 40, '编辑页内滑动输入框内容');
+    assert.equal(after[1], before[1], '编辑页内滑动不带动下方消息');
+    for (const name of ['保存', '取消']) {
+        const action = button(sheet, name), area = await action.boundingBox();
+        assert.ok(area.width >= 44 && area.height >= 44);
+        assert.equal(await action.evaluate(node => { const r = node.getBoundingClientRect(); return node.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); }), true);
+    }
+    if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `touch-sheet-${mode}-${page.viewportSize().width}.png`) });
+    await button(sheet, '取消').click(); await input.waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => captured.length), 0);
+}
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
     try {
         for (const viewport of [{ width: 390, height: 844 }, { width: 1332, height: 896 }]) {
-            for (const [name, verify] of [['switch', verifySwitch], ['failure-record', (page, url) => verifyFailure(page, url, 'record')], ['failure-chat', (page, url) => verifyFailure(page, url, 'chat')], ['failure-character', verifyCharacterFailure], ['race', verifyRace], ['offscreen', verifyOffscreenSave],
+            for (const [name, verify] of viewport.width <= 760 ? [['touch-sheet-record', (page, url) => verifySheetTouch(page, url, 'record')], ['touch-sheet-chat', (page, url) => verifySheetTouch(page, url, 'chat')]]
+                : [['switch', verifySwitch], ['failure-record', (page, url) => verifyFailure(page, url, 'record')], ['failure-chat', (page, url) => verifyFailure(page, url, 'chat')], ['failure-character', verifyCharacterFailure], ['race', verifyRace], ['offscreen', verifyOffscreenSave],
                 ['deleted-record', (page, url) => verifyDeletedSource(page, url, 'record')], ['deleted-chat', (page, url) => verifyDeletedSource(page, url, 'chat')],
                 ['refresh-record', (page, url) => verifyRefreshFailure(page, url, 'record')], ['refresh-chat', (page, url) => verifyRefreshFailure(page, url, 'chat')],
                 ['touch-record', (page, url) => verifyTouch(page, url, 'record')], ['touch-chat', (page, url) => verifyTouch(page, url, 'chat')]]) {

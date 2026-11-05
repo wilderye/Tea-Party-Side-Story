@@ -332,7 +332,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function remember() { if (chat && route === 'chat' && visible && feed.clientHeight && !restoring) positions.set(chat.id, position()); }
     function captureEditor() {
-        const session = editingSession();
+        const session = mobile.matches ? null : editingSession();
         if (session?.editor.input.getClientRects().length) session.state = session.editor.capture();
     }
     function setFeedScroll(value) {
@@ -481,8 +481,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         view.visibility.replaceChildren(createPlayFloorIcon(message.hidden ? 'eye-slash' : 'eye'));
         const result = currentResult(message);
         updateFavorite(view);
-        placePlayEditorActions(tools, view.edit, editing ? session.editor : null);
-        if (editing) {
+        placePlayEditorActions(tools, view.edit, editing && !mobile.matches ? session.editor : null);
+        if (editing && !mobile.matches) {
             if (!body.contains(session.editor.body)) { body.replaceChildren(session.editor.body); session.editor.restore(session.state); }
         } else if (message.role === 'user') {
             const text = processed(message);
@@ -856,11 +856,16 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                     closeVersions(false);
                     const saved = { bottom: false, anchor: messageId, messageId,
                         offset: readPlayElementPosition(feed, view.node, getReadingInset()), scrollTop: feed.scrollTop };
-                    view.body.replaceChildren(session.editor.body);
-                    placePlayEditorActions(view.tools, view.edit, session.editor); session.editor.resize();
+                    if (!mobile.matches) {
+                        view.body.replaceChildren(session.editor.body);
+                        placePlayEditorActions(view.tools, view.edit, session.editor); session.editor.resize();
+                    }
                     updateReplyStops(); updateInput(); updateReadingControls(); restore(saved, undefined, true);
-                    session.editor.input.focus({ preventScroll: true });
-                    revealPlayEditor(feed, session.editor, getReadingInset(), setFeedScroll); remember();
+                    if (!mobile.matches) {
+                        session.editor.input.focus({ preventScroll: true }); session.editor.scrollToEnd({ caret: true });
+                        revealPlayEditor(feed, session.editor, getReadingInset(), setFeedScroll);
+                    }
+                    remember();
                 },
                 async finish() {
                     view.userText = undefined; view.output.signature = undefined;
@@ -882,7 +887,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 async reveal() {
                     if (chat?.id !== id || route !== 'chat') await open(id, messageId);
                     setBrowsing(false);
-                    if (session.view.node.getClientRects().length) {
+                    if (!mobile.matches && session.view.node.getClientRects().length) {
                         session.editor.restore(session.state);
                         const error = session.editor.error.getBoundingClientRect(), area = feed.getBoundingClientRect();
                         if (error.bottom > area.bottom) setFeedScroll(feed.scrollTop + error.bottom - area.bottom);
@@ -1065,6 +1070,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             }
         },
         canLeave, updateEditing() { syncPermissions(); updateInput(); },
+        placeEditor() {
+            const session = editingSession(), view = session && messageViews.get(session.messageId);
+            if (!view) return;
+            view.userText = undefined; view.output.signature = undefined;
+            renderMessage(view.message);
+            if (!mobile.matches) session.state = null;
+        },
         prepareLayout() { closeVersions(false); remember(); captureEditor(); },
     };
 }

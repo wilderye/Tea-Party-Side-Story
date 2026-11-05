@@ -99,12 +99,13 @@ async function verifyWebState(page, url, mobile) {
     const frame = branch.frameLocator('iframe.play-web-output'); await frame.getByRole('button', { name: '0', exact: true }).click();
     await frame.getByRole('button', { name: '1', exact: true }).waitFor();
     const user = branch.locator('.play-user-message').first();
+    const editScope = page.viewportSize().width <= 760 ? panel.locator('.play-edit-sheet') : user;
     await user.getByRole('button', { name: '修改用户消息', exact: true }).click();
-    await user.getByRole('button', { name: '取消', exact: true }).click();
+    await editScope.getByRole('button', { name: '取消', exact: true }).click();
     await frame.getByRole('button', { name: '1', exact: true }).waitFor();
     await user.getByRole('button', { name: '修改用户消息', exact: true }).click();
-    await user.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('修改后的虚构用户消息');
-    await user.getByRole('button', { name: '保存', exact: true }).click();
+    await editScope.getByRole('textbox', { name: '用户消息原文', exact: true }).fill('修改后的虚构用户消息');
+    await editScope.getByRole('button', { name: '保存', exact: true }).click();
     await user.getByText('修改后的虚构用户消息', { exact: true }).waitFor();
     await frame.getByRole('button', { name: '1', exact: true }).waitFor();
     await button(branch, '聊天操作').click(); await button(branch, '删除').click();

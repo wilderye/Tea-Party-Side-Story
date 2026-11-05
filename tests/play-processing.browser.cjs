@@ -80,7 +80,7 @@ const ui=window.ui=createTheatrePanel(()=>ctx,state,{...libraryActions,playgroun
 document.getElementById('open').onclick=()=>void ui.open();window.ready=true;
 </script>`;
 module.exports = { harness, verifyPromptEdit, verifyUnsavedPromptEdit };
-const allowed = new Set(['play-session.js','play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-reading-position.js','play-message-editing.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js','play-runtime.js','play-history.js',
+const allowed = new Set(['play-session.js','play-message-context.js','play-sent-prompt.js','play-sent-prompt-view.js','play-reading-position.js','play-message-editing.js','play-edit-sheet.js','play-message-ui.js','play-chat-view.js','play-chat-favorites.js','panel.js','appearance.js','ui.js','diagnostics.js','diagnostics-view.js','view-diagnostics.js','play-view.js','play-character-picker.js','play-favorite-composer.js','play-reading-storage.js','play-editor.js','play-favorites-view.js','play-prompt-favorites.js','play-render.js','play-tavern-render.js','play-prose-style.js','play-helper-resources.js','play-runtime.js','play-history.js',
  'play-storage.js','play-storage-worker.js','play-storage-lock.js','play-prompt.js','play-persona-session.js','play-character-context.js','play-task-module.js','play-template-context.js','play-variable-context.js','play-preparation.js','play-preset.js','play-parameters.js','play-request.js',
  'playground.js','play-settings.js','play-processing.js','play-settings-view.js','library.js','sha256.js',
  'markdown.js','theme-styles.js','vendor/markdown-it.js','style.css','assets/tea-party.svg','assets/fonts/tea-conversation-serif.woff2']);
@@ -99,6 +99,10 @@ async function screenshot(page,name) {
  await fs.mkdir(process.env.TEA_QA_DIR,{recursive:true});
  await page.screenshot({path:path.join(process.env.TEA_QA_DIR,name)});
 }
+const isMobile=page=>page.viewportSize().width<=760;
+const editSheet=page=>page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-edit-sheet');
+const editRoot=(page,node)=>isMobile(page)?editSheet(page):node;
+const editButtons=(page,node)=>isMobile(page)?editSheet(page).locator('.play-edit-sheet-head .play-edit-actions'):node;
 
 async function verifyEntryFill(page) {
  const panel=page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
@@ -123,10 +127,10 @@ async function verifyEntryFill(page) {
  assert.equal(await input.inputValue(),body,'同一篇原文更新后重新选择，使用更新后的内容');
  const record=panel.locator('.play-record:visible').last();
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
- const editor=record.getByRole('textbox',{name:'提示词原文',exact:true});
+ const editor=editRoot(page,record).getByRole('textbox',{name:'提示词原文',exact:true});
  await editor.fill('正在编辑的提示词');
  assert.equal(await input.inputValue(),body,'原位置编辑不会替换底部填入的原文');
- await record.locator('.play-user-meta .play-edit-actions').getByRole('button',{name:'取消',exact:true}).click();
+ await editButtons(page,record.locator('.play-user-meta .play-edit-actions')).getByRole('button',{name:'取消',exact:true}).click();
  assert.equal(await input.inputValue(),body,'取消编辑后仍保留底部填入的原文');
  assert.equal(await page.evaluate(()=>captured.length),requestCount,'填入内容和修改草稿都不会发送模型请求');
 }
@@ -138,13 +142,14 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  const mainChat=await page.evaluate(()=>structuredClone(ctx.chat));
  const input=panel.getByRole('textbox',{name:'小剧场提示词',exact:true,includeHidden:true});
  const composer='底部尚未发送的草稿';await input.fill(composer);
- const action=name=>record.locator('.play-user-meta .play-edit-actions').getByRole('button',{name,exact:true});
+ const mobile=isMobile(page),refresh=async()=>mobile?page.evaluate(()=>ui.refresh()):closeSettings(await openSettings());
+ const action=name=>editButtons(page,record.locator('.play-user-meta .play-edit-actions')).getByRole('button',{name,exact:true});
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
- const edit=record.getByRole('group',{name:'编辑提示词原文',exact:true});
+ const edit=editRoot(page,record).getByRole('group',{name:'编辑提示词原文',exact:true});
  const editor=edit.getByRole('textbox',{name:'提示词原文',exact:true});
  assert.equal(await editor.inputValue(),original.prompt);
- assert.equal(await editor.evaluate(node=>document.activeElement===node),true);
- assert.equal(await record.locator('.play-user-text .play-edit-form').count(),1,'用户消息在原位置使用共享编辑框');
+ assert.equal(await editor.evaluate(node=>document.activeElement===node),!mobile);
+ assert.equal(await record.locator('.play-user-text .play-edit-form').count(),mobile?0:1,'桌面用户消息在原位置使用共享编辑框');
  assert.equal(await input.inputValue(),composer);
  assert.equal(await record.locator('.play-edit-prompt').isHidden(),true,'编辑期间原入口由保存和取消替代');
  assert.equal(await record.locator('.play-again').isDisabled(),true);
@@ -152,16 +157,23 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  for(const name of ['保存','取消']){
   assert.equal(await action(name).textContent(),'');assert.equal(await action(name).locator('svg').count(),1);
  }
- const messageBox=await record.locator('.play-user-message').boundingBox(),editorBox=await editor.boundingBox();
- assert.ok(Math.abs(editorBox.x-messageBox.x)<1&&Math.abs(editorBox.width-messageBox.width)<1,'用户编辑框与消息边缘对齐');
- assert.ok((await action('保存').boundingBox()).y>=(await record.locator('.play-user-meta').boundingBox()).y && (await action('保存').boundingBox()).y+(await action('保存').boundingBox()).height<=editorBox.y+1,'保存和取消图标位于消息头部');
- assert.ok(editorBox.height<150,'手机和桌面短用户消息都按内容显示紧凑编辑框');
- assert.equal(await panel.locator('.play-compose').isVisible(),true,'编辑用户消息时保留底部输入区域');
+ const editorBox=await editor.boundingBox();
+ if(mobile) {
+  const sheetBox=await editSheet(page).boundingBox(),panelBox=await panel.boundingBox();
+  assert.ok(Math.abs(sheetBox.height-panelBox.height)<1&&Math.abs(editorBox.width-sheetBox.width)<1,'手机用户消息使用全屏编辑页');
+  assert.equal(await panel.locator('.play-compose').evaluate(node=>!!node.closest('[inert]')),true,'编辑页覆盖底部输入区域');
+ } else {
+  const messageBox=await record.locator('.play-user-message').boundingBox();
+  assert.ok(Math.abs(editorBox.x-messageBox.x)<1&&Math.abs(editorBox.width-messageBox.width)<1,'用户编辑框与消息边缘对齐');
+  assert.ok((await action('保存').boundingBox()).y>=(await record.locator('.play-user-meta').boundingBox()).y && (await action('保存').boundingBox()).y+(await action('保存').boundingBox()).height<=editorBox.y+1,'保存和取消图标位于消息头部');
+  assert.ok(editorBox.height<150,'桌面短用户消息按内容显示紧凑编辑框');
+  assert.equal(await panel.locator('.play-compose').isVisible(),true,'编辑用户消息时保留底部输入区域');
+ }
  await editor.fill('长提示词\n'.repeat(100));
- const editorLimit=viewport.height*.75;
+ const editorLimit=mobile?viewport.height:viewport.height*.75;
  assert.ok(await editor.evaluate((node,maxHeight)=>node.scrollHeight>node.clientHeight&&node.clientHeight<=maxHeight,editorLimit),'长消息只在编辑框内滚动');
  const draft='改成清晨。\n\n{{char}} 请听 {{user}} 说话。\n\n<char> 与 <user>；<CHAR> 与 <USER>。\n\n{{other}} 和 <character> 原样保留。';await editor.fill(draft);
- await closeSettings(await openSettings());
+ await refresh();
  assert.equal(await editor.inputValue(),draft,'设置返回不覆盖用户消息编辑草稿');
  await screenshot(page,`user-message-editor-${viewport.width}.png`);
  await editor.fill(' \n ');await action('保存').click();
@@ -190,7 +202,7 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  await record.locator('.play-user-text').getByText('测试甲 请听 茶客 说话。',{exact:true}).waitFor();
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();await editor.fill('本窗口的修改草稿');
  await page.evaluate(async({id,draft})=>{await testHistory.editPrompt(id,'另一窗口保存的新提示词',draft);ui.refresh();},{id,draft});
- await closeSettings(await openSettings());
+ await refresh();
  assert.equal(await editor.inputValue(),'本窗口的修改草稿','刷新历史不会覆盖正在编辑的文字');
  await action('保存').click();await edit.getByRole('alert').getByText(/已在其他窗口修改/).waitFor();
  assert.equal(await editor.inputValue(),'本窗口的修改草稿','冲突时保留草稿，不覆盖另一窗口的修改');
@@ -208,10 +220,10 @@ async function verifyPromptEdit(page,viewport,openSettings,closeSettings) {
  assert.equal(await page.evaluate(()=>capturedPrompts.at(-1)),'另一窗口保存的新提示词','手动重新生成才使用保存后的用户消息');
  const generationCount=await page.evaluate(()=>captured.length);
  await reopened.getByRole('button',{name:'修改提示词',exact:true}).click();
- await reopened.getByRole('textbox',{name:'提示词原文',exact:true}).fill('生成中保存的新提示词');
+ await editRoot(page,reopened).getByRole('textbox',{name:'提示词原文',exact:true}).fill('生成中保存的新提示词');
  await page.evaluate(()=>window.emitGeneration('本次回复已经收到的片段'));
  await reopened.getByText('本次回复已经收到的片段',{exact:true}).waitFor();
- await reopened.locator('.play-user-meta .play-edit-actions').getByRole('button',{name:'保存',exact:true}).click();
+ await editButtons(page,reopened.locator('.play-user-meta .play-edit-actions')).getByRole('button',{name:'保存',exact:true}).click();
  await reopened.locator('.play-user-text').getByText('生成中保存的新提示词',{exact:true}).waitFor();
  assert.equal(await reopened.getByText('本次回复已经收到的片段',{exact:true}).isVisible(),true,'保存用户消息不清空正在输出的回复');
  assert.equal(await page.evaluate(()=>runtime.getState().phase),'generating');
@@ -242,8 +254,8 @@ async function verifyUnsavedPromptEdit(page,viewport) {
  await record.getByText('完整回复仍然保留在这里。',{exact:true}).waitFor();
  await page.evaluate(()=>window.failSave=false);
  await record.getByRole('button',{name:'修改提示词',exact:true}).click();
- await record.getByRole('textbox',{name:'提示词原文',exact:true}).fill('回复保存失败后修改的提示词');
- await record.locator('.play-user-meta .play-edit-actions').getByRole('button',{name:'保存',exact:true}).click();
+ await editRoot(page,record).getByRole('textbox',{name:'提示词原文',exact:true}).fill('回复保存失败后修改的提示词');
+ await editButtons(page,record.locator('.play-user-meta .play-edit-actions')).getByRole('button',{name:'保存',exact:true}).click();
  await record.locator('.play-user-text').getByText('回复保存失败后修改的提示词',{exact:true}).waitFor();
  assert.equal(await record.getByText('完整回复仍然保留在这里。',{exact:true}).isVisible(),true,'即使后续读取目录失败，保存用户消息也不清空尚未保存的回复');
  assert.equal(await record.getByText('模拟保存失败',{exact:true}).count(),0);
@@ -308,8 +320,8 @@ async function verifyFontSource(page,viewport,openSettings,closeSettings) {
  const record=panel.locator('.play-record').filter({visible:true}).last();
  for(const [role,button,label] of [['user','修改提示词','提示词原文'],['assistant','编辑回复原文','回复原文']]) {
   await record.getByRole('button',{name:button,exact:true}).click();
-  assert.equal(await record.getByRole('textbox',{name:label,exact:true}).evaluate(node=>getComputedStyle(node).fontFamily),await hostFont(),'用户和 AI 的编辑框也使用所选字体');
-  await record.locator(`.play-${role}-message .play-edit-actions`).getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(await editRoot(page,record).getByRole('textbox',{name:label,exact:true}).evaluate(node=>getComputedStyle(node).fontFamily),await hostFont(),'用户和 AI 的编辑框也使用所选字体');
+  await editButtons(page,record.locator(`.play-${role}-message .play-edit-actions`)).getByRole('button',{name:'取消',exact:true}).click();
  }
  await panel.getByRole('button',{name:'关闭面板',exact:true}).click();await panel.waitFor({state:'detached'});
  await page.evaluate(()=>{document.body.style.fontFamily='"Clear Han Serif", serif';});
@@ -466,7 +478,7 @@ if (require.main === module) (async()=>{
    await a.getByRole('button',{name:'编辑回复原文'}).click();
    const originalA=(await page.evaluate(id=>runtime.getRound(id),ids.a)).results[0].text;
    assert.match(originalA,/<content>\n<内容>/);
-   assert.equal(await a.getByRole('textbox',{name:'回复原文'}).inputValue(),originalA,'正文标签仍保存在原文和编辑框内');
+   assert.equal(await editRoot(page,a).getByRole('textbox',{name:'回复原文'}).inputValue(),originalA,'正文标签仍保存在原文和编辑框内');
    await editAction('取消').click();
    await hidden.getByRole('button',{name:'编辑回复原文'}).waitFor();
    assert.match(await hidden.locator('.play-result').innerText(),/内容已隐藏/);
@@ -606,39 +618,44 @@ if (require.main === module) (async()=>{
    if(viewport.width<=760) await panel.getByRole('button',{name:'返回演出记录',exact:true}).click();
 
    await hidden.getByRole('button',{name:'编辑回复原文'}).click();
-   let edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true}), editor=edit.getByRole('textbox',{name:'回复原文'});
+   const mobile=viewport.width<=760,refreshEditing=async()=>mobile?page.evaluate(()=>ui.refresh()):closeSettings(await openSettings());
+   let edit=editRoot(page,hidden).getByRole('group',{name:'编辑回复原文',exact:true}), editor=edit.getByRole('textbox',{name:'回复原文'});
    assert.equal(await panel.locator('.play-dialog').count(),0,'小铅笔直接编辑原消息，不打开弹窗');
-   assert.equal(await hidden.locator('.play-result .play-edit-form').count(),1);
+   assert.equal(await hidden.locator('.play-result .play-edit-form').count(),mobile?0:1);
    assert.equal(await hidden.locator('.play-assistant-meta button[aria-label="编辑回复原文"]').isHidden(),true);
    assert.equal(await hidden.locator('.play-again').isDisabled(),true);
    assert.equal(await hidden.locator('.play-assistant-message>.play-message-actions').isVisible(),true,'编辑时保留底部操作栏');
    assert.equal(await hidden.locator('.play-count').isDisabled(),true);
-   assert.equal(await panel.locator('.play-compose').isVisible(),true,'编辑 AI 消息时保留底部输入区域');
+   if(!mobile) assert.equal(await panel.locator('.play-compose').isVisible(),true,'编辑 AI 消息时保留底部输入区域');
    assert.equal(await hidden.getByText('回复原文',{exact:true}).count(),0,'不显示多余的原文标题');
    for(const name of ['保存','取消']){
     const action=editAction(name);
     assert.equal(await action.textContent(),'','保存和取消只能显示图标');
     assert.equal(await action.locator('svg').count(),1);
-    assert.equal(await hidden.locator('.play-edit-actions').getByRole('button',{name,exact:true}).count(),1);
+    assert.equal(await editButtons(page,hidden.locator('.play-edit-actions')).getByRole('button',{name,exact:true}).count(),1);
    }
    const saveBox=await editAction('保存').boundingBox(),editorBox=await editor.boundingBox();
-   const messageBox=await hidden.locator('.play-user-message').boundingBox();
-   assert.ok(Math.abs(editorBox.x-messageBox.x)<1,'编辑区底色与消息框左边对齐');
-   assert.ok(Math.abs(editorBox.width-messageBox.width)<1,'编辑区底色与消息框宽度一致');
    const textStart=await editor.evaluate(node=>node.getBoundingClientRect().left+parseFloat(getComputedStyle(node).paddingLeft));
-   assert.ok(Math.abs(textStart-editorBox.x-12)<1,'编辑文字在框内留出十二像素间距');
    await assertUnframed(editor);
-   assert.ok(editorBox.height<150,'手机和桌面短回复都按内容显示紧凑编辑框');
-   assert.ok(saveBox.y>=(await hidden.locator('.play-assistant-meta').boundingBox()).y && saveBox.y+saveBox.height<=editorBox.y+1,'保存图标位于消息头部');
-   if(viewport.width<=760) {
-    const cancelBox=await editAction('取消').boundingBox();
-    assert.ok(cancelBox.x+cancelBox.width<=editorBox.x+editorBox.width && cancelBox.x>=editorBox.x,'手机保存和取消按钮位于消息头部');
-    assert.ok(saveBox.x+saveBox.width<=cancelBox.x&&Math.abs(saveBox.y-cancelBox.y)<1,'手机保存和取消按钮在同一行，互不重叠');
-   } else assert.ok(saveBox.x>editorBox.x+editorBox.width/2,'电脑保存图标位于消息右侧');
+   if(mobile) {
+    const cancelBox=await editAction('取消').boundingBox(),sheetBox=await editSheet(page).boundingBox();
+    assert.ok(Math.abs(editorBox.width-sheetBox.width)<1&&editorBox.y>=saveBox.y+saveBox.height,'手机编辑页输入框位于顶栏下方并占满宽度');
+    assert.ok(Math.abs(textStart-editorBox.x-18)<1,'手机编辑页文字留出十八像素间距');
+    assert.ok(saveBox.x+saveBox.width<=cancelBox.x&&Math.abs(saveBox.y-cancelBox.y)<1&&cancelBox.x+cancelBox.width<=sheetBox.x+sheetBox.width,'手机保存和取消按钮在右上角同一行');
+   } else {
+    const messageBox=await hidden.locator('.play-user-message').boundingBox();
+    assert.ok(Math.abs(editorBox.x-messageBox.x)<1,'编辑区底色与消息框左边对齐');
+    assert.ok(Math.abs(editorBox.width-messageBox.width)<1,'编辑区底色与消息框宽度一致');
+    assert.ok(Math.abs(textStart-editorBox.x-12)<1,'编辑文字在框内留出十二像素间距');
+    assert.ok(editorBox.height<150,'桌面短回复按内容显示紧凑编辑框');
+    assert.ok(saveBox.y>=(await hidden.locator('.play-assistant-meta').boundingBox()).y && saveBox.y+saveBox.height<=editorBox.y+1,'保存图标位于消息头部');
+    assert.ok(saveBox.x>editorBox.x+editorBox.width/2,'电脑保存图标位于消息右侧');
+   }
    assert.equal(await editor.inputValue(),'<thinking>找回整段小剧场</thinking>');
    await editor.fill('<thinking>思考</thinking>\n修正后的正文');
-   assert.ok((await editor.boundingBox()).height<150,'手机和桌面输入两行正文后都保持紧凑高度');
-   dialog=await openSettings();await closeSettings(dialog);
+   if(mobile) assert.ok(Math.abs((await editor.boundingBox()).height-editorBox.height)<1,'手机输入两行正文后输入框高度不变');
+   else assert.ok((await editor.boundingBox()).height<150,'桌面输入两行正文后保持紧凑高度');
+   await refreshEditing();
    assert.equal(await editor.inputValue(),'<thinking>思考</thinking>\n修正后的正文','设置返回及显示刷新不覆盖编辑草稿');
    assert.ok(await editor.evaluate(node=>parseFloat(getComputedStyle(node).fontSize))>=(viewport.width<761?16:14));
    await screenshot(page,`processing-editor-${viewport.width}.png`);
@@ -658,7 +675,7 @@ if (require.main === module) (async()=>{
    assert.equal((await page.evaluate(id=>runtime.session.currentRound(id),ids.hidden)).results[0].text,'<thinking>思考</thinking>\n修正后的正文');
    await page.evaluate(()=>{window.failSave=false;window.holdSave=true;window.resumeSave=null;});
    await hidden.getByRole('button',{name:'编辑回复原文',exact:true}).click();
-   edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true});
+   edit=editRoot(page,hidden).getByRole('group',{name:'编辑回复原文',exact:true});
    await editAction('保存').click();await editor.waitFor({state:'detached'});
    await page.waitForFunction(()=>typeof window.resumeSave==='function');
    await closeSettings(await openSettings());
@@ -666,7 +683,7 @@ if (require.main === module) (async()=>{
    await hidden.getByText('修正后的正文',{exact:true}).waitFor();
    assert.equal(await panel.locator('.play-compose').isVisible(),true,'保存 AI 消息后恢复底部输入区域');
    await hidden.getByRole('button',{name:'编辑回复原文'}).click();
-   edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true});
+   edit=editRoot(page,hidden).getByRole('group',{name:'编辑回复原文',exact:true});
    await edit.getByRole('textbox',{name:'回复原文'}).fill('取消后不保存');
    await editAction('取消').click();
    assert.equal((await page.evaluate(id=>runtime.getRound(id),ids.hidden)).results[0].text,'<thinking>思考</thinking>\n修正后的正文');
@@ -683,7 +700,7 @@ if (require.main === module) (async()=>{
    await active.getByText('还没闭合的思考',{exact:false}).waitFor();
    assert.equal(await active.getByRole('button',{name:'编辑回复原文'}).isVisible(),false);
    await hidden.getByRole('button',{name:'编辑回复原文'}).click();
-   edit=hidden.getByRole('group',{name:'编辑回复原文',exact:true});
+   edit=editRoot(page,hidden).getByRole('group',{name:'编辑回复原文',exact:true});
    await edit.getByRole('textbox',{name:'回复原文'}).fill('生成时保留的编辑草稿');
    await page.evaluate(()=>window.emitGeneration('<thinking>已闭合的思考</thinking>生成正文'));
    await active.getByText('生成正文',{exact:true}).waitFor();
@@ -711,7 +728,7 @@ if (require.main === module) (async()=>{
    await b.locator('.play-assistant-meta .play-speaker').getByText('测试乙',{exact:true}).waitFor();
    await b.getByText('乙的规则',{exact:false}).waitFor();
    await b.getByRole('button',{name:'编辑回复原文'}).click();
-   edit=b.getByRole('group',{name:'编辑回复原文',exact:true});
+   edit=editRoot(page,b).getByRole('group',{name:'编辑回复原文',exact:true});
    await edit.getByRole('textbox',{name:'回复原文'}).fill('编辑乙的旧记录 角色标记');
    await editAction('保存').click();
    await b.getByText('编辑乙的旧记录 乙的规则',{exact:true}).waitFor();

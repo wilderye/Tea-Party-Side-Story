@@ -47,11 +47,12 @@ async function verify(page, url, viewport) {
     const manuscripts = () => page.evaluate(() => [...fixture.manuscripts.values()]);
     const catalogEntry = id => panel.locator(viewport.width <= 760 ? `.tea-feed-entry[data-id="${id}"]` : `.tea-story[data-id="${id}"]`);
     async function edit(id, text) {
+        const form = viewport.width <= 760 ? panel.locator('.play-edit-sheet') : user(id);
         await user(id).getByRole('button', { name: '修改提示词', exact: true }).click();
-        await user(id).getByRole('textbox', { name: '提示词原文', exact: true }).waitFor();
+        await form.getByRole('textbox', { name: '提示词原文', exact: true }).waitFor();
         assert.equal(await star(id).isDisabled(), true, '编辑期间不能收藏尚未保存的用户消息');
-        await user(id).getByRole('textbox', { name: '提示词原文', exact: true }).fill(text);
-        await user(id).getByRole('button', { name: '保存', exact: true }).click();
+        await form.getByRole('textbox', { name: '提示词原文', exact: true }).fill(text);
+        await form.getByRole('button', { name: '保存', exact: true }).click();
         await user(id).getByRole('button', { name: '修改提示词', exact: true }).waitFor();
         await page.waitForFunction(async ({ id, text }) => (await runtime.getRound(id)).prompt === text, { id, text });
     }

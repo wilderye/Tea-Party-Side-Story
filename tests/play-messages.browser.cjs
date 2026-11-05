@@ -240,28 +240,28 @@ async function verifyEditPosition(page, url, viewport) {
                 await settle(); const before = await metrics(head);
                 if (long && finish === '取消') await screenshot(page, `edit-${role}-before-${viewport.width}.png`);
                 await head.getByRole('button', { name: role === 'user' ? '修改提示词' : '编辑回复原文', exact: true }).click();
-                const editor = record.getByRole('textbox', { name: role === 'user' ? '提示词原文' : '回复原文', exact: true });
+                const mobile = viewport.width <= 760, sheet = panel.locator('.play-edit-sheet');
+                const editor = (mobile ? sheet : record).getByRole('textbox', { name: role === 'user' ? '提示词原文' : '回复原文', exact: true });
+                const actions = mobile ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : record.locator('.play-edit-actions');
                 await editor.waitFor(); await settle();
                 const during = await metrics(head);
                 if (long && finish === '取消') await screenshot(page, `edit-${role}-after-${viewport.width}.png`);
-                if (viewport.width <= 760) {
-                    const bounds = await feed.boundingBox(), editorBounds = await editor.boundingBox();
-                    const saveBounds = await record.locator('.play-edit-actions').getByRole('button', { name: '保存', exact: true }).boundingBox();
-                    assert.ok(during.head >= bounds.y && saveBounds.y + saveBounds.height <= bounds.y + bounds.height + 1,
-                        '手机进入编辑时露出消息头部的保存和取消按钮');
-                    assert.ok(editorBounds.height <= viewport.height * .75 + 1, '长文编辑沿用酒馆高度上限，正文仍可滚动');
+                if (mobile) {
+                    const sheetBounds = await sheet.boundingBox(), saveBounds = await actions.getByRole('button', { name: '保存', exact: true }).boundingBox();
+                    assert.ok(saveBounds.y >= sheetBounds.y && saveBounds.y + saveBounds.height <= sheetBounds.y + 64, '手机编辑页顶栏显示保存和取消按钮');
+                    assert.ok(Math.abs(during.head - before.head) < 2, `手机打开编辑页不移动下方消息：${JSON.stringify({ before, during })}`);
                 } else {
                     assert.ok(Math.abs(during.head - before.head) < 2 && Math.abs(during.body - before.body) < 2,
                         `${role} ${long ? '长' : '短'}消息进入编辑不跳动：${JSON.stringify({ before, during })}`);
                 }
-                assert.equal(await editor.evaluate(node => document.activeElement === node), true);
+                assert.equal(await editor.evaluate(node => document.activeElement === node), !mobile);
                 assert.equal(await composer.inputValue(), '编辑时保留的输入草稿');
                 if (finish === '保存') {
                     // Set the draft without Playwright scrolling a tall input into view.
                     await editor.evaluate((node, text) => { node.value = text; node.dispatchEvent(new Event('input', { bubbles: true })); }, text + '\n本次保存。');
                     await settle();
                 }
-                await record.locator('.play-edit-actions').getByRole('button', { name: finish, exact: true }).click();
+                await actions.getByRole('button', { name: finish, exact: true }).click();
                 await editor.waitFor({ state: 'detached' }); await settle();
                 const afterFinish = await metrics(head);
                 assert.ok(Math.abs(afterFinish.head - before.head) < 2, `${viewport.width} ${role} ${long ? '长' : '短'}消息 ${finish}后消息标题仍在原位置：${JSON.stringify({ before, during, afterFinish })}`);
@@ -279,18 +279,20 @@ async function verifyEditPosition(page, url, viewport) {
         await feed.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle();
         const head = last.locator(`.play-${role}-meta`), before = await metrics(head);
         await head.getByRole('button', { name: role === 'user' ? '修改提示词' : '编辑回复原文', exact: true }).click(); await settle();
-        const after = await metrics(head);
+        const after = await metrics(head), sheet = panel.locator('.play-edit-sheet');
+        const actions = viewport.width <= 760 ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : last.locator('.play-edit-actions');
         if (viewport.width <= 760) {
-            const bounds = await feed.boundingBox();
+            const bounds = await sheet.boundingBox();
             for (const name of ['保存', '取消']) {
-                const action = await last.locator('.play-edit-actions').getByRole('button', { name, exact: true }).boundingBox();
-                assert.ok(action.y >= bounds.y && action.y + action.height <= bounds.y + bounds.height,
-                    '手机在末尾编辑也露出保存和取消按钮');
+                const action = await actions.getByRole('button', { name, exact: true }).boundingBox();
+                assert.ok(action.y >= bounds.y && action.y + action.height <= bounds.y + 64,
+                    '手机在末尾编辑也在编辑页顶栏显示保存和取消按钮');
             }
+            assert.ok(Math.abs(after.head - before.head) < 2, '手机在末尾打开编辑页不移动下方消息');
         } else {
             assert.ok(Math.abs(after.head - before.head) < 2, `停在末尾时编辑 ${role} 不自动回到消息顶部：${JSON.stringify({ before, after })}`);
         }
-        await last.locator('.play-edit-actions').getByRole('button', { name: '取消', exact: true }).click(); await settle();
+        await actions.getByRole('button', { name: '取消', exact: true }).click(); await settle();
         if (viewport.width <= 760) assert.ok(Math.abs((await metrics(head)).head - before.head) < 2, '手机退出编辑后回到原阅读位置');
     }
 }

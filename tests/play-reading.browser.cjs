@@ -114,7 +114,7 @@ async function checkHistory(page, mode, viewport) {
     await target.frameLocator('iframe').getByRole('button', { name: '继续', exact: true }).click();
     const previous = panel.locator(`[data-record="${ids.at(-2)}"]`);
     await previous.getByRole('button', { name: '编辑回复原文', exact: true }).click();
-    editor = previous.getByRole('textbox', { name: '回复原文', exact: true });
+    editor = (viewport.width <= 760 ? panel.locator('.play-edit-sheet') : previous).getByRole('textbox', { name: '回复原文', exact: true });
     await editor.fill('后台读取期间保留的草稿');
     await editor.evaluate(node => window.originalEditor = node);
   }

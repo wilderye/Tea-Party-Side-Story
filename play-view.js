@@ -166,7 +166,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         catch (error) { current = null; currentError = error.message; }
     }
     function updateUserMessage(round, view) {
-        const userEditor = recordEditor(view, 'user'), userHidden = round.prompt === null && !userEditor;
+        const userEditor = inlineEditor(view, 'user'), userHidden = round.prompt === null && !userEditor;
         if (view.user.hidden !== userHidden) view.user.hidden = userHidden;
         const identity = playMessageIdentity(round, selectedResult(round));
         const context = { userName: identity.name };
@@ -681,15 +681,18 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function recordEditor(view, role, resultId) {
         return messageEditing.find('record', view.id, role, resultId)?.editor;
     }
+    function inlineEditor(view, role) {
+        return mobile.matches ? undefined : recordEditor(view, role);
+    }
     function hasActiveEditor() {
         return [...views].some(([id, view]) => !view.item.hidden && isEditing(id));
     }
     function captureRecordEditors(view) {
-        const session = messageEditing.find('record', view.id);
+        const session = mobile.matches ? null : messageEditing.find('record', view.id);
         if (session?.editor.input.getClientRects().length) session.state = session.editor.capture();
     }
     function restoreRecordEditors(view) {
-        const session = messageEditing.find('record', view.id);
+        const session = mobile.matches ? null : messageEditing.find('record', view.id);
         if (session?.state && session.editor.input.getClientRects().length) { session.editor.restore(session.state); session.state = null; }
     }
     const readingInset = getReadingInset;
@@ -720,8 +723,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                         renderRecord(round, view);
                         updateControls(); session.editor.resize();
                     }, false, view[role]);
-                    session.editor.input.focus({ preventScroll: true });
-                    revealPlayEditor(feed, session.editor, readingInset(), setFeedScroll); rememberPosition(false, true); layout();
+                    if (!mobile.matches) {
+                        session.editor.input.focus({ preventScroll: true }); session.editor.scrollToEnd({ caret: true });
+                        revealPlayEditor(feed, session.editor, readingInset(), setFeedScroll);
+                    }
+                    rememberPosition(false, true); layout();
                 },
                 async finish() {
                     if (role === 'user') { view.promptText = null; view.promptSourceSignature = null; }
@@ -749,6 +755,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                     view.item.hidden = false; content.hidden = false; empty.hidden = true;
                     if (!content.contains(view.item)) content.insertBefore(view.item, laterBar);
                     restoreRecordEditors(view);
+                    if (mobile.matches) return;
                     const error = session.editor.error.getBoundingClientRect(), area = feed.getBoundingClientRect();
                     if (error.bottom > area.bottom) setFeedScroll(feed.scrollTop + error.bottom - area.bottom);
                     else if (error.top < area.top + readingInset()) setFeedScroll(feed.scrollTop + error.top - area.top - readingInset());
@@ -853,7 +860,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return { box, signature: null };
     }
     function renderRecord(round, view) {
-        const userEditor = recordEditor(view, 'user'), replyEditor = recordEditor(view, 'assistant');
+        const userEditor = inlineEditor(view, 'user'), replyEditor = inlineEditor(view, 'assistant');
         placePlayEditorActions(view.userTools, view.edit, userEditor);
         placePlayEditorActions(view.replyTools, view.editReply, replyEditor);
         if (userEditor && !view.userText.contains(userEditor.body)) view.userText.replaceChildren(userEditor.body);
@@ -1357,6 +1364,15 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             updateControls(); updateComposer(); layout();
         },
         refresh, layout, updateEditing: updateControls,
+        placeEditor() {
+            const session = messageEditing.current, view = session?.page === 'record' ? views.get(session.id) : null;
+            const round = view && records.get(session.id)?.round;
+            if (!round) return;
+            if (session.role === 'user') { view.promptText = null; view.promptSourceSignature = null; }
+            else if (view.outputs.has(session.resultId)) view.outputs.get(session.resultId).signature = null;
+            if (visible) keepReading(() => { renderRecord(round, view); updateControls(); }, false, view[session.role]);
+            else renderRecord(round, view);
+        },
         getSelectedCharacter: () => selected,
         prepareLayout() { if (visible) { closeResults(false); for (const view of views.values()) captureRecordEditors(view); rememberPosition(true, false); saveViewState(); } },
         focusInput() { if (visible && canWrite()) input.focus({ preventScroll: true }); },

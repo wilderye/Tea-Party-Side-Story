@@ -63,3 +63,28 @@ test('保存后的显示更新失败不重复写入，并继续开启新消息',
     assert.deepEqual(errors, ['页面读取失败']);
     assert.deepEqual(events, ['activate A', 'save A', 'activate B']);
 });
+
+test('有修改时取消先确认；拒绝保留会话，同意后结束；未修改时直接取消', async () => {
+    const events = [], answers = [false, true];
+    let resolve;
+    const editing = createPlayMessageEditing({ confirmDiscard: () => {
+        events.push('confirm');
+        return new Promise(done => { resolve = () => done(answers.shift()); });
+    } });
+    const a = session(events, 'A'); a.editor.dirty = true;
+    await editing.open({ key: 'A', create: () => a });
+    const rejecting = editing.cancel();
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(editing.busy, true);
+    assert.equal(await editing.cancel(), false);
+    resolve(); assert.equal(await rejecting, false);
+    assert.equal(editing.current, a);
+    const accepting = editing.cancel();
+    await Promise.resolve(); await Promise.resolve();
+    resolve(); assert.equal(await accepting, true);
+    assert.equal(editing.current, null);
+    const b = session(events, 'B'); b.editor.dirty = false;
+    await editing.open({ key: 'B', create: () => b });
+    assert.equal(await editing.cancel(), true);
+    assert.deepEqual(events, ['activate A', 'confirm', 'confirm', 'finish A', 'activate B', 'finish B']);
+});

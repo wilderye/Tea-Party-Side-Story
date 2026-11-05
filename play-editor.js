@@ -5,6 +5,7 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     const body = element('div', undefined, 'play-edit-form');
     body.setAttribute('role', 'group'); body.setAttribute('aria-label', title === undefined ? `编辑${label}` : '编辑收藏');
     const input = element('textarea'); input.value = text; input.spellcheck = false; input.rows = 2;
+    const initialValue = input.value;
     input.setAttribute('aria-label', label);
     const nativeSizing = autoGrow && CSS.supports('field-sizing', 'content');
     body.classList.toggle('is-native-sized', nativeSizing);
@@ -15,9 +16,9 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     }
     const error = element('p', '', 'play-result-error'); error.hidden = true; error.setAttribute('role', 'alert');
     const actions = element('div', undefined, 'play-edit-actions');
-    let width = 0;
+    let width = 0, fixed = false;
     function resize() {
-        if (!input.getClientRects().length) return;
+        if (fixed || !input.getClientRects().length) return;
         const scroll = input.scrollTop;
         input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`;
         input.scrollTop = scroll;
@@ -30,6 +31,7 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
     let savingTask = null;
     const editor = { body, actions, input, titleInput, error,
         get saving() { return savingTask !== null; },
+        get dirty() { return input.value !== initialValue; },
         save() {
             if (savingTask) return savingTask;
             savingTask = performSave().finally(() => { savingTask = null; });
@@ -42,6 +44,17 @@ export function createPlayEditor({ text, title, label = title === undefined ? '�
             this.resize(); input.setSelectionRange(state.start, state.end, state.direction); input.scrollTop = state.scroll;
         },
         scrollToTop() { input.scrollTop = 0; },
+        scrollToEnd({ caret = false } = {}) {
+            if (caret) input.setSelectionRange(input.value.length, input.value.length);
+            input.scrollTop = input.scrollHeight;
+        },
+        setFixed(value) {
+            if (fixed === value) return;
+            fixed = value;
+            if (fixed) input.style.height = '';
+            body.classList.toggle('is-native-sized', nativeSizing && !fixed);
+            this.resize();
+        },
         dispose: () => observer?.disconnect() };
     const cancel = iconButton('close', '取消', () => { if (!editor.saving) onCancel(); });
     const save = iconButton('check', '保存', () => onSubmit ? onSubmit() : editor.save());

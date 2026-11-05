@@ -68,13 +68,15 @@ async function verify(page, url, viewport) {
   assert.equal(resized.id, reading.id, '改字号后仍恢复原段落');
   assert.ok(Math.abs(resized.offset-reading.offset)<2, `改字号后保留段落位置 ${JSON.stringify(reading)} -> ${JSON.stringify(resized)}`);
   await open(); await settings.getByRole('combobox', { name: '正文字号', exact: true }).selectOption('18'); await back();
-  await original.getByRole('button', { name: '编辑回复原文', exact: true }).click();
-  const editor = original.getByRole('textbox', { name: '回复原文', exact: true });
-  await editor.fill('设置切换保留未保存的草稿'); await editor.evaluate(node => window.originalEditor=node);
-  await open(); await back();
-  assert.equal(await editor.inputValue(), '设置切换保留未保存的草稿');
-  assert.equal(await editor.evaluate(node => node===originalEditor), true);
-  await original.getByRole('button', { name: '取消', exact: true }).click();
+  if (viewport.width > 760) {
+    await original.getByRole('button', { name: '编辑回复原文', exact: true }).click();
+    const editor = original.getByRole('textbox', { name: '回复原文', exact: true });
+    await editor.fill('设置切换保留未保存的草稿'); await editor.evaluate(node => window.originalEditor=node);
+    await open(); await back();
+    assert.equal(await editor.inputValue(), '设置切换保留未保存的草稿');
+    assert.equal(await editor.evaluate(node => node===originalEditor), true);
+    await original.getByRole('button', { name: '取消', exact: true }).click();
+  }
   await open(); await settings.getByRole('button', { name: '随文剧场用法', exact: true }).click();
   await button('返回设置').click();
   await button(viewport.width<=760?'返回剧场演出':'设置').click();

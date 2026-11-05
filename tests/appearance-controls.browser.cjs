@@ -255,9 +255,10 @@ async function verify(page, url, theme, viewport) {
     if (await userMore.isVisible()) await userMore.click();
     await record.locator('.play-delete').first().hover(); await check('delete hover');
     await record.getByRole('button', { name: '编辑回复原文', exact: true }).click();
-    const editor = record.getByRole('textbox', { name: '回复原文', exact: true });
+    const sheet = viewport.width <= 760 ? panel.locator('.play-edit-sheet') : null;
+    const editor = (sheet ?? record).getByRole('textbox', { name: '回复原文', exact: true });
     await editor.focus(); await check('message editor');
-    await record.locator('.play-assistant-message .play-edit-actions').getByRole('button', { name: '取消', exact: true }).click();
+    await (sheet ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : record.locator('.play-assistant-message .play-edit-actions')).getByRole('button', { name: '取消', exact: true }).click();
     assert.equal(await composer.inputValue(), '用于检查输入框的草稿');
     await screenshot(page, `controls-${theme.slug || 'synthetic'}-play-${viewport.width}.png`);
     await button('茶会选集').click(); await button('设置').click();

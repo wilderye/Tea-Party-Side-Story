@@ -8,6 +8,7 @@ import { showSentPromptViewer } from './play-sent-prompt-view.js';
 import { createPlayView } from './play-view.js';
 import { createPlayChatView } from './play-chat-view.js';
 import { createPlayMessageEditing } from './play-message-editing.js';
+import { createPlayEditSheet } from './play-edit-sheet.js';
 import { createPlayFavoriteReader, favoriteTitle } from './play-favorites-view.js';
 import { createPlayFavoriteComposer } from './play-favorite-composer.js';
 import { createPlayApiSettings, renderPlayChatSetting, renderPlayRetrySettings, renderPlayPromptSetting, renderPlayContinuationSettings, renderPlayProcessingSettings } from './play-settings-view.js';
@@ -237,8 +238,13 @@ export function createTheatrePanel(ctx, state, actions) {
     const recordFavoriteTimes = () => Object.fromEntries([...favoriteRows.values()].map(item => [item.id, Date.parse(item.savedAt)]));
     const catalogSearch = () => [...(panel?.querySelectorAll('.tea-catalog input[type="search"]') ?? [])].find(input => input.getClientRects().length);
     const messageEditing = createPlayMessageEditing({
-        onChange: () => { playView?.updateEditing(); chatView?.updateEditing(); },
+        onChange: () => { playView?.updateEditing(); chatView?.updateEditing(); syncEditSheet(); },
         onError: error => showMessage(error.message),
+        async confirmDiscard() {
+            confirming = true;
+            try { return await confirm('放弃修改？', '放弃修改'); }
+            finally { confirming = false; }
+        },
         async onReveal(session) {
             if (messageEditing.current !== session || busy || confirming || favoriteComposer?.canLeave() === false
                 || playView?.canLeave({ ignoreEditing: true }) === false || chatView?.canLeave({ ignoreEditing: true }) === false
@@ -254,6 +260,27 @@ export function createTheatrePanel(ctx, state, actions) {
         if (!messageEditing.current) return;
         event.preventDefault(); event.returnValue = '';
     });
+    let editSheet = null, sheetPlacing = false;
+    function captureSheetEditor() {
+        const session = messageEditing.current;
+        if (session && !sheetPlacing && editSheet?.editor === session.editor && editSheet.contains(session.editor.input)
+            && session.editor.input.getClientRects().length) session.state = session.editor.capture();
+    }
+    function syncEditSheet() {
+        const session = messageEditing.current;
+        const route = session?.page === 'record' ? 'play' : 'chat';
+        if (!session || !panel || !media?.matches || scope !== 'play' || mode !== 'list' || playRoute !== route) {
+            if (editSheet?.editor) { captureSheetEditor(); editSheet.hide(); }
+            sheetPlacing = false;
+            return;
+        }
+        editSheet ??= createPlayEditSheet();
+        if (editSheet.show(panel, session.editor)) sheetPlacing = true;
+        if (!sheetPlacing || !session.editor.input.getClientRects().length) return;
+        sheetPlacing = false;
+        if (session.state) { session.editor.restore(session.state); session.state = null; }
+        else session.editor.scrollToEnd();
+    }
     const getPlayView = () => playView ??= createPlayView(ctx, state.settings, actions.playground, showMessage, actions.diagnostics, actions.promptFavorites,
         { messageEditing, getReadingInset: () => mobileNavigation?.getReadingInset() ?? 0,
             onProgrammaticScroll: area => mobileNavigation?.ignoreScroll(area), onBranch: branch => void enterBranch(branch.id), onInspectPrompt: inspectPrompt,
@@ -782,7 +809,11 @@ export function createTheatrePanel(ctx, state, actions) {
         const status = element('div', undefined, 'tea-status');
         status.setAttribute('role', 'status'); panel.append(status); updateStatus();
     }
-    function render({ preserveSettings = false, resetPosition = false } = {}) {
+    function render(options) {
+        renderSurface(options);
+        syncEditSheet();
+    }
+    function renderSurface({ preserveSettings = false, resetPosition = false } = {}) {
         if (!panelHost || searchComposing) return;
         if (mode !== 'settings') apiSettings?.cancel();
         if (settingsLayer && mode !== 'settings') {
@@ -851,7 +882,7 @@ export function createTheatrePanel(ctx, state, actions) {
         // Keep the conversation connected while another tab is open. Detaching
         // it would reset rendered webpages and replace the user's input element.
         for (const child of [...panel.children]) {
-            if (child !== playCatalog && child !== playWorkspace && child !== chatCatalog && child !== chatWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings) child.remove();
+            if (child !== playCatalog && child !== playWorkspace && child !== chatCatalog && child !== chatWorkspace && child !== favoriteWorkspace && child !== favoriteComposer?.node && child !== keptSettings && !editSheet?.contains(child)) child.remove();
         }
         if (playCatalog && panel.contains(playCatalog)) playCatalog.hidden = false;
         if (chatCatalog && panel.contains(chatCatalog)) chatCatalog.hidden = false;
@@ -1339,6 +1370,9 @@ export function createTheatrePanel(ctx, state, actions) {
     }
     function onBreakpoint() {
         if (!panel) return;
+        const session = messageEditing.current;
+        if (session?.editor.input.getClientRects().length) session.state = session.editor.capture();
+        playView?.placeEditor(); chatView?.placeEditor(); syncEditSheet();
         mobileNavigation?.sync(scope);
         if (scope === 'play' && mode === 'list') { panel.style.setProperty('--tea-body-size', `${bodyFontSize()}px`); playView?.layout(); return; }
         if (isRecordFavorites()) { if (!media.matches && mode === 'record') mode = 'list'; render(); return; }
@@ -1413,6 +1447,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 popup = new context.Popup(panelHost, context.POPUP_TYPE.TEXT, '', { okButton: false, cancelButton: false,
                     onClosing: async () => {
                         if (!await canLeave()) return false;
+                        captureSheetEditor();
                         if (scope === 'play') playView?.prepareLayout();
                         chatView?.prepareLayout();
                         captureCatalogPosition(); return true;
@@ -1420,6 +1455,7 @@ export function createTheatrePanel(ctx, state, actions) {
                     onOpen: () => {
                         viewDiagnostics?.event('弹窗开启动画结束');
                         mobileNavigation?.sync(scope);
+                        syncEditSheet();
                         restoreCatalogPosition();
                         measureBodies();
                         const candidate = panel.querySelector('.tea-topbar button:not([disabled]), .tea-mobile-actions button:not([disabled]), .tea-brand button:not([disabled])');
@@ -1434,6 +1470,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 await popup.show();
                 actions.diagnostics?.info('关闭剧场面板');
             } finally {
+                editSheet?.hide(); editSheet = null; sheetPlacing = false;
                 closeSettingsLayer({ resume: false });
                 sentPromptViewer?.dispose(); sentPromptViewer = null;
                 disposeFavoriteComposer();

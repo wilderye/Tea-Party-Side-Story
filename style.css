@@ -778,6 +778,14 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-feed .play-edit-form textarea { width:100%; margin:0!important; padding:12px!important; }
 :is(#teahouse-panel,.tea-panel-surface) .play-edit-actions .play-edit-save { color:var(--tea-heading,var(--tea-forest))!important; }
 :is(#teahouse-panel,.tea-panel-surface) :is(.play-edit-save,.play-regex-toolbar button)[aria-busy=true] svg { animation:tea-update-spin 1s linear infinite; }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; min-width:0; min-height:0; padding-bottom:env(safe-area-inset-bottom); background:var(--tea-paper); color:var(--tea-ink); }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet-head { display:flex; align-items:center; justify-content:space-between; flex:none; gap:12px; min-height:56px; padding:calc(6px + env(safe-area-inset-top)) 8px 6px 18px; border-bottom:1px solid var(--tea-line); }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet-head h2 { margin:0; font:600 18px/28px var(--tea-ui); color:var(--tea-heading,var(--tea-ink)); }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet-head .play-edit-actions .tea-icon { width:44px; min-width:44px; height:44px; }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet-head .play-edit-actions .tea-icon::before { content:none; }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet-body,:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet .play-edit-form { display:flex; flex:1; flex-direction:column; min-height:0; }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet .play-edit-form textarea { flex:1 1 0; width:100%; height:auto; min-height:0; max-height:none; margin:0!important; padding:16px 18px!important; resize:none; field-sizing:fixed; overscroll-behavior:contain; }
+:is(#teahouse-panel,.tea-panel-surface) .play-edit-sheet .play-result-error { order:-1; flex:none; margin:0; padding:10px 18px; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-icon.play-in-plugin { width:44px; height:44px; min-width:44px; }
 /* The cup fills more of its viewBox; match the neighboring icons' visible size. */
 :is(#teahouse-panel,.tea-panel-surface) .play-in-plugin svg { width:18px; height:18px; }

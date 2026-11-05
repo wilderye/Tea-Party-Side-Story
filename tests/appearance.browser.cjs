@@ -132,8 +132,9 @@ async function verifyPalette(page, url, viewport) {
         await record.scrollIntoViewIfNeeded();
         await screenshot(page, `appearance-${name}-${viewport.width}.png`);
         await record.getByRole('button', { name: '编辑回复原文', exact: true }).click();
-        assert.equal(await record.getByRole('textbox', { name: '回复原文', exact: true }).evaluate(node => getComputedStyle(node).borderTopWidth), '0px');
-        await record.locator('.play-assistant-message .play-edit-actions').getByRole('button', { name: '取消', exact: true }).click();
+        const sheet = viewport.width <= 760 ? panel.locator('.play-edit-sheet') : null;
+        assert.equal(await (sheet ?? record).getByRole('textbox', { name: '回复原文', exact: true }).evaluate(node => getComputedStyle(node).borderTopWidth), '0px');
+        await (sheet ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : record.locator('.play-assistant-message .play-edit-actions')).getByRole('button', { name: '取消', exact: true }).click();
         readingPosition = await capturePosition();
         await button('设置').click(); await appearance.selectOption('default');
         assert.deepEqual(await snapshot(panel), defaults, `${name}: 默认配色和排版完整恢复`);

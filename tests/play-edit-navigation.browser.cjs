@@ -240,6 +240,114 @@ async function verify(page, url, viewport, mode) {
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', navigation: 'available', stop: 'composer', passed: true }));
 }
+async function verifyMobile(page, url, viewport, mode) {
+    await page.goto(url); await page.waitForFunction(() => window.ready);
+    assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
+    const ids = await seed(page, mode);
+    await button(page, '打开小剧场面板').click();
+    const panel = page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])');
+    await button(panel, '剧场演出').click();
+    if (mode === 'chat') {
+        await button(panel, '历史记录').click();
+        await panel.locator(`[data-chat-id="${ids.id}"] .play-history-open`).click();
+    }
+    const scope = panel.locator(mode === 'chat' ? '.play-branch-page' : '.play-page:not(.play-history-page):not(.play-branch-page)');
+    const sheet = panel.locator('.play-edit-sheet'), sheetActions = sheet.locator('.play-edit-sheet-head .play-edit-actions');
+    await scope.locator('.play-assistant-message').first().waitFor(); await settle(page);
+    const initial = scope.locator('.play-assistant-message:not([hidden] *)').nth(1);
+    const key = await initial.evaluate(node => node.dataset.messageId ?? node.closest('[data-record]').dataset.record);
+    const item = mode === 'chat' ? scope.locator(`[data-message-id="${key}"]`) : scope.locator(`[data-record="${key}"] .play-assistant-message`);
+    await align(page, item);
+    const before = await offset(item);
+    await clickWithoutScroll(page, button(item, '编辑回复原文'), item);
+    const editor = sheet.getByRole('textbox', { name: '回复原文', exact: true });
+    await editor.waitFor();
+    assert.ok(Math.abs(await offset(item) - before) < 2, '打开编辑页不移动下方消息');
+    assert.equal(await editor.evaluate(node => document.activeElement === node), false, '打开编辑页不自动聚焦');
+    assert.ok(await editor.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop < 2), '打开时显示末尾');
+    await editor.evaluate(node => {
+        window.editNode = node;
+        node.value += '\n尚未保存的草稿'; node.dispatchEvent(new Event('input', { bubbles: true }));
+        node.setSelectionRange(8, 20); node.scrollTop = 160;
+    });
+    const saved = await inputState(editor);
+    await page.evaluate(() => ui.refresh()); await settle(page);
+    assert.equal(await editor.evaluate(node => node === window.editNode), true);
+    assert.deepEqual(await inputState(editor), saved, '刷新不替换编辑正文');
+    await page.evaluate(() => [...document.querySelectorAll('.tea-panel-surface[data-active=true] button[aria-label="关闭面板"]')].find(node => node.getClientRects().length).click());
+    await panel.waitFor({ state: 'detached' });
+    await button(page, '打开小剧场面板').click(); await settle(page);
+    await editor.waitFor();
+    assert.equal(await editor.evaluate(node => node === window.editNode), true);
+    assert.deepEqual(await inputState(editor), saved, '关闭重开面板回到编辑页并保留草稿、选区和框内位置');
+    await page.setViewportSize({ width: 1100, height: viewport.height }); await settle(page);
+    const inline = item.getByRole('textbox', { name: '回复原文', exact: true });
+    await inline.waitFor();
+    assert.equal(await sheet.count(), 0, '变宽后关闭编辑页');
+    assert.equal(await inline.evaluate(node => node === window.editNode), true);
+    assert.deepEqual(await inputState(inline), saved, '变宽后在消息内继续编辑');
+    await page.setViewportSize(viewport); await settle(page);
+    await editor.waitFor();
+    assert.equal(await editor.evaluate(node => node === window.editNode), true);
+    assert.deepEqual(await inputState(editor), saved, '变窄后回到编辑页');
+    await page.evaluate(() => [...document.querySelectorAll('.tea-panel-surface[data-active=true] button[aria-label="关闭面板"]')].find(node => node.getClientRects().length).click());
+    await panel.waitFor({ state: 'detached' });
+    await page.setViewportSize({ width: 1100, height: viewport.height }); await settle(page);
+    await button(page, '打开小剧场面板').click(); await settle(page);
+    await inline.waitFor();
+    assert.equal(await sheet.count(), 0, '面板关闭期间变宽，重开后不显示编辑页');
+    assert.equal(await inline.evaluate(node => node === window.editNode), true);
+    assert.equal(await inline.inputValue(), saved.value, '面板关闭期间变宽，重开后在消息内继续编辑');
+    await button(panel, '关闭面板').click(); await panel.waitFor({ state: 'detached' });
+    await page.setViewportSize(viewport); await settle(page);
+    await button(page, '打开小剧场面板').click(); await settle(page);
+    await editor.waitFor();
+    assert.equal(await editor.evaluate(node => node === window.editNode), true);
+    assert.equal(await editor.inputValue(), saved.value, '面板关闭期间变窄，重开后回到编辑页');
+    assert.equal(await item.locator('textarea').count(), 0, '面板关闭期间变窄，消息内不再显示编辑框');
+    await align(page, item, 180);
+    const beforeCancel = await offset(item);
+    await button(sheetActions, '取消').click(); await editor.waitFor({ state: 'detached' }); await settle(page);
+    assert.equal(await sheet.count(), 0);
+    assert.ok(Math.abs(await offset(item) - beforeCancel) < 2, '取消保留退出前的位置');
+    await clickWithoutScroll(page, button(item, '编辑回复原文'));
+    await editor.evaluate(node => { node.value += '\n保存的修改'; node.dispatchEvent(new Event('input', { bubbles: true })); });
+    await page.evaluate(() => { window.holdSave = true; });
+    await button(sheetActions, '保存').click(); await page.waitForFunction(() => typeof window.resumeSave === 'function');
+    const beforeSave = await offset(item);
+    await page.evaluate(() => { window.holdSave = false; window.resumeSave(); window.resumeSave = null; });
+    await editor.waitFor({ state: 'detached' }); await settle(page);
+    assert.ok(Math.abs(await offset(item) - beforeSave) < 2, '保存后保留退出前的位置');
+    assert.equal(await panel.locator('.play-catalog:not([hidden]) .tea-mobile-tab-slot').isVisible(), true, '保存后恢复导航');
+    assert.equal(await page.evaluate(() => captured.length), 0, '阅读与编辑不发送模型请求');
+    await align(page, item); await clickWithoutScroll(page, button(item, '编辑回复原文'));
+    await editor.evaluate(node => { node.value += '\n来源删除后保留的草稿'; node.dispatchEvent(new Event('input', { bubbles: true })); node.setSelectionRange(5, 15); node.scrollTop = 110; });
+    const missingState = await inputState(editor);
+    await page.evaluate(async ({ mode, id, chatId }) => {
+        if (mode === 'chat') await testHistory.removeMessage(chatId, id);
+        else await testHistory.deleteChat(id);
+        ui.refresh();
+    }, { mode, id: key, chatId: ids.id });
+    await settle(page); await editor.waitFor();
+    assert.deepEqual(await inputState(editor), missingState, '来源删除后保留可读取的原草稿');
+    await button(sheetActions, '保存').click();
+    if (mode === 'chat') {
+        await sheet.getByRole('alert').waitFor();
+        assert.equal(await editor.inputValue(), missingState.value, '接收前已确认目标删除时，保留尚未提交的编辑');
+        await button(sheetActions, '取消').click(); await editor.waitFor({ state: 'detached' });
+    } else {
+        await editor.waitFor({ state: 'detached' });
+        await page.waitForFunction(() => saveErrors.some(error => /已删除|已不存在/.test(error)));
+        assert.equal(await page.evaluate(id => runtime.session.currentRound(id).results[0].text, key), missingState.value);
+    }
+    if (process.env.TEA_QA_DIR) {
+        await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `edit-navigation-${mode}-${viewport.width}.png`) });
+    }
+    assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(), 0);
+    assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    console.log(JSON.stringify({ mode, viewport, position: 'stable', editor: 'preserved', sheet: 'reopen and breakpoint', passed: true }));
+}
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const browser = await chromium.launch({ channel: 'msedge', headless: true });
@@ -248,7 +356,7 @@ async function verify(page, url, viewport, mode) {
             const context = await browser.newContext({ viewport }), page = await context.newPage(), errors = [];
             page.on('pageerror', error => errors.push(error.message));
             page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
-            try { await verify(page, `http://127.0.0.1:${server.address().port}/`, viewport, mode); assert.deepEqual(errors, []); }
+            try { await (viewport.width <= 760 ? verifyMobile : verify)(page, `http://127.0.0.1:${server.address().port}/`, viewport, mode); assert.deepEqual(errors, []); }
             catch (error) {
                 if (process.env.TEA_QA_DIR) { await fs.mkdir(process.env.TEA_QA_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `failed-${mode}-${viewport.width}.png`) }); }
                 throw error;
