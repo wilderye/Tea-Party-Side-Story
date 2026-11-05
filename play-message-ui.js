@@ -182,7 +182,7 @@ export function createPlayResultMenu() {
 }
 
 /** Keep notices in the reply body, using the existing playground behavior. */
-export function renderPlayReply(output, result, { displayText, job, error, anchor, editing = false, name = result.context?.characterName ?? '' }) {
+export function renderPlayReply(output, result, { displayText, job, error, anchor, tools, editing = false, name = result.context?.characterName ?? '' }) {
     const retryMessage = job?.retry && activePhases.has(job.phase)
         ? job.phase === 'retry-wait'
             ? `遇到${job.retry.reason === 'rateLimit' ? ' 429' : '空内容'}，${job.retry.remainingSeconds} 秒后进行第 ${job.retry.attempt}/${job.retry.maxRetries} 次自动重试。`
@@ -206,6 +206,7 @@ export function renderPlayReply(output, result, { displayText, job, error, ancho
         output.signature = signature;
     }
     output.box.dataset.status = result.status;
+    tools?.classList.toggle('is-generating', activePhases.has(result.status));
     error.textContent = retryMessage || errorMessage; error.hidden = !(retryMessage || errorMessage) || editing;
     error.setAttribute('role', retryMessage ? 'status' : 'alert');
     error.classList.toggle('is-saving', !!retryMessage); error.dataset.readAnchor = `${anchor}/error`;

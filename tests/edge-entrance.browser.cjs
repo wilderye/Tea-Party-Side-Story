@@ -82,6 +82,20 @@ async function verify(context, name) {
         await page.close();
     }
 
+    for (const [side, direction] of [['left', 'M3 2l6 6-6 6'], ['right', 'M7 2 1 8l6 6']]) {
+        const opened = await open(context, { ...base, edgeSide: side });
+        const icon = await opened.page.locator('#teahouse-edge').evaluate(node => {
+            const svg = node.querySelector('svg'), box = svg?.getBoundingClientRect(), edge = node.getBoundingClientRect();
+            return { fontAwesome: !!node.querySelector('i,[class*="fa-"]'), path: svg?.querySelector('path')?.getAttribute('d'),
+                stroke: !!svg && getComputedStyle(svg).stroke !== 'none', size: box && [box.width, box.height],
+                centered: !!box && Math.abs(box.left + box.right - edge.left - edge.right) <= 1 && Math.abs(box.top + box.bottom - edge.top - edge.bottom) <= 1 };
+        });
+        assert.deepEqual(icon, { fontAwesome: false, path: direction, stroke: true, size: name === 'desktop' ? [4.375, 7] : [8.125, 13], centered: true },
+            `${name}：${side} 侧箭头使用居中的 SVG`);
+        assert.deepEqual(opened.errors, [], `${name}：${side} 侧箭头`);
+        await opened.page.close();
+    }
+
     const { page, errors } = await open(context, base);
     if (name === 'desktop') {
         const look = await page.locator('#teahouse-edge').evaluate(node => {
@@ -123,7 +137,7 @@ async function verify(context, name) {
             const context = await browser.newContext(options);
             await context.route('https://library.invalid/**', route => route.fulfill({ status: 404, body: '' }));
             await verify(context, name);
-            console.log(JSON.stringify({ viewport: name, checks: '统一默认 100%、电脑端实心胶囊、旧默认值迁移、迁移后保留选择、无效值回到默认、滑块名称、拖动生效、刷新保留、悬停表现' }));
+            console.log(JSON.stringify({ viewport: name, checks: '统一默认 100%、电脑端实心胶囊、旧默认值迁移、迁移后保留选择、无效值回到默认、SVG 箭头方向与居中、滑块名称、拖动生效、刷新保留、悬停表现' }));
             await context.close();
         }
     } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }

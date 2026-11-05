@@ -243,7 +243,7 @@ function syncEntrances() {
         const edge = textButton('', () => ui.open()); edge.id = 'teahouse-edge'; edge.title = '茶话会小剧场';
         edge.setAttribute('aria-label', '打开茶话会小剧场');
         edge.dataset.side = settings.edgeSide; edge.style.setProperty('--tea-edge-opacity', String(settings.edgeOpacity ?? defaultEdgeOpacity));
-        const icon = element('i', undefined, `fa-solid fa-chevron-${settings.edgeSide === 'right' ? 'left' : 'right'}`); icon.setAttribute('aria-hidden', 'true'); edge.append(icon);
+        edge.innerHTML = `<svg viewBox="0 0 10 16" aria-hidden="true"><path d="${settings.edgeSide === 'right' ? 'M7 2 1 8l6 6' : 'M3 2l6 6-6 6'}"/></svg>`;
         document.body.append(edge);
     }
     qrTask = qrTask.catch(() => {}).then(() => {

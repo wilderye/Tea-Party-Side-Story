@@ -266,6 +266,10 @@ async function verify(page, url, viewport) {
     assert.equal(await input.evaluate(node => node.clientHeight), 44, '发送清空后输入框恢复一行');
     assert.equal(await branch.locator('footer .play-result-status').count(), 0, '不在按钮下另加生成状态');
     assert.equal(await branch.locator('.play-assistant-message').last().locator('.play-stop').isVisible(), false, '单份生成使用输入框旁的停止按钮');
+    const generatingTools = await branch.locator('.play-assistant-message').last().locator('.play-header-actions').evaluate(tools =>
+        [...tools.querySelectorAll('button')].filter(button => button.getClientRects().length).map(button => button.getAttribute('aria-label')));
+    assert.deepEqual(generatingTools, viewport.width <= 760 ? ['收藏演出记录', '编辑回复原文'] : ['收藏演出记录', '编辑回复原文', '更多回复操作'],
+        '手机生成中不在“正在生成”上方多显示更多按钮');
     await input.fill('下一轮尚未发送的草稿');
     assert.equal(await branch.getByRole('button', { name: '停止这份回复', exact: true }).count() >= 1, true);
     assert.equal(await button('发送消息').count(), 0, '本分支生成时同一按钮切换为停止');

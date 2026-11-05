@@ -166,12 +166,21 @@ async function verifyDeletion(page, url, viewport) {
     assert.equal((await page.evaluate(id => runtime.getFavorite(id), favorite.id)).text, '窗外的雨渐渐停了。\n\n他将茶杯放回桌上，笑着点了点头。');
     await user.getByRole('button', { name: '生成回复', exact: true }).click();
     await page.waitForFunction(() => runtime.getState().phase === 'generating');
+    await reply.locator('.play-waiting').waitFor();
+    const generatingHead = await reply.evaluate(node => ({
+        labels: [...node.querySelectorAll('.play-header-actions button')].filter(button => button.getClientRects().length).map(button => button.getAttribute('aria-label')),
+        gap: node.querySelector('.play-results').getBoundingClientRect().top - node.querySelector('.play-message-identity').getBoundingClientRect().bottom }));
+    if (viewport.width <= 760) {
+        assert.deepEqual(generatingHead.labels, [], '手机生成中不在“正在生成”上方再显示更多按钮');
+        assert.ok(generatingHead.gap >= 8 && generatingHead.gap <= 12, `手机生成中不保留空的按钮行：${generatingHead.gap}`);
+    } else assert.deepEqual(generatingHead.labels, ['更多回复操作'], '电脑端生成中的回复头部保持不变');
     assert.equal(await removeUser.isDisabled(), true);
     assert.equal(await removeReply.isDisabled(), true);
     assert.equal(await page.evaluate(() => capturedPrompts.at(-1)), '测试小剧场');
     await page.evaluate(() => finishGeneration('删除旧消息后重新生成的回复。'));
     await page.waitForFunction(() => runtime.getState().phase === 'idle');
     await reply.getByText('删除旧消息后重新生成的回复。', { exact: true }).waitFor();
+    assert.deepEqual(await visibleLabels(), ['收藏演出记录', '编辑回复原文', '更多回复操作'], '生成完成后恢复回复操作');
     assert.equal((await page.evaluate(id => runtime.getRound(id), id)).results.length, 1);
 
     if (await userMore.isVisible()) await userMore.click();

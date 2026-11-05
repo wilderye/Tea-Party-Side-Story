@@ -91,13 +91,18 @@ async function verify(page, viewport) {
             prose: { x: prose.x, right: prose.right }, buttons, overflow: node.scrollWidth - node.clientWidth };
     });
     assert.ok(layout.overflow <= 1, '长收藏没有横向溢出');
+    const arrowWidth = mobile ? 28 : 44;
     for (const arrow of layout.buttons) {
-        assert.equal(arrow.width, 44); assert.equal(arrow.height, 44);
+        assert.equal(arrow.width, arrowWidth); assert.equal(arrow.height, 44);
         assert.equal(arrow.background, 'rgba(0, 0, 0, 0)', '箭头背景透明');
         assert.ok(arrow.y > layout.pane.y && arrow.y + arrow.height < layout.pane.y + layout.pane.height);
     }
-    assert.ok(layout.buttons[0].x + 44 <= layout.prose.x + 1, '左箭头的点击范围不覆盖正文');
+    assert.ok(layout.buttons[0].x + arrowWidth <= layout.prose.x + 1, '左箭头的点击范围不覆盖正文');
     assert.ok(layout.buttons[1].x >= layout.prose.right - 1, '右箭头的点击范围不覆盖正文');
+    if (mobile) {
+        assert.ok(Math.abs(layout.prose.x - 28) < 1 && Math.abs(viewport.width - layout.prose.right - 28) < 1,
+            `手机收藏正文与剧场演出使用相同的左右边距：${JSON.stringify(layout.prose)}`);
+    }
     const beforeScroll = await next().boundingBox();
     await reader.evaluate(node => { node.scrollTop = 460; }); await settle(page);
     assert.ok(Math.abs((await next().boundingBox()).y - beforeScroll.y) < 1, '长正文滚动时箭头保持原位');
@@ -110,7 +115,7 @@ async function verify(page, viewport) {
 
     // A mouse drag that leaves and returns must not be reduced to its final displacement.
     const arrow = await next().boundingBox();
-    const x = arrow.x + 22, y = arrow.y + 22;
+    const x = arrow.x + arrow.width / 2, y = arrow.y + arrow.height / 2;
     await page.mouse.move(x, y); await page.mouse.down();
     await page.mouse.move(x, y - 65, { steps: 5 }); await page.mouse.move(x, y, { steps: 5 }); await page.mouse.up();
     await settle(page); assert.equal(await selected(), ids[1], '拖出又返回箭头不切换收藏');
@@ -122,7 +127,7 @@ async function verify(page, viewport) {
         await reader.evaluate(node => { node.scrollTop = 0; }); await settle(page);
         const touch = await page.context().newCDPSession(page);
         const box = await next().boundingBox();
-        const point = { x: box.x + 22, y: box.y + 22 };
+        const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
         await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
         for (let step = 1; step <= 6; step++) {
             await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x, y: point.y - step * 20 }] });
@@ -133,7 +138,7 @@ async function verify(page, viewport) {
         assert.equal(await selected(), ids[2], '从箭头开始的手机拖动没有切换收藏');
         assert.ok(await reader.evaluate(node => node.scrollTop) > 30, '从箭头开始的手机拖动正常滚动正文');
         const tapBox = await next().boundingBox();
-        await page.touchscreen.tap(tapBox.x + 22, tapBox.y + 22); await settle(page);
+        await page.touchscreen.tap(tapBox.x + tapBox.width / 2, tapBox.y + tapBox.height / 2); await settle(page);
         assert.equal(await selected(), ids[3], '拖动之后正常轻点仍能切换收藏');
         await touch.detach();
     }

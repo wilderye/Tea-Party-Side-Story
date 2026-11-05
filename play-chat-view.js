@@ -487,7 +487,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         } else if (message.role === 'user') {
             const text = processed(message);
             if (view.userText !== text || body.querySelector('.play-edit-form')) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true, { role: 'user' }); view.userText = text; }
-        } else renderPlayReply(output, result, { name: owner()?.name, displayText: processed(message, result), job: playground.getState(result.id), error, anchor: `${chat.id}/${message.id}` });
+        } else renderPlayReply(output, result, { name: owner()?.name, displayText: processed(message, result), job: playground.getState(result.id), error, tools, anchor: `${chat.id}/${message.id}` });
         if (view.reply) {
             const reply = view.reply, last = chat.messages.at(-1)?.id === message.id;
             const index = message.results.indexOf(result), atEnd = index === message.results.length - 1;

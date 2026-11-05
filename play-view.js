@@ -886,7 +886,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             output.sourceSignature = sourceSignature;
         }
         if (replyEditor && !output.box.contains(replyEditor.body)) output.box.replaceChildren(replyEditor.body);
-        renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error,
+        renderPlayReply(output, result, { displayText: output.displayText, job, error: view.error, tools: view.replyTools,
             name: roundCharacter(round).name, anchor: `${round.id}/assistant/${result.id}`, editing: !!replyEditor });
         view.swipes.hidden = false;
         updateResultNavigation(round, view);
