@@ -59,7 +59,7 @@ async function touchScroll(page, selector, pixels, { horizontal = false, target 
     if (before.y !== undefined) assert.ok(Math.abs(after.y - (before.y - after.scroll + before.scroll)) < 2,
         '文字只跟随阅读滚动，不受栏目补偿或布局变化影响');
 }
-async function nativeTouchScroll(page, selector, pixels) {
+async function nativeTouchScroll(page, selector, pixels, { fixed = false } = {}) {
     const session = await page.context().newCDPSession(page);
     const box = await page.locator(selector).boundingBox();
     const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
@@ -89,8 +89,8 @@ async function nativeTouchScroll(page, selector, pixels) {
     await settle(page);
     const proof = await page.evaluate(() => nativeProof);
     const enabled = await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .tea-catalog:not([hidden])').evaluate(catalog => catalog.dataset.scope !== 'community' && matchMedia('(max-width:760px)').matches);
-    assert.ok(Math.abs(await offset(page) - (enabled ? proof.expected : 0)) < 1,
-        '原生触摸按实际正文滚动距离跟随，包括松手滑行；选集保持固定');
+    assert.ok(Math.abs(await offset(page) - (enabled && !fixed ? proof.expected : 0)) < 1,
+        fixed ? '选择角色页面原生触摸及松手滑行不收起顶栏' : '原生触摸按实际正文滚动距离跟随，包括松手滑行；选集保持固定');
     await session.detach(); return { before, ...proof };
 }
 async function nativeWheel(page, selector, pixels) {
@@ -165,6 +165,7 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
             { secure: false, rawUpdate: false }, '普通HTTP不依赖受限制的手指接口');
         assert.equal(page.url(), url); assert.equal(await page.title(), '小剧场设置与原文编辑验证');
         await page.evaluate(() => {
+            for (let i = 0; i < 40; i++) ctx.characters.push({ avatar: 'synthetic-' + i + '.png', name: '合成角色' + i });
             for (let i = 0; i < 12; i++) {
                 const id = 'story:' + i;
                 fixture.community.set(id, { id, title: '第' + (i + 1) + '篇合成故事', type: 'standalone', author: '合成作者',
@@ -302,6 +303,17 @@ async function verify(browser, viewport, reducedMotion = false, plainHttp = fals
         await nativeTouchScroll(page, feed, 60); assert.equal(await offset(page), 44);
         await nativeTouchScroll(page, feed, -80); assert.equal(await offset(page), 0);
         await button('选择角色').click(); await settle(page);
+        const people = ':is(#teahouse-panel,.tea-panel-surface[data-active=true]) .play-people';
+        const pickerTop = await page.locator(people).evaluate(area => area.scrollTop);
+        await touchScroll(page, people, 80);
+        assert.ok(await page.locator(people).evaluate(area => area.scrollTop) > pickerTop, '角色列表仍可上滑浏览');
+        await screenshot(page, 'navigation-character-scroll-' + viewport.width + '.png');
+        assert.equal(await offset(page), 0, '选择角色页面上滑不收起顶栏');
+        await nativeTouchScroll(page, people, 60, { fixed: true });
+        await nativeTouchScroll(page, people, -80, { fixed: true });
+        await page.locator(people).hover(); await page.mouse.wheel(0, 80); await settle(page);
+        assert.equal(await offset(page), 0, '选择角色页面滚轮不收起顶栏');
+        assert.equal(await slot.evaluate(node => node.inert), false, '选择角色时顶栏始终可操作');
         await button('返回演出记录').click(); await settle(page);
         assert.equal(await offset(page), 0, '角色目录返回按钮不被栏目遮住');
         // Content resizing during a gesture must not cancel responsive motion.

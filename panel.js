@@ -32,7 +32,8 @@ function createMobileNavigation(panel, media) {
     let height = 44, tabsHeight = 44, offset = 0, paintedOffset = 0, suspended = false;
     const headingResize = new ResizeObserver(() => { if (heading?.getClientRects().length) sync(scope); });
     const activeSurface = () => panel.querySelector('.tea-panel-surface[data-active=true]') ?? panel;
-    const isReading = () => !suspended && media.matches && scope !== 'community' && activeSurface().dataset.mode === 'list' && slot?.isConnected;
+    const isReading = () => !suspended && media.matches && scope !== 'community' && activeSurface().dataset.mode === 'list'
+        && !activeSurface().classList.contains('play-choosing-character') && slot?.isConnected;
     function paint() {
         paintFrame = 0;
         if (!slot) return;
