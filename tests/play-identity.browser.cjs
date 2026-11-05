@@ -6,8 +6,22 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const harness = original.replace('Array.from({length:24}', 'Array.from({length:1}')
-    .replace('const identity={userName:ctx.name1,userAvatar:persona.user_avatar};',
-        'const identity=window.targetIdentity||{userName:ctx.name1,userAvatar:persona.user_avatar};');
+    .replace(/prepareRequest:async request=>\{[\s\S]*?\}\}\}\);/, String.raw`prepareRequest:Object.assign(async request=>{
+window.captured.push(request.environment);window.capturedPrompts.push(request.prompt);
+const identity=request.resolvedContext?.context||window.targetIdentity||{userName:ctx.name1,userAvatar:persona.user_avatar};
+await request.onPersonaResolved?.(identity);
+return{context:identity,send:({onText,signal})=>new Promise((resolve,reject)=>{
+window.emitGeneration=onText;window.finishGeneration=resolve;
+signal.addEventListener('abort',()=>reject(signal.reason),{once:true});})};
+},{resolveContext:async({signal})=>{
+if(window.holdPersonaResolution)await new Promise((resolve,reject)=>{
+const abort=()=>reject(signal.reason);
+window.resumePersonaResolution=()=>{signal.removeEventListener('abort',abort);resolve();};
+signal.addEventListener('abort',abort,{once:true});});
+signal.throwIfAborted();
+return{context:window.targetIdentity||{userName:ctx.name1,userAvatar:persona.user_avatar}};
+}})});`);
+assert.ok(harness.includes('prepareRequest:Object.assign'));
 const server = http.createServer(async (request, response) => {
     const name = new URL(request.url, 'http://test').pathname.slice(1);
     if (!name) { response.setHeader('Content-Type', 'text/html; charset=utf-8'); return response.end(harness); }
@@ -85,7 +99,46 @@ async function verify(page, url, viewport) {
     await button(branch, '下一个结果').click(); await settle(page);
     await header(branch.locator('.play-user-message').first(), '目标乙', 'target.png');
     const input = branch.getByRole('textbox', { name: '分支聊天输入', exact: true });
+    await page.evaluate(() => { window.holdPersonaResolution = true; });
+    await input.fill('取消前保留的输入'); await button(branch, '发送消息').click();
+    await page.waitForFunction(() => typeof window.resumePersonaResolution === 'function'); await settle(page);
+    assert.equal(await branch.locator('.play-user-message').count(), 1);
+    assert.equal(await input.inputValue(), '取消前保留的输入');
+    await button(branch, '停止这份回复').click();
+    await page.waitForFunction(() => runtime.getStates().length === 0);
+    await page.evaluate(() => { window.holdPersonaResolution = false; window.resumePersonaResolution(); window.resumePersonaResolution = null; });
+    await settle(page);
+    assert.equal(await branch.locator('.play-user-message').count(), 1);
+    assert.equal(await input.inputValue(), '取消前保留的输入');
+    await page.evaluate(() => {
+        window.holdPersonaResolution = true; window.holdSave = true; window.resumeSave = null;
+        window.firstDisplayedIdentity = null;
+        window.identityObserver = new MutationObserver(() => {
+            const message = [...document.querySelectorAll('.play-branch-page .play-user-message')]
+                .find(message => message.querySelector('.play-user-text')?.textContent.includes('目标角色的新消息'));
+            if (message && !window.firstDisplayedIdentity) window.firstDisplayedIdentity = {
+                name: message.querySelector('.play-speaker')?.textContent,
+                avatar: message.querySelector('.play-message-avatar')?.dataset.avatar ?? null,
+            };
+        });
+        window.identityObserver.observe(document.querySelector('.play-branch-page'), { childList: true, subtree: true, characterData: true });
+    });
     await input.fill('目标角色的新消息'); await button(branch, '发送消息').click();
+    await page.waitForFunction(() => typeof window.resumePersonaResolution === 'function'); await settle(page);
+    assert.equal(await branch.locator('.play-user-message').count(), 1);
+    assert.equal(await input.inputValue(), '目标角色的新消息');
+    await page.evaluate(() => { window.holdPersonaResolution = false; window.resumePersonaResolution(); });
+    await page.waitForFunction(() => typeof window.resumeSave === 'function'); await settle(page);
+    assert.deepEqual(await page.evaluate(() => window.firstDisplayedIdentity), { name: '目标乙', avatar: 'target.png' });
+    assert.equal(await page.evaluate(() => runtime.getState().phase), 'preparing');
+    await header(branch.locator('.play-user-message').nth(1), '目标乙', 'target.png');
+    await branch.locator('.play-user-message').nth(1).scrollIntoViewIfNeeded(); await settle(page);
+    await screenshot(page, `identity-first-display-${viewport.width}.png`);
+    await page.evaluate(() => {
+        window.identityObserver.disconnect();
+        window.targetIdentity = { userName: '后来选择的用户', userAvatar: 'later.png' };
+        window.holdSave = false; window.resumeSave();
+    });
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
     await header(branch.locator('.play-user-message').nth(1), '目标乙', 'target.png');
     await input.fill('尚未发送的草稿');
@@ -124,7 +177,7 @@ async function verify(page, url, viewport) {
     await header(branch.locator('.play-user-message').first(), '茶客', 'user.png');
     assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ viewport, passed: true, checks: 'saved identity, version switch, target persona before completion, draft retained, deletion, missing/broken avatar, favorite and reopen', errors }));
+    console.log(JSON.stringify({ viewport, passed: true, checks: 'first rendered identity before save, same-request persona retained, selection cancellation preserves draft, saved identity, version switch, draft retained, deletion, missing/broken avatar, favorite and reopen', errors }));
 }
 (async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

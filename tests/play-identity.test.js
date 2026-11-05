@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { memoryFiles, characterA, contextA, time, deferred } from './play-fixture.js';
 import { createPlayground } from '../playground.js';
 import { createIndependentPlayScope } from '../play-independent.js';
+import { createNativePlayPreparer } from '../play-prompt.js';
+import { getPlayPersonaSession } from '../play-persona-session.js';
 import { createPlayChatFavorites } from '../play-chat-favorites.js';
 import { playRoundFile, playFavoriteFile, readPlayChat, readPlayRound, PLAY_HISTORY_INDEX } from '../play-history.js';
 import { playMessageIdentity, playChatMessageIdentity } from '../play-message-context.js';
@@ -26,6 +29,87 @@ async function seed(f, identity = identityA) {
     await f.store.saveResult(round.id, round.results[0].id, { text: '第一份回复', status: 'complete', finishedAt: time(1) });
     return f.store.getChat(round.id);
 }
+
+test('新分支消息首次显示和首次保存就带本次人设，保存等待不会改变本次生成', async () => {
+    const f = memoryFiles(), chat = await seed(f), saving = deferred(), saved = deferred();
+    let currentIdentity = identityB, resolutions = 0, sends = 0;
+    const displayed = [], firstSaves = [];
+    const prepare = Object.assign(async request => {
+        assert.deepEqual(request.resolvedContext.context, contextFor(identityB));
+        await request.onPersonaResolved(request.resolvedContext.context);
+        return { context: request.resolvedContext.context, send: async () => { sends++; return '本次回复'; } };
+    }, { resolveContext: async () => { resolutions++; return { context: contextFor(currentIdentity) }; } });
+    const service = serviceFor(f, prepare);
+    service.subscribe(job => {
+        const message = job.chat?.messages.find(message => message.role === 'user' && message.text === '首次显示验证');
+        if (message) displayed.push(playChatMessageIdentity(job.chat.messages, message));
+    });
+    f.io.beforeWrite = async (name, text) => {
+        if (name === PLAY_HISTORY_INDEX) { saving.resolve(); await saved.promise; }
+        else if (name.startsWith(`teahouse-play-${chat.id}-`) && name.endsWith('.json')) {
+            const value = JSON.parse(text), message = value.messages?.find(message => message.role === 'user' && message.createdAt !== chat.createdAt);
+            if (message) firstSaves.push(message.userIdentity);
+        }
+    };
+    const task = service.sendChat(chat.id, { character: characterA, characterId: chat.characterId, prompt: '首次显示验证' });
+    try {
+        await saving.promise;
+        assert.ok(displayed.length);
+        assert.deepEqual(displayed[0], identityB);
+        assert.equal(service.getState().phase, 'preparing');
+        assert.equal(sends, 0);
+        currentIdentity = identityA;
+    } finally { saved.resolve(); }
+    const result = await task;
+    assert.equal(resolutions, 1); assert.equal(sends, 1);
+    assert.ok(displayed.every(identity => JSON.stringify(identity) === JSON.stringify(identityB)));
+    assert.ok(firstSaves.length);
+    assert.deepEqual(firstSaves[0], identityB);
+    assert.deepEqual((await f.store.getChat(chat.id)).messages[2].userIdentity, identityB);
+    assert.equal(result.result.context.userName, identityB.name);
+});
+
+test('人设选择完成前不创建消息，停止或取消不写入历史，也不开始提示词处理', async () => {
+    for (const action of ['stop', 'cancel']) {
+        const f = memoryFiles(), chat = await seed(f), choosing = deferred(), choice = deferred();
+        let preparations = 0;
+        const prepare = Object.assign(async () => { preparations++; return { send: async () => '不应发送' }; }, {
+            resolveContext: async () => { choosing.resolve(); await choice.promise; return { context: contextFor(identityB) }; },
+        });
+        const service = serviceFor(f, prepare), writes = f.writes.length;
+        const task = service.sendChat(chat.id, { character: characterA, characterId: chat.characterId, prompt: '等待人设选择' });
+        await choosing.promise;
+        assert.equal(service.session.currentChat(chat.id).messages.length, chat.messages.length);
+        assert.equal(f.writes.length, writes);
+        assert.equal(service.availability({ chatId: chat.id }).code, 'busy');
+        if (action === 'stop') { service.stopAll(); assert.equal(await task, null); choice.resolve(); }
+        else { choice.reject(new DOMException('取消人设选择', 'AbortError')); assert.equal(await task, null); }
+        await nextTurn();
+        assert.equal(preparations, 0); assert.equal(f.writes.length, writes);
+        assert.equal(service.session.currentChat(chat.id).messages.length, chat.messages.length);
+        assert.equal(service.availability({ chatId: chat.id }).available, true);
+    }
+});
+
+test('发送前确定的人设只属于本次请求，换人设重新生成仍使用新的人设', async () => {
+    const f = memoryFiles(), chat = await seed(f);
+    let identity = identityA, resolutions = 0;
+    const prepare = Object.assign(async request => {
+        const context = request.resolvedContext?.context ?? contextFor(identity);
+        await request.onPersonaResolved(context);
+        return { context, send: async () => context.userName + '的回复' };
+    }, { resolveContext: async () => { resolutions++; return { context: contextFor(identity) }; } });
+    const service = serviceFor(f, prepare), target = { character: characterA, characterId: chat.characterId };
+    const first = await service.sendChat(chat.id, { ...target, prompt: '本次发送' });
+    identity = identityB;
+    const current = await service.getChat(chat.id), assistant = current.messages.at(-1);
+    const next = await service.regenerateChat(chat.id, assistant.id, first.result.id, target);
+    assert.equal(resolutions, 1);
+    assert.equal(next.result.context.userName, identityB.name);
+    const regenerated = await service.getChat(chat.id);
+    assert.deepEqual(regenerated.messages[2].userIdentity, identityA);
+    assert.deepEqual(playChatMessageIdentity(regenerated.messages, regenerated.messages[2]), identityB);
+});
 
 test('新用户身份在准备阶段保存，重复设置不覆盖身份，重新打开保留', async () => {
     const f = memoryFiles(), ready = deferred(), finish = deferred();
@@ -202,7 +286,7 @@ test('实际人设选择入口在后续提示词处理前通知身份，并等�
     const env = { character: characterA, characterCard: characterA, noChat: false,
         nativeChat: { chatId: 'latest', metadata: {}, messages: [] }, context: { ...contextA },
         tavern: { name1: identityA.name, userAvatar: identityA.avatar, power: { personas: { [identityA.avatar]: identityA.name } } } };
-    const ctx = { characterId: 0, characters: [characterA], chatId: 'latest' };
+    const ctx = { characterId: 0, characters: [characterA], chatId: 'latest', name1: identityA.name };
     t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify([{ file_name: 'latest.jsonl', last_mes: time(0) }])));
     ctx.getRequestHeaders = () => ({});
     const ready = deferred(), gate = deferred(); let complete = false;
@@ -211,6 +295,31 @@ test('实际人设选择入口在后续提示词处理前通知身份，并等�
         onPersonaResolved: async context => { assert.equal(context.userAvatar, identityA.avatar); ready.resolve(); await gate.promise; },
     }).then(value => { complete = true; return value; });
     await ready.promise; assert.equal(complete, false); gate.resolve(); assert.equal((await task).native, true);
+});
+
+test('实际准备入口复用发送前确定的人设和聊天，只在本次请求内复用', async t => {
+    const env = { character: characterA, characterCard: characterA, noChat: false,
+        nativeChat: { chatId: 'latest', metadata: {}, messages: [] }, context: { ...contextA },
+        tavern: { name1: identityA.name, userAvatar: identityA.avatar, power: { personas: { [identityA.avatar]: identityA.name } } } };
+    const ctx = { characterId: 0, characters: [characterA], chatId: 'latest', name1: identityA.name, getRequestHeaders: () => ({}),
+        eventTypes: {}, eventSource: { on() {}, async emit() {} } };
+    let reads = 0, selections = 0;
+    t.mock.method(globalThis, 'fetch', async () => { reads++; return new Response(JSON.stringify([{ file_name: 'latest.jsonl', last_mes: time(0) }])); });
+    const modules = { personas: { user_avatar: identityA.avatar }, utils: { timestampToMoment: value => ({ valueOf: () => Date.parse(value) }) } };
+    const prepare = createNativePlayPreparer(() => ctx, { loadModules: async () => modules });
+    const session = getPlayPersonaSession(() => ctx, () => modules.personas), select = session.select;
+    t.mock.method(session, 'select', (...args) => { selections++; return select(...args); });
+    const options = { environment: env, signal: new AbortController().signal };
+    const resolvedContext = await prepare.resolveContext(options);
+    assert.equal(reads, 1); assert.equal(selections, 1);
+    assert.equal(resolvedContext.context.userName, identityA.name);
+    assert.equal(resolvedContext.context.userAvatar, identityA.avatar);
+    assert.equal(resolvedContext.context.chatId, 'latest');
+    const scope = await createIndependentPlayScope(ctx, modules, { ...options, resolvedContext });
+    assert.equal(scope.native, true); assert.equal(scope.resolved, resolvedContext);
+    assert.equal(reads, 1); assert.equal(selections, 1);
+    await createIndependentPlayScope(ctx, modules, { ...options, environment: structuredClone(env) });
+    assert.equal(reads, 2); assert.equal(selections, 2);
 });
 
 test('并发请求分别保存人设，原消息删除后不重建，头像缺失不借用当前人设', async () => {

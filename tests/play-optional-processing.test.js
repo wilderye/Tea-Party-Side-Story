@@ -245,10 +245,12 @@ test('初始值的 EJS 使用可选处理，失败条目不丢弃其他初值，
 
 test('已打开的当前聊天才使用原入口；不发聊天、其他角色或人设不匹配时隔离处理', () => {
     const env = environment(), target = resolved();
-    const context = { characterId: 0, characters: [env.character], chatId: 'latest' };
+    const context = { characterId: 0, characters: [env.character], chatId: 'latest', name1: target.persona.name };
     assert.equal(canUseNativePlayScope(context, env, target), true);
     assert.equal(canUseNativePlayScope(context, { ...env, noChat: true }, target), false);
     assert.equal(canUseNativePlayScope({ ...context, chatId: 'other' }, env, target), false);
     assert.equal(canUseNativePlayScope({ ...context, characters: [{ avatar: 'B.png' }] }, env, target), false);
     assert.equal(canUseNativePlayScope(context, env, { ...target, persona: { id: 'other' } }), false);
+    assert.equal(canUseNativePlayScope(context, env, target, 'other'), false);
+    assert.equal(canUseNativePlayScope({ ...context, name1: '改名后的人设' }, env, target), false);
 });

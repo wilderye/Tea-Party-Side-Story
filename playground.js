@@ -149,6 +149,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         const available = availability({ resultId: replaceResultId || continueResultId, ...(chatMode ? { chatId: roundId } : {}) });
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
+        operation ??= continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send';
         // Synchronous capture: later settings changes do not change this request.
         // Only the public context below is saved; environment may contain keys.
         let environment;
@@ -156,12 +157,13 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         catch (error) { diagnostics?.error('读取小剧场生成环境', error); throw error; }
         const continuationError = continueResultId && playContinuationError(environment.continuation);
         if (continuationError) throw new PlaygroundError('invalid_continue_prompt', continuationError);
-        const context = readPlayContext(environment.context);
+        let context = readPlayContext(environment.context);
         const retrySettings = readPlayRetrySettings({ playRetry: environment.retry });
         let retryCount = 0;
         const resultId = continueResultId || uuid();
         let baseText = '';
         let continueExtra;
+        let resolvedContext;
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
             requestedRoundId: roundId, replaceResultId, chatMode, messageId, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
@@ -195,15 +197,21 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                     baseText = target.text; continueExtra = readPlayReasoning(target.extra ?? {});
                 }
             }
+            if (operation === 'send' && typeof prepareRequest.resolveContext === 'function') {
+                resolvedContext = await abortable(() => prepareRequest.resolveContext({ environment, signal: job.controller.signal }), job.controller.signal);
+                context = readPlayContext({ ...context, ...resolvedContext.context });
+                job.context = resultContext = context;
+            }
             job.controller.signal.throwIfAborted(); assertCurrent(environment);
             const input = { roundId, newRoundId: uuid(), ownerId: uuid(), userMessageId: uuid(), assistantMessageId: uuid(),
                 userBodyRevision: uuid(), resultBodyRevision: uuid(), replaceResultId, continueResultId, characterId,
                 character: environment.character, prompt, origin: readPlayOrigin(origin), resultId: job.resultId, startedAt: now(), context,
-                chatMode, operation: operation ?? (continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send'),
+                chatMode, operation,
                 messageId, expectedRevision, ...(continueResultId ? { expectedText: baseText } : {}) };
             job.acceptedId = roundId ?? input.newRoundId;
             job.messageId = messageId ?? input.assistantMessageId;
             job.userMessageId = input.operation === 'send' ? input.userMessageId : null;
+            job.userIdentity = job.userMessageId ? playUserIdentity(context) : null;
             let acceptance;
             try { acceptance = session.begin(input); }
             catch (error) { job.acceptedId = null; throw error; }
@@ -240,6 +248,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 continueMessage: continueResultId ? baseText : undefined,
                 ...(continueResultId ? { continueExtra } : {}),
                 signal: job.controller.signal,
+                ...(resolvedContext ? { resolvedContext } : {}),
                 onPersonaResolved: recordUserIdentity,
             }), job.controller.signal);
             if (typeof request?.send !== 'function') throw new PlaygroundError('invalid_prepared_request', '提示词处理没有返回可发送的请求，本次没有发送到模型。');
@@ -306,7 +315,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (!job.acceptedId) {
                     jobs.delete(job.resultId); job.phase = 'idle';
                     for (const listener of listeners) listener(readJob(job));
-                    if (job.controller.signal.aborted) return null;
+                    if (job.controller.signal.aborted || error?.name === 'AbortError') return null;
                     throw error;
                 }
                 finalStatus = 'stopped';

@@ -47,30 +47,39 @@ async function buildPlayCore(context, modules, environment, resolved, events, pr
     return { localCore, macros, refreshFields };
 }
 
-export function canUseNativePlayScope(context, environment, resolved) {
+export function canUseNativePlayScope(context, environment, resolved, userAvatar = environment.tavern.userAvatar) {
     return !environment.noChat && !!environment.nativeChat && resolved.chatId === environment.nativeChat.chatId
         && context.characters?.[context.characterId]?.avatar === environment.character.avatar
         && (context.getCurrentChatId?.() ?? context.chatId) === resolved.chatId
-        && resolved.persona.id === environment.tavern.userAvatar;
+        && resolved.persona.id === environment.tavern.userAvatar && resolved.persona.id === userAvatar
+        && resolved.persona.name === context.name1;
 }
 
-/** Native current-chat preparation remains available; other cards are independent. */
-export async function createIndependentPlayScope(context, modules, options) {
-    const { environment, signal, prompt } = options;
+export async function resolveIndependentPlayContext(context, modules, options) {
+    const { environment, signal } = options;
     const personas = options.personaSession ?? getPlayPersonaSession(() => context, () => modules.personas);
     const resolved = await resolvePlayCharacterContext(context, environment, signal, {
         timestamp: value => modules.utils.timestampToMoment(value).valueOf(),
         selectPersona: (power, character, metadata, current) => personas.select(power, character, metadata, current, signal),
         initializeVariables: async () => ({}),
     });
+    return { ...resolved, context: { ...environment.context, chatId: resolved.chatId,
+        userName: resolved.persona.name, userAvatar: resolved.persona.id ?? '' } };
+}
+
+/** Native current-chat preparation remains available; other cards are independent. */
+export async function createIndependentPlayScope(context, modules, options) {
+    const { environment, signal, prompt } = options;
+    const resolved = options.resolvedContext ?? await resolveIndependentPlayContext(context, modules, options);
+    signal.throwIfAborted();
     environment.chatId = resolved.chatId;
     environment.chat = structuredClone(resolved.messages);
     environment.tavern.name1 = resolved.persona.name;
     environment.tavern.name2 = environment.character.name;
     environment.tavern.power = resolved.persona.power;
-    environment.context = { ...environment.context, chatId: resolved.chatId, userName: resolved.persona.name, userAvatar: resolved.persona.id ?? '' };
+    environment.context = resolved.context;
     await options.onPersonaResolved?.(environment.context);
-    if (!options.forceIndependent && canUseNativePlayScope(context, environment, resolved)) {
+    if (!options.forceIndependent && canUseNativePlayScope(context, environment, resolved, modules.personas?.user_avatar ?? environment.tavern.userAvatar)) {
         return { native: true, resolved, dispose() {} };
     }
     // Ignore markers and unfinished-reply indices belong only to the captured chat.

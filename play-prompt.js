@@ -225,7 +225,8 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
         if (isInterrupted()) throw new PlaygroundError('main_preparation_started', '主聊天开始准备新请求，本次小剧场没有发送，请重新发送。');
         if (String(current.characterId) !== String(environment.characterId)
             || current.characters?.[current.characterId]?.avatar !== environment.character.avatar
-            || current.getCurrentChatId() !== environment.chatId) {
+            || current.getCurrentChatId() !== environment.chatId || current.name1 !== environment.tavern.name1
+            || (modules.personas && modules.personas.user_avatar !== environment.tavern.userAvatar)) {
             throw new PlaygroundError('chat_changed', '聊天环境已经改变，本次没有发送，请重新发送。');
         }
     };
@@ -365,6 +366,7 @@ async function prepareNativeRequest(ctx, modules, { prompt, environment, signal,
 
 /** Each preparation uses its own scope; native modules are loaded once. */
 export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules, prepareMessages = preparePlayPreset,
+    resolveContext = async (...args) => (await import('./play-independent.js')).resolveIndependentPlayContext(...args),
     createScope = async (...args) => (await import('./play-independent.js')).createIndependentPlayScope(...args) } = {}) {
     let loading, modules, tokenCountOffset = 0;
     const personaSession = getPlayPersonaSession(ctx, () => modules?.personas);
@@ -399,6 +401,10 @@ export function createNativePlayPreparer(ctx, { loadModules = loadTavernModules,
                 (...args) => scope.events.emit(...args), () => false);
             return { ...request, context: { ...options.environment.context, ...request.context } };
         } finally { scope.dispose(); }
+    };
+    prepare.resolveContext = async options => {
+        options.signal.throwIfAborted(); await ready(); options.signal.throwIfAborted();
+        return resolveContext(ctx(), modules, { ...options, personaSession });
     };
     prepare.ready = ready;
     prepare.isReady = () => !!modules;
