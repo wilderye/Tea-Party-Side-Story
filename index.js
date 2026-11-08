@@ -19,6 +19,7 @@ settings.favorites ??= {};
 settings.enabled ??= true;
 settings.compact ??= true;
 settings.showGore = settings.showGore === true;
+settings.viewDiagnostics = settings.viewDiagnostics === true;
 settings.qrEnabled ??= false;
 settings.edgeEnabled ??= false;
 if (!['left', 'right'].includes(settings.edgeSide)) settings.edgeSide = 'left';

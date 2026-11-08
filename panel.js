@@ -1314,11 +1314,39 @@ export function createTheatrePanel(ctx, state, actions) {
         if (actions.playground) renderPlayRetrySettings(group('自动重试'), state.settings, actions.saveSettings);
         if (actions.diagnostics) diagnosticsView = renderDiagnostics(area, actions.diagnostics, viewState?.logs);
         if (actions.playground) renderPlayContinuationSettings(group('小剧场续写'), state.settings, actions.saveSettings);
+        const developer = actions.diagnostics ? renderDeveloperSettings(area, viewState?.developer) : null;
         workspace.append(area);
         settingsView = {
-            capture: () => ({ scrollTop: area.scrollTop, rules: processingSettings?.capture(), logs: diagnosticsView?.capture() }),
+            capture: () => ({ scrollTop: area.scrollTop, rules: processingSettings?.capture(), logs: diagnosticsView?.capture(), developer: developer?.open }),
             layout: () => processingSettings?.layout(),
         };
+    }
+    function startViewDiagnostics() {
+        if (!panelHost || viewDiagnostics || state.settings.viewDiagnostics !== true) return;
+        viewDiagnostics = createViewDiagnostics(panelHost, actions.diagnostics, () => ({ scope, mode, route: playRoute,
+            appearance: state.settings.appearance === 'tavern' ? 'tavern' : 'default',
+            fontSource: state.settings.fontSource === 'tavern' ? 'tavern' : 'default' }));
+    }
+    function stopViewDiagnostics() {
+        viewDiagnostics?.dispose(); viewDiagnostics = null;
+    }
+    function renderDeveloperSettings(area, open) {
+        const section = element('details', undefined, 'tea-settings-group tea-developer-settings');
+        const summary = element('summary'); summary.append(element('h3', '开发者工具'));
+        const label = element('label', undefined, 'tea-setting-row');
+        const toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = state.settings.viewDiagnostics === true;
+        toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', 'tea-view-diagnostics-description');
+        toggle.setAttribute('aria-label', '记录显示观察');
+        label.append(element('strong', '记录显示观察'), toggle);
+        const description = element('p', '进入页面后 20 秒内记录显示状态，用于排查显示问题。开启后会影响性能。', 'tea-setting-description');
+        description.id = 'tea-view-diagnostics-description';
+        toggle.addEventListener('change', () => {
+            state.settings.viewDiagnostics = toggle.checked; actions.saveSettings();
+            if (!toggle.checked) { stopViewDiagnostics(); return; }
+            startViewDiagnostics(); viewDiagnostics?.activate('render');
+        });
+        section.open = !!open; section.append(summary, label, description); area.append(section);
+        return section;
     }
     function renderAppearanceSetting(area) {
         const row = element('label', undefined, 'tea-setting-row'), select = element('select');
@@ -1388,9 +1416,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer = new ResizeObserver(measureBodies);
                 mode = media.matches && isRecordFavorites() && catalog.recordOpen ? 'record' : 'list';
                 message = ''; panelHost = element('div'); panelHost.id = 'teahouse-panel-host'; panel = null; surfaces.clear(); selectSurface();
-                viewDiagnostics = createViewDiagnostics(panelHost, actions.diagnostics, () => ({ scope, mode, route: playRoute,
-                    appearance: state.settings.appearance === 'tavern' ? 'tavern' : 'default',
-                    fontSource: state.settings.fontSource === 'tavern' ? 'tavern' : 'default' }));
+                startViewDiagnostics();
                 mobileNavigation = createMobileNavigation(panelHost, media);
                 panelHost.addEventListener('focusin', event => {
                     const surface = event.target.closest('.tea-panel-surface');
@@ -1489,7 +1515,7 @@ export function createTheatrePanel(ctx, state, actions) {
                 observer?.disconnect(); cancelAnimationFrame(measureFrame); media?.removeEventListener('change', onBreakpoint);
                 window.visualViewport?.removeEventListener('resize', resizeViewport); window.visualViewport?.removeEventListener('scroll', resizeViewport);
                 appearance?.dispose(); appearance = null; popup = null; panel = null; panelHost = null; surfaces.clear(); opening = false;
-                viewDiagnostics?.dispose(); viewDiagnostics = null;
+                stopViewDiagnostics();
                 searchComposing = false;
                 restoringCatalog = false;
             }

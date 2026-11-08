@@ -8,7 +8,8 @@ const root = path.resolve(__dirname, '..');
 const harness = base.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">')
     .replace("import {createTheatrePanel}", "import {createDiagnostics} from '/diagnostics.js';\nimport {createTheatrePanel}")
     .replace('loadRegex:async()=>engine', 'loadRegex:async()=>{if(window.regexGate)await regexGate;if(window.rejectRules)throw Error("synthetic rules unavailable");return engine;}')
-    .replace('const ui=window.ui=', 'window.diagnostics=createDiagnostics();libraryActions.diagnostics=diagnostics;\nconst ui=window.ui=');
+    .replace('const ui=window.ui=', 'window.diagnostics=createDiagnostics();libraryActions.diagnostics=diagnostics;\nconst ui=window.ui=')
+    .replace('{enabled:true,pageSize:5,favorites:{}}', '{enabled:true,pageSize:5,favorites:{},viewDiagnostics:true}');
 const server = http.createServer(async (request, response) => {
     try {
         const name = new URL(request.url, 'http://test').pathname.slice(1);

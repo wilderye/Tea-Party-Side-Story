@@ -261,6 +261,13 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .tea-settings .tea-update-status:empty { display:none; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-settings .tea-content-preference { padding:12px 0; border-bottom:0; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-settings .tea-content-preference .tea-setting-row { padding:0; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings { padding-top:8px; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings>summary { padding:8px 0; list-style:none; cursor:pointer; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings>summary::-webkit-details-marker { display:none; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings>summary>h3 { display:list-item; list-style:disclosure-closed inside; color:var(--tea-heading,var(--tea-forest))!important; font:700 19px/28px var(--tea-display); }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings[open]>summary { margin-bottom:8px; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-developer-settings[open]>summary>h3 { list-style-type:disclosure-open; }
+:is(#teahouse-panel,.tea-panel-surface) .tea-settings .tea-developer-settings>.tea-setting-row { padding:0; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-library-settings>.tea-text-button { margin-top:8px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-prompt-settings { margin-top:16px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-retry-conditions { display:flex; flex-wrap:wrap; gap:8px 32px; }

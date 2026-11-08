@@ -8,7 +8,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const settingsHarness = harness.replace("import {createTheatrePanel}",
-    "import {createDiagnostics} from '/diagnostics.js';\nconst diagnostics = createDiagnostics();\nimport {createTheatrePanel}")
+    "import {createDiagnostics} from '/diagnostics.js';\nconst diagnostics = window.diagnostics = createDiagnostics();\nimport {createTheatrePanel}")
     .replace('{...libraryActions,playground:runtime,promptFavorites}', '{...libraryActions,playground:runtime,promptFavorites,diagnostics}');
 const server = http.createServer(async (request, response) => {
     try {
@@ -41,8 +41,8 @@ async function verifySections(page, viewport) {
             inside: [...area.querySelectorAll('.tea-setting-row,.tea-update-setting,.play-api-fields')]
                 .filter(node => node.checkVisibility()).map(node => getComputedStyle(node).borderBottomWidth),
         }));
-        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '正则与隐藏标签', '阅读外观', '自动重试', '插件日志', '小剧场续写']);
-        assert.deepEqual(metrics.groups.map(group => group.line), ['1px', '1px', '1px', '1px', '1px', '1px', '0px'], '相邻板块有线，末尾不再画线');
+        assert.deepEqual(metrics.groups.map(group => group.title), ['剧场库', '小剧场生成', '正则与隐藏标签', '阅读外观', '自动重试', '插件日志', '小剧场续写', '开发者工具']);
+        assert.deepEqual(metrics.groups.map(group => group.line), ['1px', '1px', '1px', '1px', '1px', '1px', '1px', '0px'], '相邻板块有线，末尾不再画线');
         assert.ok(metrics.inside.every(line => line === '0px'), '板块内部的设置之间没有分割线');
     };
     await checkDividers();
@@ -71,6 +71,51 @@ async function verifySections(page, viewport) {
         area.scrollTop += reading.getBoundingClientRect().top - area.getBoundingClientRect().top - 16;
     });
     await screenshot(page, `settings-sections-${viewport.width}.png`);
+}
+
+async function verifyDeveloperTools(page, viewport) {
+    const settings = page.locator('.tea-settings'), tools = settings.locator('.tea-developer-settings');
+    const toggle = settings.getByRole('switch', { name: '记录显示观察', exact: true });
+    const views = () => page.evaluate(() => diagnostics.read().entries.filter(entry => entry.view).map(entry => entry.operation));
+    const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('processingSettings') || '{}').viewDiagnostics);
+    assert.equal(await settings.evaluate(area => area.lastElementChild.matches('details.tea-developer-settings')), true, '开发者工具位于设置最底部');
+    assert.equal(await tools.evaluate(node => node.open), false, '开发者工具默认折叠');
+    assert.equal(await toggle.isVisible(), false, '折叠时不显示开关');
+    assert.deepEqual(await views(), [], '默认不记录显示观察');
+    await settings.evaluate(area => { area.scrollTop = area.scrollHeight; });
+    await screenshot(page, `settings-developer-collapsed-${viewport.width}.png`);
+    await tools.locator('summary').click();
+    assert.equal(await toggle.isVisible(), true); assert.equal(await toggle.isChecked(), false, '默认不开启');
+    assert.equal(await settings.locator('#tea-view-diagnostics-description').textContent(), '进入页面后 20 秒内记录显示状态，用于排查显示问题。开启后会影响性能。');
+    const metrics = await tools.evaluate(node => {
+        const box = target => target.getBoundingClientRect(), summary = node.querySelector('summary'), heading = summary.querySelector('h3');
+        const group = node.previousElementSibling, previous = group.querySelector(':scope>h3'), row = node.querySelector('.tea-setting-row');
+        const style = target => ['color', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight'].map(key => getComputedStyle(target)[key]);
+        return { summary: box(summary).height, headingTop: box(heading).top - box(node).top, previousTop: box(previous).top - box(group).top,
+            gap: box(row).top - box(heading).bottom, heading: style(heading), previous: style(previous),
+            inside: [row, node.querySelector('.tea-setting-description')].every(item => box(item).right <= box(node).right + 1) };
+    });
+    assert.ok(metrics.summary >= 44, '折叠标题便于点按');
+    assert.equal(metrics.headingTop, metrics.previousTop, '标题与其他板块对齐');
+    assert.equal(metrics.gap, 16, '展开后标题与内容的间距和其他板块一致');
+    assert.deepEqual(metrics.heading, metrics.previous, '标题样式与其他板块一致');
+    assert.ok(metrics.inside, '开关和说明不超出板块');
+    await settings.evaluate(area => { area.scrollTop = area.scrollHeight; });
+    await screenshot(page, `settings-developer-${viewport.width}.png`);
+    await toggle.setChecked(true);
+    assert.equal(await saved(), true, '开启后保存设置');
+    assert.ok((await views()).includes('显示观察：打开面板'), '开启后立即开始记录');
+    const gore = settings.getByRole('switch', { name: '显示 G 向内容', exact: true });
+    await gore.setChecked(true); await gore.setChecked(false); await settle(page);
+    assert.equal(await tools.evaluate(node => node.open), true, '设置重新生成后保持展开');
+    assert.equal(await toggle.isChecked(), true);
+    await toggle.setChecked(false);
+    assert.equal(await saved(), false, '关闭后保存设置');
+    const stopped = await views();
+    assert.equal(stopped.at(-1), '显示观察：结束本次打开', '关闭后立即停止记录');
+    await page.waitForTimeout(600);
+    assert.deepEqual(await views(), stopped, '关闭后不再记录');
+    assert.ok(await page.locator(':is(#teahouse-panel,.tea-panel-surface[data-active=true])').evaluate(node => node.scrollWidth - node.clientWidth <= 1));
 }
 
 async function verifyTags(page, viewport, fallback) {
@@ -153,10 +198,10 @@ async function verifyTags(page, viewport, fallback) {
                 await settle(page);
                 assert.ok((await page.locator('.tea-settings').innerText()).includes('正则与隐藏标签'));
                 assert.equal(await page.locator('vite-error-overlay, nextjs-portal').count(), 0);
-                if (!fallback) await verifySections(page, viewport);
+                if (!fallback) { await verifySections(page, viewport); await verifyDeveloperTools(page, viewport); }
                 await verifyTags(page, viewport, fallback);
                 assert.deepEqual(errors, []);
-                console.log(JSON.stringify({ url, viewport, fallback, checks: '板块分割线、内部无线、保留下拉框样式、已确认的空白、标签自动折行、五行上限、滚动到底、缩回一行、重新打开、留空保存、无溢出', errors }));
+                console.log(JSON.stringify({ url, viewport, fallback, checks: '板块分割线、内部无线、保留下拉框样式、已确认的空白、开发者工具折叠与开关、标签自动折行、五行上限、滚动到底、缩回一行、重新打开、留空保存、无溢出', errors }));
                 await context.close();
             }
         }
