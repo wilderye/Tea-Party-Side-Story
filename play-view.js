@@ -1259,6 +1259,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
                 selections.set(job.roundId, job.resultId);
             }
             scheduleSave();
+            if (request.key === characterKey(selected) && visible) updateComposer();
         }
         changedJobs.set(job.roundId ?? job.requestedRoundId ?? job.resultId, job);
         if (!streamFrame && visible && !(mobile.matches && browsing)) streamFrame = requestAnimationFrame(renderChangedJobs);
@@ -1279,7 +1280,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             applyJob(job);
             if (request && pendingReveal?.roundId === job.roundId && visible) {
                 resetHistoryWindow(rows, job.roundId, characterKey(selected));
-                renderHistory(); updateComposer(); jumpToLatest(); pendingReveal = null;
+                renderHistory(); jumpToLatest(); pendingReveal = null;
             }
         }
     });

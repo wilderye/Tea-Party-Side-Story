@@ -20,6 +20,43 @@ async function fixture() {
     return { ...f, session, errors, events, chat: session.currentChat(round.id) };
 }
 
+test('页面通知保留聊天目录，起始正文读齐后才提供演出记录', async () => {
+    const f = await fixture(), events = [];
+    const service = createPlayground({ history: f.store, captureEnvironment: () => ({ character: characterA, context: contextA }),
+        isCurrent: () => true, prepareRequest: async () => ({ send: async () => '回复' }) });
+    service.subscribe(event => events.push(event));
+    await service.session.getChatMetadata(f.chat.id);
+    const message = f.chat.messages[1], resultId = message.results[0].id;
+    service.publish({ roundId: f.chat.id, type: 'content' });
+    assert.equal(events.at(-1).round, null);
+    assert.equal(events.at(-1).chat.messages[1].results[0].text, undefined);
+    assert.equal(service.session.currentRound(f.chat.id).results[0].text, undefined);
+    await service.session.loadMessage(f.chat.id, message.id, resultId);
+    service.publish({ roundId: f.chat.id, type: 'content' });
+    assert.equal(events.at(-1).round, null);
+    assert.equal(events.at(-1).chat.messages[1].results[0].text, '原回复');
+    await service.getRound(f.chat.id);
+    service.publish({ roundId: f.chat.id, type: 'content' });
+    assert.equal(events.at(-1).round.prompt, f.chat.messages[0].text);
+    assert.equal(events.at(-1).round.results[0].text, '原回复');
+    await service.session.getChatMetadata(f.chat.id);
+    service.publish({ roundId: f.chat.id, type: 'content' });
+    assert.equal(events.at(-1).round.results[0].text, '原回复');
+});
+
+test('已删除用户消息的完整演出记录仍通过页面通知更新', async () => {
+    const f = await fixture(), events = [];
+    await f.store.removePrompt(f.chat.id, f.chat.messages[0].text);
+    const service = createPlayground({ history: f.store, captureEnvironment: () => ({ character: characterA, context: contextA }),
+        isCurrent: () => true, prepareRequest: async () => ({ send: async () => '回复' }) });
+    service.subscribe(event => events.push(event));
+    await service.getRound(f.chat.id);
+    service.publish({ roundId: f.chat.id, type: 'content' });
+    assert.equal(events.at(-1).round.prompt, null);
+    assert.equal(events.at(-1).round.initialUserId, null);
+    assert.equal(events.at(-1).round.results[0].text, '原回复');
+});
+
 test('四种消息编辑立即显示，保存确认不覆盖后续修改，跨页使用同一正文', async () => {
     for (const page of ['round', 'chat']) for (const role of ['user', 'assistant']) {
         const f = await fixture(), message = f.chat.messages.find(message => message.role === role);

@@ -55,10 +55,13 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     session ??= createPlaySession(history, { onSaveError, onChange: publish });
     function publish(event) {
         const job = findJob(event.resultId) ?? [...jobs.values()].find(job => job.requestedRoundId === event.roundId);
+        const round = session.currentRound(event.roundId);
+        const roundReady = round && (!round.initialUserId || typeof round.prompt === 'string')
+            && round.results.every(result => typeof result.text === 'string');
         const state = { ...readJob(job), ...event, roundId: event.roundId,
             characterAvatar: job?.characterAvatar ?? session.character(event.roundId)?.avatar,
             characterName: job?.characterName ?? session.character(event.roundId)?.name,
-            round: session.currentRound(event.roundId), chat: session.currentChat(event.roundId) };
+            round: roundReady ? round : null, chat: session.currentChat(event.roundId) };
         for (const listener of listeners) {
             try { listener(state); }
             catch (error) { diagnostics?.error('更新剧场演出界面', error); }

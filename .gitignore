@@ -37,6 +37,7 @@ tests/*
 !tests/play-hidden-floors.browser.cjs
 !tests/play-hidden-native.browser.cjs
 !tests/play-chat-regression.browser.cjs
+!tests/play-history-return.browser.cjs
 !tests/play-storage.test.js
 !tests/playground.test.js
 !tests/play-concurrency.test.js
