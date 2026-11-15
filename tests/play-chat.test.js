@@ -108,6 +108,25 @@ async function append(f, chat, prompt, text = '后续回复') {
     return { chat: await f.store.getChat(chat.id), started };
 }
 
+test('收藏单个 AI 版本只读取目标正文，其他消息缺失不阻挡收藏，错误消息身份不能收藏', async () => {
+    const f = memoryFiles(); let chat = await seed(f);
+    for (let i = 0; i < 15; i++) ({ chat } = await append(f, chat, `收藏范围用户 ${i}`));
+    const message = chat.messages[1], result = message.results[1];
+    f.files.delete(playBodyFile(chat.messages[0].id, chat.messages[0].bodyRevision));
+    const reads = []; f.io.beforeRead = name => reads.push(name);
+    const store = f.createStore(), before = f.writes.length;
+    const input = { roundId: chat.id, messageId: message.id, resultId: result.id, startedAt: result.startedAt,
+        expectedText: result.text, text: result.text, firstLine: result.text };
+    const favorite = await store.addFavorite(input);
+    assert.equal(favorite.text, result.text);
+    assert.deepEqual(reads.filter(name => name.startsWith('teahouse-play-body-')), [playBodyFile(result.id, result.bodyRevision)]);
+    assert.equal(f.writes.length - before, 2);
+    await assert.rejects(store.addFavorite({ ...input, messageId: chat.messages.at(-1).id }), { code: 'result_missing' });
+    f.files.delete(playBodyFile(result.id, result.bodyRevision));
+    await assert.rejects(f.createStore().addFavorite(input), { code: 'body_missing' });
+    assert.equal(f.writes.length - before, 2);
+});
+
 test('聊天阅读窗口只读显示范围和当前版本，翻页复用正文缓存，版本列表按需读取', async () => {
     const f = memoryFiles(); let chat = await seed(f);
     for (let i = 0; i < 15; i++) ({ chat } = await append(f, chat, `第 ${i} 次发送`));

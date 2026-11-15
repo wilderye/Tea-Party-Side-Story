@@ -40,6 +40,20 @@ test('未修改的选集消息直接收藏原篇目，星标与剧场库共用�
     assert.equal(writes.length, 0);
 });
 
+test('明确设置收藏遵循最后选择，其他入口已改变状态时不反向切换；取消未收藏消息不创建手稿', async () => {
+    const { state, favorites, writes, actions } = fixture(), round = from(story);
+    await favorites.set(round, true);
+    await favorites.set(round, true);
+    assert.equal(favorites.isFavorite(round), true);
+    actions.toggleFavorite(story.id);
+    await favorites.set(round, false);
+    assert.equal(favorites.isFavorite(round), false);
+    const cancelled = await favorites.set({ prompt: '没有收藏过的手写消息', origin: null }, false);
+    assert.deepEqual(cancelled, { id: null, favorite: false, created: false });
+    assert.equal(writes.length, 0);
+    assert.equal(state.manuscripts.size, 0);
+});
+
 test('修改选集内容另存带来源标题的手稿，后续编辑和取消收藏都保留旧手稿', async () => {
     const { state, favorites, writes } = fixture();
     const round = { ...from(story), prompt: `${story.body}\n改为清晨，并保留 <%= example %>。` };

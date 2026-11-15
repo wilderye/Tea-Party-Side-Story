@@ -18,21 +18,25 @@ export function createPlayPromptFavorites(state, { loaded, saveManuscript, toggl
         return !!entry && Object.hasOwn(state.settings.favorites, entry.id);
     };
 
+    async function set(round, favorite) {
+        await loaded;
+        if (state.settings.enabled === false) throw new Error('插件已停用');
+        if (typeof round?.prompt !== 'string' || !round.prompt.trim()) throw new Error('这条用户消息已删除，无法收藏。');
+        let entry = findEntry(round);
+        const created = !entry && favorite;
+        if (created) {
+            const firstLine = round.prompt.split(/\r\n?|\n/).find(line => line.trim()).trim();
+            entry = await saveManuscript({ type: 'standalone', body: round.prompt,
+                title: round.origin?.title?.trim() || truncateTitle(firstLine) });
+        }
+        if (entry && Object.hasOwn(state.settings.favorites, entry.id) !== favorite) await toggleFavorite(entry.id);
+        return { id: entry?.id ?? null, favorite: !!entry && Object.hasOwn(state.settings.favorites, entry.id), created };
+    }
     return {
-        isFavorite,
+        isFavorite, set,
         async toggle(round) {
             await loaded;
-            if (state.settings.enabled === false) throw new Error('插件已停用');
-            if (typeof round?.prompt !== 'string' || !round.prompt.trim()) throw new Error('这条用户消息已删除，无法收藏。');
-            let entry = findEntry(round);
-            const created = !entry;
-            if (!entry) {
-                const firstLine = round.prompt.split(/\r\n?|\n/).find(line => line.trim()).trim();
-                entry = await saveManuscript({ type: 'standalone', body: round.prompt,
-                    title: round.origin?.title?.trim() || truncateTitle(firstLine) });
-            }
-            await toggleFavorite(entry.id);
-            return { id: entry.id, favorite: Object.hasOwn(state.settings.favorites, entry.id), created };
+            return set(round, !isFavorite(round));
         },
     };
 }

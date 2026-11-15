@@ -3,6 +3,7 @@ import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { truncateTitle } from './library.js';
 import { createCharacterAvatar } from './play-character-picker.js';
+export { favoriteSourceKey } from './play-favorite-operations.js';
 
 export function favoriteFirstLine(text) {
     return [...playTextPreview(text, true)].slice(0, 160).join('');
@@ -11,10 +12,6 @@ export function favoriteFirstLine(text) {
 export function favoriteTitle(item, limit = 28) {
     const title = item.title.trim() || item.firstLine || '内容已隐藏';
     return truncateTitle(title, limit);
-}
-
-export function favoriteSourceKey({ roundId, resultId, startedAt }) {
-    return `${roundId}/${resultId}/${startedAt}`;
 }
 
 /** A reader owns its inline draft; saved content stays in the history service. */

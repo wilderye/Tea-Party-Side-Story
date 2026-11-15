@@ -53,6 +53,7 @@ async function screenshot(page,name){
    assert.equal(await panel.isVisible(),true,'关闭结果列表不会关闭整个面板');
    const original=await page.evaluate(id=>runtime.getRound(id),ids.a);
    await record.getByRole('button',{name:'收藏演出记录',exact:true}).click();
+   await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
    await page.waitForFunction(async()=> (await runtime.listFavorites()).length===1);
    const originalFavorite = await page.evaluate(async () => runtime.getFavorite((await runtime.listFavorites())[0].id));
    assert.ok(originalFavorite.text.includes('全局已处理 甲的规则'));
@@ -84,6 +85,7 @@ async function screenshot(page,name){
    assert.equal(await record.locator('.play-count').innerText(),'1\n/ 2');
    await record.getByRole('button',{name:'下一个结果',exact:true}).click();
    await record.getByRole('button',{name:'收藏演出记录',exact:true}).click();
+   await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
    await page.waitForFunction(async()=> (await runtime.listFavorites()).length===2);
    await record.getByRole('button',{name:'上一个结果',exact:true}).click();
    const replacement=await generate(record.getByRole('button',{name:'重新生成',exact:true}),'<content>替换第一份结果</content>');
@@ -109,6 +111,7 @@ async function screenshot(page,name){
    const generated=await generate(button('发送小剧场'),'<thinking>来源思考</thinking>\n<content>选集生成的原文</content>');
    const sourceRecord=panel.locator(`[data-record="${generated.roundId}"]`);
    await sourceRecord.getByRole('button',{name:'收藏演出记录',exact:true}).click();
+   await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
    await page.waitForFunction(async()=> (await runtime.listFavorites()).length===3);
    await button('我的收藏').click();
    assert.deepEqual(await panel.getByRole('navigation',{name:'收藏分类'}).locator('button').allTextContents(),['独立剧场','随文剧场','演出记录']);

@@ -1091,11 +1091,13 @@ export function createPlayHistory({ readFile, writeFile, removeFile, enqueueClea
             return serialize(async () => {
                 const directory = await index();
                 const row = directory.rounds.find(item => item.id === roundId);
-                const chat = row?.kind === 'chat' ? await readChatFromRow(row) : null;
+                const chat = row?.kind === 'chat' ? await readChatFromRow(row, true, { bodyStored: true }) : null;
                 const round = chat ? startRound(chat) : await readRoundFromRow(row);
-                const result = chat ? chat.messages.flatMap(message => message.results ?? []).find(result => result.id === resultId)
+                const savedResult = chat ? chat.messages.filter(message => !messageId || message.id === messageId)
+                    .flatMap(message => message.results ?? []).find(result => result.id === resultId)
                     : round.results.find(item => item.id === resultId);
-                if (!result) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+                if (!savedResult) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+                const result = chat ? { ...savedResult, text: await readBody(savedResult.id, savedResult.bodyRevision) } : savedResult;
                 assert(result.status !== 'unfinished' && isText(result.text), '请在这份回复结束并保存后收藏');
                 if (result.startedAt !== startedAt || result.text !== expectedText) {
                     throw new PlayHistoryError('favorite_conflict', '这条回复已在其他窗口修改，请重新打开记录后收藏。');

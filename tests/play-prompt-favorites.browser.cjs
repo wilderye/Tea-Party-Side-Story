@@ -74,6 +74,7 @@ async function verify(page, url, viewport) {
             const node = document.querySelector(`[data-record="${id}"] .play-user-message .tea-star`);
             return node?.getAttribute('aria-pressed') === String(pressed) && !node.disabled;
         }, { id, pressed });
+        await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     }
 
     await button('在插件中游玩').click();
@@ -102,6 +103,7 @@ async function verify(page, url, viewport) {
     const assistant = record(sourceId).locator('.play-assistant-message');
     await assistant.getByRole('button', { name: '收藏演出记录', exact: true }).click();
     await assistant.getByRole('button', { name: '取消收藏', exact: true }).waitFor();
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     assert.equal(await page.evaluate(async () => (await runtime.listFavorites()).length), 1, '用户收藏没有混入 AI 演出记录');
     const layout = await record(sourceId).evaluate(node => {
         const headers = [...node.querySelectorAll('.play-message-meta')];
@@ -138,19 +140,21 @@ async function verify(page, url, viewport) {
     await edit(typedId, finalPrompt);
     await page.evaluate(() => { window.failManuscriptSave = true; });
     await star(typedId).click();
-    await panel.getByText('模拟手稿保存失败', { exact: true }).filter({ visible: true }).waitFor();
+    await panel.getByText('收藏失败', { exact: true }).filter({ visible: true }).waitFor();
     assert.equal(await star(typedId).getAttribute('aria-pressed'), 'false');
     assert.equal((await manuscripts()).length, 3);
     await page.evaluate(() => { window.failManuscriptSave = false; window.holdManuscriptSave = true; });
-    await star(typedId).evaluate(node => { node.click(); node.click(); });
+    await star(typedId).evaluate(node => { node.click(); node.click(); node.click(); });
     await page.waitForFunction(() => typeof window.resumeManuscriptSave === 'function');
-    assert.equal(await star(typedId).isDisabled(), true);
-    assert.equal(await user(typedId).getByRole('button', { name: '修改提示词', exact: true }).isDisabled(), true);
-    assert.equal(await user(typedId).getByRole('button', { name: '删除用户消息', exact: true, includeHidden: true }).isDisabled(), true);
+    assert.equal(await star(typedId).getAttribute('aria-pressed'), 'true');
+    assert.equal(await star(typedId).isDisabled(), false);
+    assert.equal(await user(typedId).getByRole('button', { name: '修改提示词', exact: true }).isDisabled(), false);
+    assert.equal(await user(typedId).getByRole('button', { name: '删除用户消息', exact: true, includeHidden: true }).isDisabled(), false);
     await page.evaluate(() => { window.holdManuscriptSave = false; resumeManuscriptSave(); });
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     await user(typedId).getByRole('button', { name: '取消收藏', exact: true }).waitFor();
     const saved = (await manuscripts()).find(item => item.body === finalPrompt);
-    assert.equal((await manuscripts()).length, 4, '保存中重复点击只创建一份手稿');
+    assert.equal((await manuscripts()).length, 4, '连续三次点击最终收藏，只创建一份手稿');
     await toggle(typedId, false);
     assert.equal((await manuscripts()).length, 4);
     await toggle(typedId, true);
@@ -175,7 +179,7 @@ async function verify(page, url, viewport) {
         await testHistory.editPrompt(id, '其他窗口刚修改的消息', round.prompt);
     }, typedId);
     await star(typedId).click();
-    await panel.getByText('这条用户消息已在其他窗口修改，已更新显示，请核对后再收藏。', { exact: true }).filter({ visible: true }).waitFor();
+    await panel.getByText('取消收藏失败', { exact: true }).filter({ visible: true }).waitFor();
     assert.equal((await manuscripts()).length, 4);
     assert.equal(await page.evaluate(id => Object.hasOwn(fixture.settings.favorites, id), saved.id), true, '过期页面不会误取消旧收藏');
     assert.equal(await star(typedId).getAttribute('aria-pressed'), 'false');

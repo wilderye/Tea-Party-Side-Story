@@ -68,6 +68,22 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const inputSizer = createPlayInputSizer({ input, compose, page: branchPage, isVisible: () => visible && route === 'chat' && !compose.hidden,
         isComposing: () => inputComposing });
     let rows = [], limit = 24, start = 0, end = 0, favorites = new Map(), chatFavorite;
+    let favoritesLoadId = 0;
+    const favoriteOperations = playground.favoriteOperations;
+    favoriteOperations.subscribe(({ source, value, committed }) => {
+        if (committed && source.type !== 'prompt') {
+            favoritesLoadId++;
+            if (source.type === 'chat') {
+                if (source.chatId === chat?.id) chatFavorite = value;
+            } else {
+                const key = favoriteSourceKey(source);
+                if (value) favorites.set(key, value);
+                else favorites.delete(key);
+            }
+        }
+        for (const view of messageViews.values()) updateFavorite(view);
+        updateChatFavorite();
+    });
     const rowViews = new Map(), directoryRecords = new Map(), displayCache = new Map(), positions = new Map(), directories = new Map(), drafts = new Map();
     const pendingDrafts = new Map();
     const editingSession = (id = chat?.id) => messageEditing.find('chat', id);
@@ -143,13 +159,12 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         }
         for (const button of menuItems.children) button.disabled = !menuPermission(button.dataset.chatAction, active);
     }
-    function processed(message, result = currentResult(message)) {
+    function processed(message, result = currentResult(message), character = owner(), depth = messageDepths.get(message)) {
         const text = result?.text ?? message.text;
-        const depth = messageDepths.get(message);
         const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}/${depth}`;
         const cached = displayCache.get(key);
         if (cached?.raw === text) return cached.text;
-        const rendered = playground.display?.process(text, owner(), result?.context, message.role, depth) ?? text;
+        const rendered = playground.display?.process(text, character, result?.context, message.role, depth) ?? text;
         cacheEntry(displayCache, key, { raw: text, text: rendered });
         return rendered;
     }
@@ -535,10 +550,17 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function updateFavorite(view) {
         const message = view.message, result = currentResult(message);
-        const starred = message.role === 'user' ? promptFavorites?.isFavorite({ prompt: message.text, origin: message.origin })
-            : favorites.has(favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt }));
+        const source = message.role === 'user' ? { type: 'prompt', prompt: message.text, origin: message.origin }
+            : { roundId: chat.id, resultId: result.id, startedAt: result.startedAt };
+        const starred = favoriteOperations.isFavorite(source, message.role === 'user' ? promptFavorites?.isFavorite(source)
+            : favorites.get(favoriteSourceKey(source)));
         view.favorite.title = starred ? '取消收藏' : message.role === 'user' ? '收藏用户消息' : '收藏演出记录';
         view.favorite.setAttribute('aria-label', view.favorite.title); view.favorite.setAttribute('aria-pressed', String(!!starred));
+    }
+    function updateChatFavorite() {
+        if (!chat || !menuItems.firstElementChild) return;
+        menuItems.firstElementChild.textContent = favoriteOperations.isFavorite({ type: 'chat', chatId: chat.id }, chatFavorite)
+            ? '取消收藏该聊天' : '收藏该聊天';
     }
     let messageDepths = new Map();
     function renderChat(saved = positions.get(chat?.id), targetId) {
@@ -554,6 +576,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             textButton('修改聊天名称', () => void renameChat(chat)), textButton('删除该聊天', () => void deleteChat(chat)),
             textButton('删除', () => { menu.open = false; setDeletionMode(-1); }));
         for (const [index, action] of ['favorite', 'hidden', 'rename', 'delete', 'truncate'].entries()) menuItems.children[index].dataset.chatAction = action;
+        updateChatFavorite();
         const session = editingSession();
         const nodes = chatUnavailable && session ? [session.view.node] : chat.messages.slice(start, end).map(renderMessage);
         if (session && !chat.messages.some(message => message.id === session.messageId) && !nodes.includes(session.view.node)) nodes.push(session.view.node);
@@ -631,12 +654,13 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (!editingSession()) restore(positions.get(chat?.id), undefined, true);
     });
     async function loadFavorites(isCurrent = () => true) {
+        const request = ++favoritesLoadId;
         const rows = await playground.listFavorites();
-        if (!isCurrent()) return;
+        if (request !== favoritesLoadId || !isCurrent()) return;
         favorites = new Map(rows.filter(row => !row.source.type).map(row => [favoriteSourceKey(row.source), row]));
         chatFavorite = rows.find(row => row.source.type === 'chat' && row.source.chatId === chat?.id);
         for (const view of messageViews.values()) updateFavorite(view);
-        if (menuItems.firstElementChild) menuItems.firstElementChild.textContent = chatFavorite ? '取消收藏该聊天' : '收藏该聊天';
+        updateChatFavorite();
     }
     async function open(id, targetId) {
         if (chat?.id === id && !editingSession(id)) {
@@ -910,15 +934,37 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     async function toggleMessageFavorite(message) {
         if (!messagePermissions(message).favorite) return;
-        if (message.role === 'user') return run(() => promptFavorites.toggle({ prompt: message.text, origin: message.origin }));
-        const result = currentResult(message), key = favoriteSourceKey({ roundId: chat.id, resultId: result.id, startedAt: result.startedAt });
-        const existing = favorites.get(key), text = processed(message);
-        await run(() => existing ? playground.removeFavorite(existing.id) : playground.addFavorite({ roundId: chat.id,
-            messageId: message.id, resultId: result.id, startedAt: result.startedAt, expectedText: result.text, text, firstLine: favoriteFirstLine(text) }));
+        notify('');
+        if (message.role === 'user') {
+            const source = { type: 'prompt', prompt: message.text, origin: structuredClone(message.origin) };
+            return favoriteOperations.toggle(source, { value: promptFavorites.isFavorite(source),
+                add: () => promptFavorites.set(source, true), remove: () => promptFavorites.set(source, false),
+                onError: (_error, desired) => notify(desired ? '收藏失败' : '取消收藏失败') });
+        }
+        const snapshot = { id: message.id, role: message.role }, result = structuredClone(currentResult(message));
+        const character = structuredClone(owner()), depth = messageDepths.get(message);
+        const source = { roundId: chat.id, messageId: snapshot.id, resultId: result.id, startedAt: result.startedAt };
+        return favoriteOperations.toggle(source, {
+            value: favorites.get(favoriteSourceKey(source)),
+            add: () => {
+                const text = processed(snapshot, result, character, depth);
+                if (!text.trim()) throw new Error('演出内容清洗后为空，无法收藏');
+                return playground.addFavorite({ ...source, expectedText: result.text, text, firstLine: favoriteFirstLine(text) });
+            },
+            remove: favorite => playground.removeFavorite(favorite.id),
+            onError: (_error, desired) => notify(desired ? '收藏失败' : '取消收藏失败'),
+        });
     }
     async function toggleChatFavorite() {
         if (busy()) return;
-        await run(() => chatFavorite ? playground.removeFavorite(chatFavorite.id) : playground.favoriteChat(chat.id));
+        notify('');
+        const source = { type: 'chat', chatId: chat.id };
+        menu.open = false;
+        return favoriteOperations.toggle(source, {
+            value: chatFavorite, add: () => playground.favoriteChat(source.chatId),
+            remove: favorite => playground.removeFavorite(favorite.id),
+            onError: (_error, desired) => notify(desired ? '收藏失败' : '取消收藏失败'),
+        });
     }
     async function changeChatRecord(record, action) {
         if (mutating) return;

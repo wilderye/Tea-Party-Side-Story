@@ -112,7 +112,7 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
     const chatFavorites = createPlayChatFavorites({ ...history,
         getChat: id => session.getChat(id), getChatMetadata: id => session.getChatMetadata(id) }, display);
     globalThis.addEventListener?.('beforeunload', event => {
-        if (!session.hasUnsaved() && !playground.getStates().length) return;
+        if (!session.hasUnsaved() && !playground.getStates().length && !playground.favoriteOperations.hasPending()) return;
         event.preventDefault(); event.returnValue = '';
     });
     function legacySelection(id, options) {

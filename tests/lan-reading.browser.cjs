@@ -98,6 +98,7 @@ async function verify(page, url, viewport, mode) {
     await branch.getByRole('button', { name: '收藏该聊天', exact: true }).click();
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '取消收藏该聊天', exact: true }).waitFor();
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     const favorite = await page.evaluate(async () => (await runtime.listFavorites())[0]);
     await page.reload(); await page.waitForFunction(() => window.ready);

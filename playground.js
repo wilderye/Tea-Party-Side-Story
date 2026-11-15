@@ -2,6 +2,7 @@ import { createPlaySession } from './play-session.js';
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages, playStartRound } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
 import { playRequestMessages, playMessageIsPending, playUserIdentity } from './play-message-context.js';
+import { createPlayFavoriteOperations } from './play-favorite-operations.js';
 
 export class PlaygroundError extends Error {
     constructor(code, message, options) { super(message, options); this.name = 'PlaygroundError'; this.code = code; }
@@ -52,6 +53,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     diagnostics, session, onSaveError = () => {}, enabled = () => true, uuid = () => crypto.randomUUID(), now = () => new Date().toISOString() }) {
     const jobs = new Map();
     const listeners = new Set();
+    const favoriteOperations = createPlayFavoriteOperations(diagnostics);
     session ??= createPlaySession(history, { onSaveError, onChange: publish });
     function publish(event) {
         const job = findJob(event.resultId) ?? [...jobs.values()].find(job => job.requestedRoundId === event.roundId);
@@ -356,7 +358,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     }
 
     return {
-        availability, session, publish,
+        availability, session, publish, favoriteOperations,
         getState,
         getStates: () => [...jobs.values()].filter(job => !job.closed).map(readJob),
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },

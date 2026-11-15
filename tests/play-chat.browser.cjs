@@ -301,6 +301,7 @@ async function verify(page, url, viewport) {
     await branch.getByRole('button', { name: '收藏该聊天', exact: true }).click();
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '取消收藏该聊天', exact: true }).waitFor();
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     await screenshot(page, `branch-chat-${viewport.width}.png`);
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await button('我的收藏').click();
@@ -334,6 +335,7 @@ async function verify(page, url, viewport) {
     await latest.getByText('续聊后的最新AI回复', { exact: true }).waitFor();
     await latest.getByRole('button', { name: '收藏演出记录', exact: true }).click();
     await latest.getByRole('button', { name: '取消收藏', exact: true }).waitFor();
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     await latest.getByRole('button', { name: '下一个结果', exact: true }).click();
     await latest.getByText('新版本二', { exact: true }).waitFor();
     const singleId = await page.evaluate(async () => (await runtime.listFavorites()).find(row => row.source.resultId).id);
@@ -495,6 +497,7 @@ async function verify(page, url, viewport) {
     await branch.locator('iframe.play-web-output').first().contentFrame().getByRole('button',{name:'展开网页',exact:true}).waitFor();
     await branch.getByRole('button',{name:'聊天操作',exact:true}).click();
     await branch.getByRole('button',{name:'收藏该聊天',exact:true}).click();
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     await button('我的收藏').click();await button('演出记录').click();
     const longFavorite=await page.evaluate(async id=>(await runtime.listFavorites()).find(row=>row.source.chatId===id).id,longId);
     if(viewport.width<=760)await panel.locator(`.tea-story[data-id="${longFavorite}"]`).click();
@@ -590,6 +593,7 @@ async function verifyRequestedControls(page, url, viewport) {
     await branch.getByRole('button', { name: '聊天操作', exact: true }).click();
     await branch.getByRole('button', { name: '收藏该聊天', exact: true }).click();
     assert.equal(await menu.evaluate(node => node.open), false);
+    await page.waitForFunction(() => !runtime.favoriteOperations.hasPending());
     const firstUser = branch.locator('.play-user-message').first();
     const mobile = viewport.width <= 760, sheet = panel.locator('.play-edit-sheet');
     await firstUser.getByRole('button', { name: '修改用户消息', exact: true }).click();

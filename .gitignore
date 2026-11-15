@@ -95,3 +95,5 @@ README.md
 !tests/play-message-editing.browser.cjs
 !tests/play-session.test.js
 !tests/play-save-flow.browser.cjs
+!tests/play-favorite-operations.test.js
+!tests/play-favorite-feedback.browser.cjs

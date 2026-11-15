@@ -89,6 +89,20 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     let browsing = null, lastMobile = mobile.matches;
     let inputSizingFrame, inputComposing = false;
     let favoriteRows = new Map(), favoritesReady = false, favoritesRefreshId = 0;
+    const favoriteOperations = playground.favoriteOperations;
+    favoriteOperations.subscribe(({ source, value, committed }) => {
+        if (committed && !source.type) {
+            favoritesRefreshId++;
+            const key = favoriteSourceKey(source);
+            if (value) favoriteRows.set(key, value);
+            else favoriteRows.delete(key);
+            if (!favoritesReady) void refreshFavorites();
+        }
+        for (const [id, view] of views) {
+            const round = records.get(id)?.round;
+            if (round) { updateFavoriteStar(round, view); updatePromptFavoriteStar(round, view); }
+        }
+    });
     const requests = new Map(), changedJobs = new Map();
     let displayedCharacter = '', restoringPosition = false, cachedPosition = null;
     let displayLoad, batchNumber = 0, lastProgrammaticScroll;
@@ -209,61 +223,62 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function updateFavoriteStar(round, view) {
         const result = selectedResult(round);
         if (!result) { view.favorite.hidden = true; return; }
-        const favorite = favoriteRows.has(favoriteSourceKey({ roundId: round.id, resultId: result.id, startedAt: result.startedAt }));
+        const source = { roundId: round.id, resultId: result.id, startedAt: result.startedAt };
+        const favorite = favoriteOperations.isFavorite(source, favoriteRows.get(favoriteSourceKey(source)));
         view.favorite.title = favorite ? '取消收藏' : '收藏演出记录';
         view.favorite.setAttribute('aria-label', view.favorite.title); view.favorite.setAttribute('aria-pressed', String(favorite));
         view.favorite.hidden = !canEditResult(result) || !result.text.trim();
-        view.favorite.disabled = !favoritesReady || !!view.favoriting || !!view.removing || isEditing(round.id, 'assistant');
+        view.favorite.disabled = !favoritesReady || !!view.removing || isEditing(round.id, 'assistant');
     }
     function updatePromptFavoriteStar(round, view) {
-        const favorite = promptFavorites?.isFavorite(round) ?? false;
+        const favorite = favoriteOperations.isFavorite({ type: 'prompt', prompt: round.prompt, origin: round.origin }, promptFavorites?.isFavorite(round));
         view.userFavorite.title = favorite ? '取消收藏' : '收藏用户消息';
         view.userFavorite.setAttribute('aria-label', view.userFavorite.title);
         view.userFavorite.setAttribute('aria-pressed', String(favorite));
         view.userFavorite.hidden = !promptFavorites || !canEditPrompt(round);
-        view.userFavorite.disabled = !!view.favoriting || !!view.removing || isEditing(round.id, 'user');
+        view.userFavorite.disabled = !!view.removing || isEditing(round.id, 'user');
     }
     async function togglePromptFavorite(id) {
         const round = records.get(id)?.round, view = views.get(id);
-        if (!promptFavorites || !canEditPrompt(round) || !view || view.favoriting || view.removing || isEditing(id, 'user')) return;
-        view.favoriting = true; updateControls();
-        try {
+        if (!promptFavorites || !canEditPrompt(round) || !view || view.removing || isEditing(id, 'user')) return;
+        notify('');
+        const snapshot = { prompt: round.prompt, origin: structuredClone(round.origin) };
+        const set = async favorite => {
             const current = await playground.getRound(id);
-            if (current.prompt !== round.prompt) {
+            if (current.prompt !== snapshot.prompt) {
                 records.set(id, { round: current });
                 keepReading(() => renderRecord(current, view));
                 throw new Error('这条用户消息已在其他窗口修改，已更新显示，请核对后再收藏。');
             }
-            const result = await promptFavorites.toggle(current);
+            const result = await promptFavorites.set(current, favorite);
             diagnostics?.info(result.favorite ? '用户消息收藏完成' : '用户消息取消收藏完成');
-            notify(result.favorite ? result.created ? '已存入亲笔手稿并收藏' : '已收藏剧场' : '已取消收藏');
-        } catch (error) { diagnostics?.error('收藏用户消息', error); if (!playground.session.isSaveError(error)) notify(error.message); }
-        finally { view.favoriting = false; updateControls(); }
+            return result;
+        };
+        return favoriteOperations.toggle({ type: 'prompt', prompt: snapshot.prompt, origin: snapshot.origin }, {
+            value: promptFavorites.isFavorite(snapshot), add: () => set(true), remove: () => set(false),
+            onError(error, desired) { diagnostics?.error('收藏用户消息', error); notify(desired ? '收藏失败' : '取消收藏失败'); },
+        });
     }
     async function toggleFavorite(id) {
         const round = records.get(id)?.round, view = views.get(id);
-        if (!round || !view || !favoritesReady || view.favoriting || view.removing || isEditing(id, 'assistant')) return;
+        if (!round || !view || !favoritesReady || view.removing || isEditing(id, 'assistant')) return;
         const result = selectedResult(round);
         if (!canEditResult(result) || !result.text.trim()) return;
+        notify('');
         const source = { roundId: id, resultId: result.id, startedAt: result.startedAt }, key = favoriteSourceKey(source);
-        const existing = favoriteRows.get(key);
-        view.favoriting = true; updateControls();
-        try {
-            if (existing) { await playground.removeFavorite(existing.id); favoriteRows.delete(key); }
-            else {
-                const cleanedText = playground.display?.process(result.text, roundCharacter(round), result.context, 'assistant', playRoundDepth(round)) ?? result.text;
+        const character = structuredClone(roundCharacter(round)), depth = playRoundDepth(round), savedResult = structuredClone(result);
+        return favoriteOperations.toggle(source, {
+            value: favoriteRows.get(key),
+            async add() {
+                const cleanedText = playground.display?.process(savedResult.text, character, savedResult.context, 'assistant', depth) ?? savedResult.text;
                 if (!cleanedText.trim()) throw new Error('演出内容清洗后为空，无法收藏');
-                const favorite = await playground.addFavorite({ ...source, expectedText: result.text,
+                return playground.addFavorite({ ...source, expectedText: savedResult.text,
                     text: cleanedText,
                     firstLine: favoriteFirstLine(cleanedText) });
-                favoriteRows.set(key, favorite);
-            }
-            // A read started before this completed write must not put the
-            // previous star state back, even if that read returns later.
-            favoritesRefreshId++;
-            notify(existing ? '已取消收藏' : '已收藏演出记录');
-        } catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
-        finally { view.favoriting = false; if (records.get(id)?.round) updateFavoriteStar(records.get(id).round, view); updateControls(); }
+            },
+            remove: favorite => playground.removeFavorite(favorite.id),
+            onError: (_error, desired) => notify(desired ? '收藏失败' : '取消收藏失败'),
+        });
     }
     const renderPeople = resetScroll => characterPicker.render(resetScroll);
     function updateBrowser() {
@@ -540,7 +555,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id, 'user');
             view.editReply.hidden = !canEditResult(result) || isEditing(id, 'assistant');
-            view.edit.disabled = view.editReply.disabled = !!view.removing || !!view.favoriting || messageEditing.busy;
+            view.edit.disabled = view.editReply.disabled = !!view.removing || messageEditing.busy;
             view.removePrompt.hidden = view.removeReply.hidden = false;
             view.removePrompt.disabled = !canRemoveMessage(round, 'user', jobs);
             view.removeReply.disabled = !canRemoveMessage(round, 'assistant', jobs);
@@ -598,7 +613,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function canRemoveMessage(round, role, jobs = playground.getStates()) {
         if (!round || settings.enabled === false || isEditing(round.id, role)) return false;
         const view = views.get(round.id);
-        return !view?.removing && !view?.favoriting && !roundBusy(round.id, jobs);
+        return !view?.removing && !roundBusy(round.id, jobs);
     }
     async function removeMessage(id, role) {
         const round = records.get(id)?.round, view = views.get(id);
@@ -629,7 +644,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function editPrompt(id) {
         const round = records.get(id)?.round, view = views.get(id);
-        if (!canEditPrompt(round) || !view || view.removing || view.favoriting || messageEditing.busy) return;
+        if (!canEditPrompt(round) || !view || view.removing || messageEditing.busy) return;
         openMessageEditor(id, 'user');
     }
     function notifyRequestError(error) { if (!playground.session.isSaveError(error)) notify(error.message); }
@@ -699,7 +714,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
-        if (!canEditResult(result) || !output || view.removing || view.favoriting || messageEditing.busy) return;
+        if (!canEditResult(result) || !output || view.removing || messageEditing.busy) return;
         openMessageEditor(id, 'assistant', result.id);
     }
     function openMessageEditor(id, role, resultId) {
@@ -712,7 +727,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             const view = views.get(id);
             const result = role === 'assistant' ? round.results.find(item => item.id === resultId) : null;
-            if (!view || view.removing || view.favoriting || (role === 'user' ? !canEditPrompt(round) : !canEditResult(result))) return null;
+            if (!view || view.removing || (role === 'user' ? !canEditPrompt(round) : !canEditResult(result))) return null;
             records.set(id, { round });
             const original = role === 'user' ? round.prompt : result.text;
             const character = roundCharacter(round);
@@ -1003,7 +1018,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         let retainedFrames = 0;
         for (const [id, view] of views) {
             const retainFrame = !visibleIds.has(id) && !!view.item.querySelector('iframe') && retainedFrames++ < historyPageSize;
-            if (!visibleIds.has(id) && !isEditing(id) && !roundBusy(id) && !view.removing && !view.favoriting
+            if (!visibleIds.has(id) && !isEditing(id) && !roundBusy(id) && !view.removing
                 && !retainFrame) {
                 view.item.remove(); views.delete(id);
             } else if (view.item.hidden !== !visibleIds.has(id)) {
