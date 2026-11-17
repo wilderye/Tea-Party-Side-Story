@@ -423,6 +423,8 @@ async function verify(page, url, viewport) {
     await button('演出记录').click();
     if (viewport.width <= 760) await panel.locator('.tea-story').filter({ visible: true }).first().click();
     await panel.locator('.play-favorite-content').getByText('续聊后的最新AI回复', { exact: true }).waitFor();
+    assert.equal(await panel.locator('.play-favorite-reading[data-active=true] .play-sent-prompt-action').count(), 0,
+        '整条聊天收藏不显示回复旁的查看提示词按钮');
     assert.equal(await panel.getByRole('button', { name: '编辑演出记录收藏', exact: true }).filter({ visible: true }).count(), 0);
     await button('前往分支').click();
     await branch.getByText('续聊后的最新AI回复', { exact: true }).waitFor();

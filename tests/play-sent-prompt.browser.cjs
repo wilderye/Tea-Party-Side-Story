@@ -178,14 +178,11 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
             await button('我的收藏').click(); await button('演出记录').click();
             await panel.locator('.tea-story').first().click();
             const favoriteReader = panel.locator('.play-favorite-reading').filter({ visible: true });
+            assert.equal(await favoriteReader.locator('.play-sent-prompt-action').count(), 0, '演出记录收藏阅读不显示查看提示词按钮');
             await favoriteReader.getByRole('button', { name: '编辑演出记录收藏', exact: true }).click();
             const favoriteEditor = favoriteReader.getByRole('textbox', { name: '收藏内容', exact: true });
             await favoriteEditor.fill('尚未保存的收藏草稿');
-            await favoriteReader.getByRole('button', { name: '查看实际提示词', exact: true }).click();
-            assert.ok((await viewer.locator('pre').textContent()).includes('分支第二条专属提示词'));
-            await viewer.getByRole('button', { name: '复制提示词', exact: true }).click();
-            assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), await viewer.locator('pre').textContent());
-            await viewer.getByRole('button', { name: '关闭提示词查看', exact: true }).click();
+            assert.equal(await favoriteReader.locator('.play-sent-prompt-action').count(), 0, '演出记录收藏编辑不显示查看提示词按钮');
             assert.equal(await favoriteEditor.inputValue(), '尚未保存的收藏草稿');
             await favoriteReader.getByRole('button', { name: '取消', exact: true }).click();
             if (viewport.width <= 760) await button('返回收藏目录').click();
@@ -201,7 +198,7 @@ assert.ok(harness.includes('return createPreparedPlayRequest'));
                 '不请求已取消的服务器记录接口，因此不会由该接口产生 403');
             assert.doesNotMatch(await page.evaluate(() => JSON.stringify(Object.entries(localStorage))), /服务器后续处理标记|synthetic-secret|实际系统/);
             assert.deepEqual(errors, []);
-            console.log(JSON.stringify({ viewport, checks: 'per-AI-message button, correct version association, actual HTTP body, unchanged request headers, no server capture requests, text preservation, copy during favorite edit, regeneration, continuation, branch, refresh, no horizontal overflow', errors }));
+            console.log(JSON.stringify({ viewport, checks: 'per-AI-message button, correct version association, actual HTTP body, unchanged request headers, no server capture requests, text preservation, no prompt button in favorites, regeneration, continuation, branch, refresh, no horizontal overflow', errors }));
             await context.close();
         }
 

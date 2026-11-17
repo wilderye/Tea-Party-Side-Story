@@ -126,6 +126,16 @@ async function screenshot(page,name){
    const reader=panel.locator('.play-favorite-reading:visible');
    await reader.getByText('选集生成的原文',{exact:true}).waitFor();
    assert.equal(await reader.locator('.play-favorite-character').innerText(),'测试甲');
+   assert.equal(await reader.locator('.play-sent-prompt-action').count(),0,'演出记录收藏不显示查看提示词按钮');
+   if(viewport.width<=760){
+    const sourceBox=await reader.getByRole('button',{name:'前往分支',exact:true}).boundingBox();
+    const arrowsBox=await reader.locator('.play-favorite-inline-navigation').boundingBox();
+    const proseBox=await reader.locator('.play-prose').boundingBox();
+    assert.ok(Math.abs(sourceBox.y+sourceBox.height/2-arrowsBox.y-arrowsBox.height/2)<1,'前往分支与顶部箭头位于同一行');
+    assert.ok(sourceBox.x+sourceBox.width<=arrowsBox.x,'顶部箭头在前往分支的右侧且不重叠');
+    assert.ok(Math.abs(arrowsBox.x+arrowsBox.width-proseBox.x-proseBox.width)<1,'顶部箭头靠正文右侧');
+   }
+   await screenshot(page,`${viewport.width}-favorite-read.png`);
    await reader.getByRole('button',{name:'编辑演出记录收藏',exact:true}).click();
    assert.equal(await reader.locator('.play-favorite-character').isVisible(),false,'编辑收藏时隐藏角色名');
    assert.equal(await reader.getByRole('textbox',{name:'收藏标题',exact:true}).inputValue(),'从选集带来的标题');

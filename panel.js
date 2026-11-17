@@ -777,7 +777,7 @@ export function createTheatrePanel(ctx, state, actions) {
         if (show) {
             let reader = favoriteReaders.get(item.id);
             if (!reader) {
-                reader = createPlayFavoriteReader(actions.playground, { notify: showMessage, onInspectPrompt: inspectPrompt,
+                reader = createPlayFavoriteReader(actions.playground, { notify: showMessage,
                     initialScrollTop: catalog.readingId === item.id ? catalog.readingScroll : 0,
                     onGoToBranch: (id, messageId) => void enterBranch(id, messageId),
                     onNavigate: direction => void openRecordFavorite(item.id, direction),
