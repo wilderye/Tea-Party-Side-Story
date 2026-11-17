@@ -131,11 +131,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
     function messagePermissions(message, jobs = ownJobs()) {
         const result = currentResult(message), session = editingSession(), editing = session?.messageId === message.id;
-        const idle = deletingFrom === null && !writeBlocked() && !editing && !playMessageIsPending(message, jobs);
+        const ready = !writeBlocked() && !editing && !playMessageIsPending(message, jobs), idle = deletingFrom === null && ready;
         const index = message.results?.indexOf(result), last = chat.messages.at(-1)?.id === message.id, chatIdle = deletingFrom === null && !busy(jobs);
         const copiesEditor = !!session && chat.messages.findIndex(item => item.id === session.messageId) <= chat.messages.indexOf(message);
-        return { inspect: deletingFrom === null && !chatUnavailable, more: deletingFrom === null && !chatUnavailable, edit: idle, remove: idle, visibility: idle, branch: idle && !copiesEditor,
-            favorite: idle && !!(result?.text ?? message.text)?.trim(),
+        return { inspect: !chatUnavailable, more: !chatUnavailable, edit: idle, remove: idle, visibility: idle, branch: idle && !copiesEditor,
+            favorite: ready && !!(result?.text ?? message.text)?.trim(),
             previous: chatIdle && index > 0, choose: chatIdle,
             next: chatIdle && (index < (message.results?.length ?? 0) - 1 || canWrite()),
             again: !writeBlocked() && !editing && chatIdle && canWrite(),
@@ -355,7 +355,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function updateReadingControls() {
         const height = feed.clientHeight - getReadingInset();
-        const hidden = !visible || route !== 'chat' || !chat || deletingFrom !== null || height <= 0
+        const hidden = !visible || route !== 'chat' || !chat || height <= 0
             || (end >= chat.messages.length && feed.scrollHeight - feed.clientHeight - feed.scrollTop <= height);
         const updates = [];
         for (const node of content.querySelectorAll('[data-message-id]')) {
@@ -363,7 +363,6 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             if (!top) continue;
             const session = editingSession(), editor = session?.messageId === node.dataset.messageId ? session.editor : null;
             const hidden = !playMessageNeedsTop(node.querySelector('.play-results,.play-user-text'), node.querySelector('.play-message-meta'), height, editor);
-            top.disabled = deletingFrom !== null;
             if (top.hidden !== hidden) updates.push({ top, hidden });
         }
         if (jump.hidden !== hidden) jump.hidden = hidden;
@@ -377,7 +376,6 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         for (const view of messageViews.values()) if (view.userTop) view.userActions.hidden = view.userTop.hidden;
     }
     function jumpToMessage(node) {
-        if (deletingFrom !== null) return;
         const session = editingSession();
         scrollPlayMessageToTop(feed, node, getReadingInset(), setFeedScroll, session?.messageId === node.dataset.messageId ? session.editor : null);
         remember(); updateReadingControls();
