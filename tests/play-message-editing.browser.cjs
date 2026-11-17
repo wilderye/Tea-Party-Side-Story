@@ -223,7 +223,7 @@ async function verifyTouch(page, url, mode) {
         const feed = node.closest('.play-feed').getBoundingClientRect(), field = node.getBoundingClientRect();
         return { left: field.left - feed.left, right: feed.right - field.right };
     });
-    if (page.viewportSize().width <= 760) { assert.equal(bounds.left, 28); assert.equal(bounds.right, 28); }
+    if (page.viewportSize().width <= 760) { assert.equal(bounds.left, 18); assert.equal(bounds.right, 18); }
     const client = await page.context().newCDPSession(page);
     const prepare = async () => {
         await input.evaluate(node => { const feed = node.closest('.play-feed'); feed.scrollTop += node.getBoundingClientRect().top - feed.getBoundingClientRect().top + 100; node.scrollTop = 550; });

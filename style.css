@@ -857,7 +857,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-navigation { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-inline-navigation { display:flex; align-items:center; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-source-row:has(>.play-favorite-inline-navigation:not([hidden])) { display:flex; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-reading:not(:has(.play-edit-form)) .play-favorite-article { --play-message-inset:20px; padding-left:20px; padding-right:20px; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-reading:not(:has(.play-edit-form)) .play-favorite-article { --play-message-inset:10px; padding-left:10px; padding-right:10px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-article { padding-top:10px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-head { gap:8px; margin-bottom:18px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-reading:not(:has(.play-edit-form)) .play-favorite-head { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px 8px; }
@@ -893,7 +893,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-topbar { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-reading-area { --play-prose-leading:1.73; --play-paragraph-gap:.72em; }
     :is(#teahouse-panel,.tea-panel-surface) .play-feed { scrollbar-gutter:auto; scroll-padding-top:44px; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-feed-content { padding:66px 28px 24px; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-feed-content { padding:66px 18px 24px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-message { --play-message-inset:10px; padding:12px var(--play-message-inset) 6px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-record>.play-message { margin-bottom:22px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-chat-feed .play-message { margin-bottom:24px; }

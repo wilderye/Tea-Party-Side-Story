@@ -113,7 +113,7 @@ async function verify(page, viewport) {
     if (mobile) {
         assert.equal(await reader.locator('.play-favorite-navigation').isVisible(), false, '手机不再显示固定在两侧的箭头');
         assert.ok(Math.abs(layout.buttons[1].x + arrowWidth - layout.prose.right) < 1, '手机顶部箭头位于正文右侧');
-        assert.ok(Math.abs(layout.prose.x - 28) < 1 && Math.abs(viewport.width - layout.prose.right - 28) < 1,
+        assert.ok(Math.abs(layout.prose.x - 18) < 1 && Math.abs(viewport.width - layout.prose.right - 18) < 1,
             `手机收藏正文与剧场演出使用相同的左右边距：${JSON.stringify(layout.prose)}`);
         const heading = await reader.evaluate(node => {
             const title = node.querySelector('.play-favorite-title').getBoundingClientRect();
