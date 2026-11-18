@@ -411,3 +411,245 @@ test('无法解析的末尾只记录格式证据和解析错误，不把未解�
     assert.ok(end.tail.characters > 0); assert.equal(end.eventsRead, 0);
     assert.doesNotMatch(diagnostics.export(), /private truncated story/);
 });
+
+for (const delimited of [false, true]) test(`无 data 前缀的 238 字符接口错误保留全部非正文信息：分隔=${delimited}`, async t => {
+    const detail = { error: { code: 500, message: 'synthetic provider failure', status: 'INTERNAL' },
+        future: { trace: 'unknown-trace', retryable: true }, content: 'private tail', api_key: 'private key' };
+    const tail = JSON.stringify(detail).padEnd(238, ' ');
+    assert.equal(tail.length, 238);
+    const raw = 'data: {"choices":[{"delta":{"content":"private body"}}]}\n\n' + tail + (delimited ? '\n\n' : '');
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'bare-error-request', attempt: 1 }), seen = [];
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver(), onText: text => seen.push(text) }), error => {
+            trace.finish('failed', error); return error.code === 'stream_interrupted';
+        });
+    assert.deepEqual(seen, ['private body']);
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    const end = packets.findLast(packet => packet.kind === 'stream-end');
+    const received = delimited ? packets.find(packet => packet.format === 'unprefixed') : end.tail;
+    assert.equal(received.format, 'unprefixed'); assert.equal(received.delimited, delimited);
+    assert.equal(received.hasData, false); assert.equal(received.parsed, true); assert.equal(received.characters, 238);
+    assert.deepEqual(received.data.error, detail.error); assert.deepEqual(received.data.future, detail.future);
+    assert.equal(end.completed, false); assert.equal(end.readerDone, true); assert.equal(end.bodyEnded, true);
+    assert.equal(received.data.content, detail.content);
+    assert.doesNotMatch(diagnostics.export(), /private body|private key/);
+});
+
+for (const delimited of [false, true]) test(`无 data 前缀的完成字段进入日志，不把原生读取器未识别的消息当作成功：分隔=${delimited}`, async t => {
+    const detail = { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'private final story' }] } }],
+        usageMetadata: { totalTokenCount: 120 }, futureComplete: { marker: 'future-value' } };
+    const raw = 'data: {"choices":[{"delta":{"content":"private body"}}]}\n\n'
+        + JSON.stringify(detail) + (delimited ? '\n\n' : '');
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'bare-final-request', attempt: 1 });
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    const end = packets.findLast(packet => packet.kind === 'stream-end');
+    const received = delimited ? packets.find(packet => packet.format === 'unprefixed') : end.tail;
+    assert.equal(received.data.candidates[0].finishReason, 'STOP'); assert.deepEqual(received.data.usageMetadata, detail.usageMetadata);
+    assert.deepEqual(received.data.futureComplete, detail.futureComplete); assert.equal(end.completed, false);
+    assert.doesNotMatch(diagnostics.export(), /private body|private final story/);
+});
+
+for (const newline of ['\n', '\r\n', '\r']) test(`多行裸 JSON 的内部空行不会丢失元数据，中文跨字节分片仍正确：${JSON.stringify(newline)}`, async t => {
+    const detail = { error: { code: 503, message: 'synthetic failure', status: 'UNAVAILABLE' },
+        future: { labels: ['new-control'], nested: [{ state: 'unknown-state' }] },
+        content: 'private 多行正文', request: { prompt: 'private request', api_key: 'private credential' } };
+    const json = JSON.stringify(detail, null, 2).replaceAll('\n', newline).replace(newline, newline + newline);
+    const raw = 'data: {"choices":[{"delta":{"content":"private body"}}]}\n\n' + '\uFEFF' + json + newline + newline;
+    const bytes = new TextEncoder().encode(raw);
+    const ctx = mockPlayContext(t, async () => new Response(new ReadableStream({ start(controller) {
+        for (let offset = 0; offset < bytes.length; offset++) controller.enqueue(bytes.slice(offset, offset + 1));
+        controller.close();
+    } }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'pretty-json-request', attempt: 1 });
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    const received = packets.find(packet => packet.format === 'unprefixed' && packet.parsed);
+    assert.deepEqual(received.data.error, detail.error); assert.deepEqual(received.data.future, detail.future);
+    assert.equal(received.delimited, true); assert.equal(received.hasData, false);
+    assert.equal(packets.at(-1).receivedBytes, bytes.length); assert.equal(packets.at(-1).receivedChunks, bytes.length);
+    assert.equal(received.data.content, detail.content);
+    assert.doesNotMatch(diagnostics.export(), /private body|private request|private credential/);
+});
+
+test('裸 JSON 数组及逐行 JSON 保留每条响应，顶层字符串正文也脱敏', async t => {
+    const values = [{ error: { message: 'synthetic failure', code: 'unknown-code' }, text: 'private text' },
+        { future: { position: 2 }, content: 'private content' }, 'private scalar body'];
+    for (const raw of [JSON.stringify(values), values.map(value => JSON.stringify(value)).join('\n')]) {
+        const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+        const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+        const trace = diagnostics.start('小剧场生成', { requestId: 'json-values-request', attempt: 1 });
+        await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+            .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+        const tail = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data.tail;
+        const received = tail.values ? tail.values.map(value => value.data) : tail.data;
+        assert.equal(tail.parsed, true); assert.equal(received[0].error.code, 'unknown-code');
+        assert.deepEqual(received[1].future, values[1].future); assert.equal(received[2], '[正文已移除]');
+        assert.equal(received[0].text, values[0].text);
+        assert.doesNotMatch(diagnostics.export(), /private content|private scalar body/);
+    }
+});
+
+test('普通 SSE 消息夹杂未加前缀的 JSON 仍留下非正文信息，不改变正文读取', async t => {
+    const extra = { error: { message: 'synthetic wire diagnostic', code: 'wire-code' }, future: { keep: ['unknown-field'] },
+        content: 'private extra content', request: { prompt: 'private extra request' } };
+    const raw = 'data: {"choices":[{"delta":{"content":"private body"}}]}\n' + JSON.stringify(extra)
+        + '\n\ndata: [DONE]\n\n';
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'mixed-json-request', attempt: 1 });
+    assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), 'private body'); trace.finish('complete');
+    const event = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data)
+        .find(packet => packet.unrecognized);
+    assert.equal(event.hasData, true); assert.equal(event.parsed, true); assert.equal(event.unrecognized[0].parsed, true);
+    assert.deepEqual(event.unrecognized[0].data.error, extra.error); assert.deepEqual(event.unrecognized[0].data.future, extra.future);
+    assert.equal(event.unrecognized[0].data.content, extra.content);
+    assert.doesNotMatch(diagnostics.export(), /private body|private extra request/);
+});
+
+test('事件头后没有 data 前缀的 JSON、未知字段中的 JSON 和特殊字段名都能安全记录', async t => {
+    const extra = { error: { message: 'synthetic field error', code: 'field-code' }, future: { state: 'keep-state' },
+        content: 'private field content', api_key: 'private field key' };
+    const raw = 'event: error\nid: synthetic-event\n' + JSON.stringify(extra) + '\n\n'
+        + 'vendor-info: ' + JSON.stringify(extra) + '\nconstructor: synthetic-constructor\n__proto__: synthetic-prototype\n\n'
+        + 'data: {"choices":[{"delta":{"content":"private body"}}]}\n\ndata: [DONE]\n\n';
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'field-json-request', attempt: 1 });
+    assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), 'private body'); trace.finish('complete');
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    const header = packets.find(packet => packet.unrecognized);
+    assert.deepEqual(header.fields.event, ['error']); assert.deepEqual(header.fields.id, ['synthetic-event']);
+    assert.equal(header.hasData, false); assert.deepEqual(header.unrecognized[0].data.error, extra.error);
+    const field = packets.find(packet => packet.fields?.['vendor-info']);
+    assert.deepEqual(field.fields['vendor-info'][0].data.future, extra.future);
+    assert.equal(field.fields['vendor-info'][0].data.content, extra.content);
+    assert.doesNotMatch(diagnostics.export(), /private body|private field key/);
+});
+
+for (const raw of ['{"choices":[{"delta":{"content":"private truncated body',
+    '<html>504 Gateway Timeout upstream</html>', 'ECONNRESET socket hang up upstream', '\uFFFD504 upstream timeout']) {
+    test(`无法解析的无前缀残片保留全文与格式证据，只移除可识别的正文：${raw[0]}`, async t => {
+        const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+        const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+        const trace = diagnostics.start('小剧场生成', { requestId: 'unknown-tail-request', attempt: 1 });
+        await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+            .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+        const tail = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data.tail;
+        const fragment = tail.unrecognized?.[0] ?? tail;
+        assert.equal(tail.hasData, false); assert.equal(tail.characters, raw.length);
+        assert.equal(fragment.parsed, false); assert.equal(fragment.parseError.name, 'SyntaxError');
+        assert.equal(fragment.shape.lines, 1); assert.equal(fragment.shape.replacementCharacters, raw.startsWith('\uFFFD') ? 1 : 0);
+        if (raw.startsWith('{')) assert.doesNotMatch(diagnostics.export(), /private truncated body/);
+        else assert.equal(tail.raw, raw);
+    });
+}
+
+test('无前缀消息中的空行、引号和转义反斜线不会改变后续 SSE 分隔及完成判断', async t => {
+    const detail = { future: { values: ['quoted " } [ \\ value', 'next-control'] }, content: 'private body fragment' };
+    const json = JSON.stringify(detail, null, 2).replace('\n', '\n\n');
+    const raw = json + '\n\ndata: {"choices":[{"delta":{"content":"private body"}}]}\n\ndata: [DONE]\n\n';
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'escaped-json-request', attempt: 1 });
+    assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), 'private body'); trace.finish('complete');
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    assert.deepEqual(packets.find(packet => packet.format === 'unprefixed').data.future, detail.future);
+    assert.equal(packets.at(-1).completed, true); assert.equal(packets.at(-1).tail, null);
+    assert.doesNotMatch(diagnostics.export(), /private body fragment|private body/);
+});
+
+test('事件头及正文行后夹杂多行 JSON 时，内部空行不拆散异常数据', async t => {
+    const detail = { error: { code: 500, message: 'synthetic mixed failure' }, future: { status: 'mixed-control' },
+        content: 'private mixed body' };
+    const json = JSON.stringify(detail, null, 2).replace('\n', '\n\n');
+    for (const prefix of ['event: error\nid: synthetic-id\n', 'data: {"choices":[{"delta":{"content":"private body"}}]}\n']) {
+        const raw = prefix + json + '\n\ndata: [DONE]\n\n';
+        const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+        const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+        const trace = diagnostics.start('小剧场生成', { requestId: 'mixed-lines-request', attempt: 1 });
+        assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+            .send({ onReceived: trace.receiver() }), prefix.startsWith('data:') ? 'private body' : ''); trace.finish('complete');
+        const event = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data)
+            .find(packet => packet.unrecognized?.some(fragment => fragment.parsed));
+        assert.deepEqual(event.unrecognized.find(fragment => fragment.parsed).data.error, detail.error);
+        assert.deepEqual(event.unrecognized.find(fragment => fragment.parsed).data.future, detail.future);
+        assert.equal(event.unrecognized.find(fragment => fragment.parsed).data.content, detail.content);
+        assert.doesNotMatch(diagnostics.export(), /private body/);
+    }
+});
+
+test('分离的未知残片不会拼成虚构 JSON，未知字段里不完整的 JSON 只留下安全证据', async t => {
+    const raw = '{"incomplete":\nid: real-boundary\n1}\n\n'
+        + 'vendor-error: {"content":"private truncated field\n\n'
+        + 'data: [DONE]\n\n';
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'separated-fragments-request', attempt: 1 });
+    assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), ''); trace.finish('complete');
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    const first = packets.find(packet => packet.kind === 'event');
+    assert.equal(first.parsed, false); assert.equal(first.data, undefined);
+    const observed = packets.find(packet => packet.fields?.['vendor-error']) ?? packets.at(-1).tail;
+    const field = observed.fields['vendor-error'][0];
+    assert.equal(field.parsed, false); assert.equal(field.parseError.name, 'SyntaxError');
+    assert.equal(field.shape.startsWith, 'object-start');
+    assert.match(diagnostics.export(), /private truncated field/);
+});
+
+for (const raw of ['', 'data: {"choices":[{"delta":{"content":"hidden partial story"}}]}\n\n']) {
+    test(`流结束恰好没有尾部时，保留读取、字节和完成证据，不编造超时原因：空流=${!raw}`, async t => {
+        const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+        const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+        const trace = diagnostics.start('小剧场生成', { requestId: 'empty-tail-request', attempt: 1 });
+        await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+            .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+        const end = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data;
+        assert.equal(end.tail, null); assert.equal(end.readerDone, true); assert.equal(end.bodyEnded, true);
+        assert.equal(end.completed, false); assert.equal(end.aborted, false);
+        assert.equal(end.eventsRead, raw ? 1 : 0); assert.equal(end.receivedBytes, new TextEncoder().encode(raw).length);
+        assert.doesNotMatch(diagnostics.export(), /hidden partial story|网络超时|网关超时|代理超时/);
+    });
+}
+
+test('非流式 HTML 错误和 JSON 字符串错误原文保留，HTTP 错误内容不被误判成回复正文', async t => {
+    for (const [raw, message] of [['<html><body>504 Gateway Timeout upstream</body></html>', '<html><body>504 Gateway Timeout upstream</body></html>'],
+        [JSON.stringify('synthetic upstream error'), 'synthetic upstream error']]) {
+        const ctx = mockPlayContext(t, async () => new Response(raw, { status: 502, headers: { 'X-Trace': 'keep-error-header' } }));
+        const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+        const trace = diagnostics.start('小剧场生成', { requestId: 'http-text-error-request', attempt: 1 });
+        await assert.rejects(createPreparedPlayRequest(ctx, data()).send({ onReceived: trace.receiver() }), error => {
+            trace.finish('failed', error); return error.message === message && error.status === 502;
+        });
+        const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+        assert.equal(packets[0].headers['x-trace'], 'keep-error-header');
+        assert.equal(packets[1].ok, false);
+        if (packets[1].parsed) assert.equal(packets[1].data, message);
+        else assert.equal(packets[1].raw, raw);
+        assert.equal(diagnostics.read().entries.at(-1).error.message, message);
+    }
+});
+
+test('残缺的多行 SSE JSON 内部空行保留原文，正文仍被移除，元数据不丢失', async t => {
+    const raw = 'data: {\n\n"future":{"code":"keep-future-code"},\n"choices":[{"delta":{"content":"hidden multiline incomplete body';
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'multiline-sse-tail-request', attempt: 1 });
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error instanceof SyntaxError; });
+    const tail = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data.tail;
+    assert.ok(tail.raw.includes('"future":{"code":"keep-future-code"}'));
+    assert.ok(tail.raw.startsWith('data: {\n\n')); assert.equal(tail.characters, raw.length);
+    assert.doesNotMatch(diagnostics.export(), /hidden multiline incomplete body/);
+});

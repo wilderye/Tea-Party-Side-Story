@@ -290,7 +290,7 @@ test('清空日志取消待保存观察，存储失败仍能导出观察', () =>
     assert.match(logs.export(), /新观察/); assert.match(logs.read().persistenceError, /导出/);
 });
 
-test('收到的响应递归保留未知字段和结构，只移除正文、思维内容、媒体、工具参数和凭据', () => {
+test('收到的响应只移除回复与思考文字、回显提示词和凭据，其它字段及结构完整保留', () => {
     const original = {
         vendor_future: { flags: ['new-control', 'another-control'], nested: [{ state: 'future-state', value: 7 }], context: 'keep-context' },
         choices: [{ delta: { content: 'private story', reasoning_content: 'private reasoning', refusal: 'private refusal',
@@ -319,9 +319,98 @@ test('收到的响应递归保留未知字段和结构，只移除正文、思�
     assert.equal(result.choices[0].delta.tool_calls[0].function.name, 'syntheticTool');
     assert.deepEqual(result.error, before.error); assert.equal(result.headers['x-new-diagnostic'], 'header-control');
     assert.equal(result.reasoning_details[0].summary, '[正文已移除]'); assert.equal(result.reasoning_details[0].format, 'text');
-    assert.equal(result.choices[0].delta.content, '[正文已移除]'); assert.equal(result.futureOutputText, '[正文已移除]');
-    assert.doesNotMatch(JSON.stringify(result), /private|112,114,105/);
+    assert.equal(result.choices[0].delta.content, '[正文已移除]'); assert.equal(result.futureOutputText, original.futureOutputText);
+    const expected = structuredClone(original);
+    expected.choices[0].delta.content = '[正文已移除]'; expected.choices[0].delta.reasoning_content = '[正文已移除]';
+    expected.choices[0].delta.refusal = '[正文已移除]'; expected.choices[0].logprobs.content[0].token = '[正文已移除]';
+    expected.choices[0].logprobs.content[0].bytes = '[正文已移除]'; expected.candidates[0].content.parts[0].text = '[正文已移除]';
+    expected.content_block.thinking = '[正文已移除]'; expected.reasoning_details[0].summary = '[正文已移除]';
+    expected.headers['set-cookie'] = '[已隐藏]'; expected.headers['x-api-key'] = '[已隐藏]';
+    expected.echo.request.prompt = '[内容已移除]'; expected.echo.settings.password = '[已隐藏]';
+    assert.deepEqual(result, expected);
+    const raw = serializeDiagnosticResponse({ kind: 'event', parsed: false, raw: JSON.stringify(original) }).raw;
+    assert.deepEqual(JSON.parse(raw), expected);
     assert.deepEqual(original, before);
+});
+
+test('错误文字、参数、媒体、签名及未知 text/content 字段完整保留，配置只隐藏提示词和凭据', () => {
+    const original = {
+        choices: [{ delta: { content: 'hidden final body', reasoning_content: 'hidden thought',
+            tool_calls: [{ function: { name: 'syntheticTool', arguments: JSON.stringify({ text: 'tool text',
+                content: 'tool content', prompt: 'generated tool prompt', key: 'tool option' }) } }] } }],
+        candidates: [{ content: { role: 'model', parts: [{ thought: true, text: 'hidden gemini thought', thoughtSignature: 'keep-thought-signature' },
+            { text: 'hidden gemini body', thoughtSignature: 'keep-final-signature' },
+            { inlineData: { mimeType: 'image/png', data: 'data:image/png;base64,synthetic-media' } }] } }],
+        usageMetadata: { thoughtsTokenCount: 80, candidatesTokenCount: 100 },
+        key: 'response metadata key',
+        error: { key: 'error metadata key', text: 'complete error text', content: 'complete error content', summary: 'complete error summary',
+            detail: { text: 'nested error text', body: 'nested error body' } },
+        future: { text: 'unknown metadata text', content: 'unknown metadata content', summary: 'unknown summary',
+            key: 'metadata key', signature: 'metadata signature', bytes: [1, 2, 3] },
+        request: { model: 'synthetic-model', key: 'hidden-request-key', temperature: 0.8, messages: [{ role: 'user', content: 'hidden prompt' }],
+            headers: { Authorization: 'Bearer hidden-secret', 'x-trace': 'keep-header' },
+            config: { retry_after: 9, unknown: ['keep-config'], api_key: 'hidden-secret' } },
+    };
+    const expected = structuredClone(original);
+    expected.choices[0].delta.content = '[正文已移除]'; expected.choices[0].delta.reasoning_content = '[正文已移除]';
+    expected.candidates[0].content.parts[0].text = '[正文已移除]'; expected.candidates[0].content.parts[1].text = '[正文已移除]';
+    expected.request.messages = '[内容已移除]'; expected.request.headers.Authorization = '[已隐藏]';
+    expected.request.config.api_key = '[已隐藏]'; expected.request.key = '[已隐藏]';
+    const result = serializeDiagnosticResponse(original);
+    assert.deepEqual(result, expected);
+    const raw = serializeDiagnosticResponse({ kind: 'event', raw: JSON.stringify(original) }).raw;
+    assert.deepEqual(JSON.parse(raw), expected);
+    assert.deepEqual(serializeDiagnosticResponse(result), result);
+});
+
+test('截断原始 JSON 和 SSE 仅剔除回复、思考和回显敏感内容，其余原文保留', () => {
+    const raw = 'data: {"future":{"text":"keep metadata","count":7},"choices":[{"delta":{"reasoning_content":"hidden thought",'
+        + '"tool_calls":[{"function":{"arguments":"keep arguments"}}],"content":"hidden incomplete final body';
+    const received = serializeDiagnosticResponse({ kind: 'stream-end', tail: { delimited: false, parsed: false, raw } });
+    assert.equal(received.tail.raw, 'data: {"future":{"text":"keep metadata","count":7},"choices":[{"delta":{"reasoning_content":"[正文已移除]",'
+        + '"tool_calls":[{"function":{"arguments":"keep arguments"}}],"content":"[正文已移除]');
+    const prompt = '{"request":{"model":"keep-model","prompt":"hidden incomplete prompt';
+    assert.equal(serializeDiagnosticResponse({ kind: 'body', parsed: false, raw: prompt }).raw,
+        '{"request":{"model":"keep-model","prompt":"[内容已移除]');
+    const credential = '{"error":{"code":500,"api_key":"hidden incomplete credential';
+    assert.equal(serializeDiagnosticResponse({ kind: 'body', parsed: false, raw: credential }).raw,
+        '{"error":{"code":500,"api_key":"[已隐藏]');
+});
+
+test('未知对象键安全保留，正文样式的错误详情和纯文本错误不会被误删', () => {
+    const original = JSON.parse('{"constructor":"keep-constructor","__proto__":{"text":"keep-prototype-text"},"prototype":"keep-prototype"}');
+    const result = serializeDiagnosticResponse(original);
+    assert.deepEqual(result, original); assert.equal(Object.getPrototypeOf(result), Object.prototype);
+    for (const raw of ['504 Gateway Timeout upstream socket hang up', '<html><body>502 ECONNRESET</body></html>',
+        '{"error":{"text":"upstream error text","content":"upstream error content"}}']) {
+        assert.equal(serializeDiagnosticResponse({ kind: 'event', parsed: false, raw }).raw, raw);
+    }
+});
+
+test('带错误状态的顶层 text/content 是接口错误信息，结构化与原始记录都完整保留', () => {
+    for (const original of [{ status: 503, text: 'complete upstream error', content: 'complete error detail' },
+        { code: 429, text: 'complete quota error' }, { status: 'UNAVAILABLE', text: 'complete service error' }]) {
+        assert.deepEqual(serializeDiagnosticResponse(original), original);
+        const raw = JSON.stringify(original);
+        assert.equal(serializeDiagnosticResponse({ kind: 'event', raw }).raw, raw);
+    }
+});
+
+test('接口未知字段与日志内部字段同名时不被误认为日志包装，查看和刷新均完整保留', () => {
+    const original = { choices: [{ delta: { content: 'hidden final story' } }],
+        future: { kind: 'event', parsed: true, delimited: false,
+            data: { text: 'unknown text metadata', content: 'unknown content metadata', summary: 'unknown summary metadata' },
+            values: [{ data: { text: 'unknown nested text' }, parsed: true }] } };
+    const expected = structuredClone(original); expected.choices[0].delta.content = '[正文已移除]';
+    assert.deepEqual(serializeDiagnosticResponse(original), expected);
+    assert.deepEqual(JSON.parse(serializeDiagnosticResponse({ kind: 'event', raw: JSON.stringify(original) }).raw), expected);
+    const { logs, storage } = fixture();
+    const trace = logs.start('小剧场生成', { requestId: 'unknown-name-request', attempt: 1 });
+    trace.receiver()({ kind: 'event', data: original }); trace.finish('complete');
+    assert.deepEqual(logs.read().entries.find(entry => entry.received).received[0].data.data, expected);
+    const loaded = createDiagnostics({ storage });
+    assert.equal(loaded.export(), logs.export());
+    assert.deepEqual(loaded.read().entries.find(entry => entry.received).received[0].data.data.future, original.future);
 });
 
 test('响应批量记录保留超过五百条消息的全部非正文变化，查看和导出不逐包写存储', () => {
@@ -349,13 +438,13 @@ test('完全相同的非正文响应合并次数，已查看记录不再修改�
     const first = logs.start('小剧场生成', { requestId: 'first', attempt: 1 });
     const second = logs.start('小剧场生成', { requestId: 'second', attempt: 1 });
     const receiveFirst = first.receiver(), receiveSecond = second.receiver();
-    for (const content of ['private one', 'private two', 'private three']) receiveFirst({ data: { content, future: 'same' } });
+    for (const content of ['private one', 'private two', 'private three']) receiveFirst({ kind: 'event', data: { content, future: 'same' } });
     const viewed = logs.read().entries.find(entry => entry.received);
     assert.equal(viewed.received[0].count, 3); assert.equal(viewed.received[0].sequence, 1);
     assert.equal(viewed.received[0].lastSequence, 3);
-    receiveFirst({ data: { content: 'private four', future: 'same' } });
-    receiveSecond({ data: { content: 'private second', future: 'same' } });
-    first.update({ attempt: 2 }); first.receiver()({ data: { content: 'private retry', future: 'same' } });
+    receiveFirst({ kind: 'event', data: { content: 'private four', future: 'same' } });
+    receiveSecond({ kind: 'event', data: { content: 'private second', future: 'same' } });
+    first.update({ attempt: 2 }); first.receiver()({ kind: 'event', data: { content: 'private retry', future: 'same' } });
     const entries = logs.read().entries.filter(entry => entry.received);
     assert.deepEqual(entries.map(entry => [entry.requestId, entry.attempt, entry.received[0].sequence]),
         [['first', 1, 1], ['first', 1, 4], ['second', 1, 1], ['first', 2, 1]]);

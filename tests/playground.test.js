@@ -261,7 +261,7 @@ test('停止后连接稍晚结束仍记录清理证据，不等待连接清理�
         onText('private partial reply'); entered.resolve();
         await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
         await cleanup.promise;
-        onReceived({ kind: 'stream-end', endedBy: 'aborted', future: { cleanupFinished: true }, content: 'private late reply' });
+        onReceived({ kind: 'stream-end', endedBy: 'aborted', future: { cleanupFinished: true }, content: 'late cleanup detail' });
         finished.resolve(); throw signal.reason;
     } }) });
     const pending = f.service.send({ prompt: 'private prompt' });
@@ -273,6 +273,7 @@ test('停止后连接稍晚结束仍记录清理证据，不等待连接清理�
     const receipt = diagnostics.read().entries.find(entry => entry.received);
     assert.equal(receipt.requestId, requestId); assert.equal(receipt.attempt, 1);
     assert.equal(receipt.received[0].data.future.cleanupFinished, true);
+    assert.equal(receipt.received[0].data.content, 'late cleanup detail');
     assert.doesNotMatch(diagnostics.export(), /private partial reply|private late reply|private prompt/);
 });
 

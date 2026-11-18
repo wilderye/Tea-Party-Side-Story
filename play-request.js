@@ -33,14 +33,13 @@ async function readJsonResponse(response, onReceived) {
     let data;
     try { data = JSON.parse(text); }
     catch (error) {
-        onReceived?.({ kind: 'body', characters: text.length, parsed: false, parseError: error });
+        onReceived?.({ kind: 'body', characters: text.length, ok: response.ok,
+            ...parseStreamDiagnosticData(text), parsed: false, parseError: error, raw: text });
         if (!response.ok) throw responseError(response, text);
-        // A malformed successful body may contain reply text. Keep the parsing
-        // error and HTTP status without attaching that body to diagnostics.
         error.status = response.status; error.statusText = response.statusText;
         throw error;
     }
-    onReceived?.({ kind: 'body', characters: text.length, parsed: true, data });
+    onReceived?.({ kind: 'body', characters: text.length, ok: response.ok, parsed: true, data });
     if (!response.ok || hasResponseError(data)) throw responseError(response, data);
     return data;
 }
@@ -51,28 +50,89 @@ function isStreamComplete(data) {
         || data?.candidates?.some(candidate => candidate?.finishReason);
 }
 
+function parseStreamDiagnosticData(raw) {
+    const text = raw.trim();
+    if (text === '[DONE]') return { data: '[DONE]' };
+    if (!text) return { empty: true };
+    try { return { data: JSON.parse(text), parsed: true }; }
+    catch (error) {
+        const lines = text.split(/\r\n|\r|\n/).filter(line => line.trim());
+        if (lines.length > 1) {
+            try {
+                return { parsed: true, format: 'json-lines', values: lines.map(line => ({ data: JSON.parse(line), parsed: true })) };
+            } catch {}
+        }
+        const edge = value => value === '{' ? 'object-start' : value === '}' ? 'object-end'
+            : value === '[' ? 'array-start' : value === ']' ? 'array-end'
+                : value === '"' ? 'quote' : value === '<' ? 'markup-start' : value === '>' ? 'markup-end' : 'other';
+        return { parsed: false, parseError: error, shape: { lines: raw.split(/\r\n|\r|\n/).length,
+            startsWith: edge(text[0]), endsWith: edge(text.at(-1)),
+            replacementCharacters: (raw.match(/\uFFFD/g) ?? []).length } };
+    }
+}
+
 function observedStreamEvent(raw, delimited) {
-    const fields = {}, lines = [], comments = [], event = { delimited };
+    const fields = Object.create(null), lines = [], comments = [], event = { delimited };
+    if (/^(?:[\{\["\d-]|true\b|false\b|null\b)/.test(raw.trimStart())) {
+        const parsed = parseStreamDiagnosticData(raw);
+        return { ...event, fields, hasData: false, format: 'unprefixed', ...parsed,
+            ...(parsed.parsed === false ? { raw } : {}), characters: raw.length };
+    }
+    const unrecognized = [];
+    let extra;
     for (const line of raw.split(/\r\n|\r|\n/)) {
-        if (line.startsWith(':')) { comments.push(line.slice(1)); continue; }
+        if (line.startsWith(':')) { comments.push(line.slice(1)); extra = null; continue; }
         const match = /^([\w-]+)(?:: ?(.*))?$/.exec(line);
-        if (!match) continue;
+        if (!match) {
+            if (!extra) { extra = []; unrecognized.push(extra); }
+            extra.push(line);
+            continue;
+        }
+        extra = null;
         if (match[1] === 'data') lines.push(match[2] ?? '');
-        else (fields[match[1]] ??= []).push(match[2] ?? '');
+        else {
+            const value = match[2] ?? '';
+            (fields[match[1]] ??= []).push(/^[\{\[]/.test(value.trimStart())
+                ? { kind: 'field', ...parseStreamDiagnosticData(value), characters: value.length } : value);
+        }
     }
     event.fields = fields; event.hasData = lines.length > 0;
     if (comments.length) event.comments = comments;
-    if (lines.length) {
-        const data = lines.join('\n');
-        if (data.trim() === '[DONE]') event.data = '[DONE]';
-        else if (!data.trim()) event.empty = true;
-        else {
-            try { event.data = JSON.parse(data); event.parsed = true; }
-            catch (error) { event.parsed = false; event.parseError = error; }
-        }
+    if (lines.length) Object.assign(event, parseStreamDiagnosticData(lines.join('\n')));
+    if (unrecognized.length) {
+        event.unrecognized = unrecognized.map(fragment => {
+            const text = fragment.join('\n');
+            return { ...parseStreamDiagnosticData(text), characters: text.length };
+        });
     }
-    if (!delimited || event.parsed === false) event.characters = raw.length;
+    if (!event.hasData || event.parsed === false || unrecognized.length) event.raw = raw;
+    if (!delimited || event.parsed === false || unrecognized.length) event.characters = raw.length;
     return event;
+}
+
+function findStreamSeparator(text) {
+    const pattern = /\r\n\r\n|\r\r|\n\n/g;
+    let separator = pattern.exec(text);
+    if (!separator) return null;
+    const json = /(?:^|\r\n|\r|\n)(?:[\w-]+: ?)?[^\S\r\n]*[\{\[]/.exec(text);
+    if (!json || json.index >= separator.index) return separator;
+    let depth = 0, quoted = false, escaped = false;
+    for (let index = json.index + json[0].length - 1; index < text.length; index++) {
+        if (index === separator.index) {
+            if (!quoted && depth <= 0) return separator;
+            separator = pattern.exec(text);
+            if (!separator) return null;
+        }
+        const char = text[index];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') quoted = false;
+        } else if (char === '"') quoted = true;
+        else if (char === '{' || char === '[') depth++;
+        else if (char === '}' || char === ']') depth--;
+    }
+    return null;
 }
 
 function observeResponseStream(body, onReceived) {
@@ -82,9 +142,10 @@ function observeResponseStream(body, onReceived) {
     let pending = '';
     function observe(text) {
         pending += text;
-        const events = pending.split(/\r\n\r\n|\r\r|\n\n/);
-        pending = events.pop();
-        for (const raw of events) {
+        let separator;
+        while ((separator = findStreamSeparator(pending))) {
+            const raw = pending.slice(0, separator.index);
+            pending = pending.slice(separator.index + separator[0].length);
             if (!raw) continue;
             const event = observedStreamEvent(raw, true);
             state.framedEvents++;

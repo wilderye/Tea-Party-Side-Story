@@ -36,11 +36,12 @@ function redactor(secrets = []) {
         let text = String(value);
         for (const secret of privateValues) text = text.split(secret).join('[已隐藏]');
         text = text.replace(/\bBearer\s+[^\s"'<>;,}]+/gi, 'Bearer [已隐藏]');
-        text = text.replace(/((?:authorization|cookie|set-cookie)\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\r\n,;}]+)/gi, '$1[已隐藏]');
-        text = text.replace(/((?:api[-_ ]?key|proxy_password|access_token|refresh_token)\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)/gi, '$1[已隐藏]');
-        // V8 includes a fragment of the parsed body in some SyntaxErrors.
-        // Keep the error and call sites, but do not log that prompt/reply text.
-        text = text.replace(/(Unexpected token [^\r\n,]+),[\s\S]*?( is not valid JSON)/g, '$1, [解析内容已隐藏]$2');
+        const hide = (_, prefix, content) => {
+            const quote = ['"', "'"].includes(content[0]) ? content[0] : '';
+            return prefix + quote + '[已隐藏]' + (quote && content.endsWith(quote) && content.length > 1 ? quote : '');
+        };
+        text = text.replace(/((?:authorization|cookie|set-cookie)\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\r\n,;}<>]+)/gi, hide);
+        text = text.replace(/((?:api[-_ ]?key|proxy_password|access_token|refresh_token)\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&}<>]+)/gi, hide);
         return text.replace(/https?:\/\/[^\s"'<>]+/gi, value => {
             try {
                 const url = new URL(value);
@@ -74,46 +75,178 @@ function errorDetails(error, clean, seen = new Set()) {
         if (privateFields.test(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) continue;
         let item;
         try { item = error[key]; } catch { continue; }
-        if (typeof item === 'string') result[key] = clean(item);
+        if (typeof item === 'string') result[key] = clean(error.name === 'SyntaxError' ? parseErrorText(item) : item);
         else if (item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item))) result[key] = item;
         else if (typeof item === 'object' && item !== null) result[key] = key === 'error'
-            ? responseDetails(item, clean, key, seen) : errorDetails(item, clean, seen);
+            ? responseDetails(item, clean, '', seen) : errorDetails(item, clean, seen);
     }
     seen.delete(error);
     return result;
 }
 
-function responseDetails(value, clean, key = '', seen = new Set(), contentContext = false) {
+function parseErrorText(value) {
+    return value.replace(/(Unexpected token [^\r\n,]+),[\s\S]*?( is not valid JSON)/g, '$1, [解析内容已隐藏]$2');
+}
+
+function responseField(key, context, parent = {}) {
+    if (!key) return { context, body: ['response', 'reply', 'text-value'].includes(context) };
     const words = key.replace(/([a-z\d])([A-Z])/g, '$1_$2').replace(/[-\s]/g, '_').toLowerCase();
     const name = words.replace(/_/g, '');
-    const bodyContext = name !== 'error' && (contentContext || /^(?:content|thinking|reasoning|reasoningdetails|thought|analysis|output|body)$/.test(name));
-    if (/^(?:request(?:data|body|headers|config|options)?|config|configuration|settings|options|payload|parameters|messages|prompts?|input|arguments|args|partialjson)$/.test(name)) {
-        return value == null ? value : '[内容已移除]';
+    if (context !== 'tool' && (/^(?:messages|prompts?|systemprompts?|systeminstructions?)$/.test(name)
+        || context === 'request' && /^(?:input|system|instructions)$/.test(name))) {
+        return { context: 'metadata', hidden: '[内容已移除]' };
     }
-    if (/(?:apikey|authorization|authentication|credentials?|cookies?|password|secrets?|accesstoken|refreshtoken|idtoken|csrftoken|signature|toolsignatures)$/.test(name)
-        || name === 'key' || typeof value === 'string' && /(?:^|_)token$/.test(words)) {
-        return value == null ? value : '[已隐藏]';
+    if (/(?:apikey|authorization|authentication|credentials?|cookies?|password|secrets?|accesstoken|refreshtoken|idtoken|csrftoken)$/.test(name)
+        || name === 'key' && context === 'request') return { context: 'metadata', hidden: '[已隐藏]' };
+    if (context === 'tool' || /^(?:toolcalls?|functioncalls?|arguments|args|partialjson)$/.test(name)) return { context: 'tool' };
+    if (/^(?:request(?:data|body|config|options)?|payload)$/.test(name)) return { context: 'request' };
+    if (/^(?:error|errors|detail|quotaerror)$/.test(name)) return { context: 'error' };
+    if (context === 'record') return { context: name === 'data' ? 'diagnostic' : 'metadata' };
+    if (context === 'fields') return { context: 'diagnostic' };
+    if (context === 'diagnostic') {
+        if (name === 'data') return { context: parent.kind === 'field' ? 'metadata'
+            : parent.ok === false || parent.fields?.event?.includes('error') ? 'error' : 'response',
+            body: parent.kind !== 'field' && parent.ok !== false && !parent.fields?.event?.includes('error') };
+        return { context: name === 'fields' ? 'fields' : /^(?:tail|values|unrecognized|remainder)$/.test(name) ? 'diagnostic' : 'metadata' };
     }
-    if (Array.isArray(value) && (name === 'bytes' || name === 'data' && value.every(item => typeof item === 'number'))) return '[内容已移除]';
-    const textField = /^(?:text|content|body|data|delta|output|response|completion|token|thought|thinking|reasoning|reasoningcontent|analysis|refusal|generatedtext|outputtext|responsetext|answer|transcript|citedtext|quote|thinkingtext|encryptedcontent|redactedcontent)$/.test(name)
-        || /(?:^|_)(?:text|content|body|thinking|reasoning|transcript)$/.test(words) || contentContext && name === 'summary';
+    if (['response', 'error'].includes(context) && name === 'choices') return { context: 'choices' };
+    if (['response', 'error'].includes(context) && name === 'candidates') return { context: 'candidates' };
+    if (['response', 'choices', 'reply'].includes(context) && name === 'logprobs') return { context: 'logprobs' };
+    if (context === 'logprobs') return { context: 'logprobs', body: name === 'token', bytes: name === 'bytes' };
+    if ((['response', 'choices', 'reply', 'thought'].includes(context) || context === 'error' && (parent.choices || parent.candidates))
+        && /^(?:thinking|reasoning|reasoningdetails|reasoningcontent|thought|analysis|toolplan|encryptedcontent|redactedcontent)$/.test(name)) {
+        return { context: 'thought', body: true };
+    }
+    if (context === 'thought' && /^(?:text|content|summary|value)$/.test(name)
+        || ['response', 'reply'].includes(context) && (parent.thought === true
+            || /^(?:thinking|reasoning|analysis)(?:[._-]|$)/.test(parent.type ?? '')) && /^(?:text|thinking|summary|content)$/.test(name)) {
+        return { context: 'thought', body: true };
+    }
+    if (parent.thought === true || /^(?:thinking|reasoning|analysis)(?:[._-]|$)/.test(parent.type ?? '')
+        || /^(?:thinking|reasoning|reasoningdetails|thought|analysis|inlinedata|filedata|audio|images?|annotations|citations?)$/.test(name)) {
+        return { context: 'metadata' };
+    }
+    if (context === 'choices' && /^(?:delta|message)$/.test(name)
+        || context === 'candidates' && /^(?:content|output)$/.test(name)) return { context: 'reply', body: true };
+    if (context === 'response' && name === 'contentblock') return { context: 'reply' };
+    const status = Number(parent.statusCode ?? parent.status_code ?? parent.status ?? parent.code);
+    const error = context === 'error' || parent.error || parent.detail || parent.quota_error
+        || typeof parent.message === 'string' || parent.type === 'error' || parent.ok === false
+        || status >= 400 && status <= 599 || /^(?:error|failed|internal|unavailable|resource_exhausted|permission_denied|unauthenticated)$/i.test(parent.status ?? '');
+    if (context === 'response' && !error && /^(?:content|delta|message|output|response|completion)$/.test(name)
+        || context === 'reply' && /^(?:content|parts|delta|message|output)$/.test(name)) return { context: 'reply', body: true };
+    if (context === 'response' && !error && /^(?:text|token|generatedtext|outputtext|responsetext|refusal)$/.test(name)
+        || ['reply', 'choices'].includes(context) && /^(?:text|refusal)$/.test(name)
+        || context === 'text-value' && name === 'value') return { context: 'text-value', body: true };
+    return { context: context === 'request' ? 'request' : 'metadata' };
+}
+
+function responseText(value, clean, context = 'response') {
+    const roots = [], containers = [];
+    let index = 0;
+    function add(node) {
+        const parent = containers.at(-1);
+        node.parent = parent; node.field = parent?.kind === 'object' ? parent.key ?? '' : '';
+        if (parent) {
+            parent.children.push(node);
+            if (parent.kind === 'object' && parent.key !== undefined) {
+                parent.flags[parent.key] = node.kind === 'object' || node.kind === 'array' ? {} : node.value;
+                parent.key = undefined;
+            }
+        } else {
+            const prefix = value.slice(Math.max(value.lastIndexOf('\n', node.start - 1), value.lastIndexOf('\r', node.start - 1)) + 1, node.start).trim();
+            const field = /^([\w-]+):$/.exec(prefix);
+            node.context = field && field[1] !== 'data' ? responseField(field[1], 'metadata').context : context;
+            roots.push(node);
+        }
+        return node;
+    }
+    while (index < value.length) {
+        const char = value[index], parent = containers.at(-1);
+        if (char === '"') {
+            const start = index++;
+            let escaped = false, closed = false;
+            while (index < value.length) {
+                const next = value[index++];
+                if (escaped) escaped = false;
+                else if (next === '\\') escaped = true;
+                else if (next === '"') { closed = true; break; }
+            }
+            let text;
+            if (closed) { try { text = JSON.parse(value.slice(start, index)); } catch {} }
+            if (parent?.kind === 'object' && parent.expectKey) {
+                parent.key = text; parent.expectKey = false;
+            } else if (parent) add({ kind: 'string', start, end: index, closed, value: text });
+            continue;
+        }
+        if (char === '{' || char === '[') {
+            const node = add({ kind: char === '{' ? 'object' : 'array', start: index++, end: value.length,
+                children: [], flags: Object.create(null), expectKey: char === '{' });
+            containers.push(node); continue;
+        }
+        if (char === '}' || char === ']') {
+            if (parent) { parent.end = index + 1; containers.pop(); }
+            index++; continue;
+        }
+        if (char === ',') {
+            if (parent?.kind === 'object') { parent.expectKey = true; parent.key = undefined; }
+            index++; continue;
+        }
+        if (!parent || char === ':' || /\s/.test(char)) { index++; continue; }
+        const start = index;
+        while (index < value.length && !/[\s,}\]]/.test(value[index])) index++;
+        let literal;
+        try { literal = JSON.parse(value.slice(start, index)); } catch {}
+        add({ kind: 'literal', start, end: index, value: literal });
+    }
+    const replacements = [], pending = roots.map(node => ({ node, context: node.context }));
+    while (pending.length) {
+        const { node, context } = pending.pop();
+        const field = responseField(node.field, context, node.parent?.flags);
+        const hidden = field.hidden ?? (field.body && node.kind === 'string' || field.bytes && node.kind === 'array' ? '[正文已移除]' : null);
+        if (hidden && node.value !== null) {
+            replacements.push({ start: node.start, end: node.end,
+                text: node.kind === 'string' && !node.closed ? '"' + hidden : JSON.stringify(hidden) });
+        } else if (node.kind === 'string' && typeof node.value === 'string' && /[\{\[]/.test(node.value)) {
+            const text = responseText(node.value, clean, field.context === 'tool' ? 'tool' : 'metadata');
+            if (text !== node.value) replacements.push({ start: node.start, end: node.end, text: JSON.stringify(text) });
+        } else for (const child of node.children ?? []) pending.push({ node: child, context: field.context });
+    }
+    let result = '', start = 0;
+    for (const replacement of replacements.sort((a, b) => a.start - b.start)) {
+        result += value.slice(start, replacement.start) + replacement.text; start = replacement.end;
+    }
+    return clean(result + value.slice(start));
+}
+
+function responseDetails(value, clean, key = '', seen = new Set(), context = 'response', parent = {}) {
+    const field = responseField(key, context, parent);
+    if (field.hidden) return value == null ? value : field.hidden;
     if (typeof value === 'string') {
-        if ((!key || textField) && !['[DONE]', '[正文已移除]', '[内容已移除]', '[已隐藏]'].includes(value)) return '[正文已移除]';
-        return clean(value).replace(/\bdata:[^\s;,]+;base64,[a-z\d+/=_-]+/gi, '[媒体内容已移除]');
+        if (field.body && !['[DONE]', '[正文已移除]', '[内容已移除]', '[已隐藏]'].includes(value)) return '[正文已移除]';
+        if (key === 'raw') return responseText(value, clean, parent.kind === 'field' ? 'metadata' : 'response');
+        return /[\{\[]/.test(value) ? responseText(value, clean, field.context === 'tool' ? 'tool' : 'metadata') : clean(value);
     }
     if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
     if (!value || typeof value !== 'object') return undefined;
-    if (value instanceof Error || typeof DOMException !== 'undefined' && value instanceof DOMException) return errorDetails(value, clean, seen);
+    if (field.bytes && Array.isArray(value)) return '[正文已移除]';
     if (seen.has(value)) return '[循环引用]';
     seen.add(value);
     let result;
-    if (Array.isArray(value)) result = value.map(item => responseDetails(item, clean, key, seen, bodyContext));
+    if (Array.isArray(value)) result = value.map(item => responseDetails(item, clean, '', seen, field.context));
     else {
-        result = {};
-        for (const [field, item] of Object.entries(value)) {
-            if (['__proto__', 'prototype', 'constructor'].includes(field)) continue;
-            result[field] = responseDetails(item, clean, textField && field === 'value' ? key : field, seen, bodyContext);
+        let source = value, nextContext = field.context;
+        if (value instanceof Error || typeof DOMException !== 'undefined' && value instanceof DOMException) {
+            const pairs = [];
+            for (const name of new Set(['name', 'message', 'stack', ...Object.getOwnPropertyNames(value)])) {
+                let item;
+                try { item = value[name]; } catch { continue; }
+                pairs.push([name, value.name === 'SyntaxError' && typeof item === 'string' ? parseErrorText(item) : item]);
+            }
+            source = Object.fromEntries(pairs); nextContext = 'error';
         }
+        result = Object.fromEntries(Object.entries(source).map(([name, item]) =>
+            [name, responseDetails(item, clean, name, seen, nextContext, source)]));
     }
     seen.delete(value);
     return result;
@@ -163,7 +296,6 @@ function metadata(value, clean) {
     return result;
 }
 
-/** Local diagnostics contain observed events and errors, never request/settings objects. */
 export function createDiagnostics({ storage, limit = 500, now = () => new Date().toISOString(),
     uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` } = {}) {
     let entries = [], persistenceError = '', epoch = 0, viewTimer, receivedBatch;
@@ -179,7 +311,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
                     operation: clean(item.operation ?? ''),
                     message: clean(item.message ?? item.status ?? ''),
                     ...metadata(item, clean), ...(item.view ? { view: viewMetadata(item.view) } : {}),
-                    ...(item.received ? { received: responseDetails(item.received, clean) } : {}),
+                    ...(item.received ? { received: responseDetails(item.received, clean, '', new Set(), 'record') } : {}),
                     ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
             }).sort((a, b) => a.at.localeCompare(b.at));
     } catch (error) {
@@ -239,7 +371,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
         return entry;
     }
     function receive(operation, value, values, clean, sequence) {
-        const data = responseDetails(value, clean), signature = JSON.stringify(data), at = now();
+        const data = responseDetails(value, clean, '', new Set(), 'diagnostic'), signature = JSON.stringify(data), at = now();
         const scope = JSON.stringify([operation, values.requestId, values.startedAt, values.attempt]);
         if (!receivedBatch || receivedBatch.scope !== scope || entries.at(-1) !== receivedBatch.entry
             || receivedBatch.entry.received.length >= 64) {
