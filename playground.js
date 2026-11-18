@@ -181,7 +181,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         });
         const privateValues = [environment.api?.key, environment.tavern?.settings?.proxy_password];
         const diagnostic = diagnostics?.start(continueResultId ? '小剧场续写' : '小剧场生成',
-            { phase: 'preparing', apiMode: environment.api?.mode }, privateValues);
+            { phase: 'preparing', apiMode: environment.api?.mode, requestId: job.resultId }, privateValues);
         let generationError;
         jobs.set(job.resultId, job);
         notify(job);
@@ -265,11 +265,12 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             while (true) {
                 job.controller.signal.throwIfAborted();
                 job.phase = 'generating';
-                diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now() });
+                diagnostic?.update({ ...request.context, phase: 'generating', requestStartedAt: now(), attempt: retryCount + 1 });
                 notify(job);
                 let receivedBody = false, attemptActive = true, attemptError;
                 try {
                     const result = await abortable(() => request.send({ signal: job.controller.signal, resultId: job.resultId,
+                        onReceived: diagnostic?.receiver?.(),
                         onReasoning(extra) {
                             if (!attemptActive || jobs.get(job.resultId) !== job || job.closed || job.controller.signal.aborted) return;
                             job.extra = readPlayReasoning(extra);
@@ -299,8 +300,9 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 const reason = retryReason(attemptError);
                 if (job.controller.signal.aborted || attemptError?.name === 'AbortError'
                     || receivedBody || !reason || !retrySettings[reason] || retryCount >= retrySettings.maxRetries) throw attemptError;
-                diagnostics?.warn('小剧场请求失败', attemptError, { phase: 'generating' }, privateValues);
-                diagnostics?.info(`将在 ${retrySettings.intervalSeconds} 秒后进行第 ${retryCount + 1}/${retrySettings.maxRetries} 次自动重试`);
+                diagnostics?.warn('小剧场请求失败', attemptError, { phase: 'generating', requestId: job.resultId, attempt: retryCount + 1 }, privateValues);
+                diagnostics?.info(`将在 ${retrySettings.intervalSeconds} 秒后进行第 ${retryCount + 1}/${retrySettings.maxRetries} 次自动重试`,
+                    { requestId: job.resultId, attempt: retryCount + 2 });
                 job.phase = 'retry-wait';
                 job.retry = { reason, attempt: retryCount + 1, maxRetries: retrySettings.maxRetries, remainingSeconds: 0 };
                 diagnostic?.update({ phase: job.phase });
@@ -309,7 +311,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 job.text = baseText;
                 job.extra = continueExtra ? clone(continueExtra) : {};
                 retryCount++;
-                diagnostics?.info(`开始第 ${retryCount}/${retrySettings.maxRetries} 次自动重试`);
+                diagnostics?.info(`开始第 ${retryCount}/${retrySettings.maxRetries} 次自动重试`, { requestId: job.resultId, attempt: retryCount + 1 });
             }
         } catch (error) {
             generationError = error;
@@ -349,7 +351,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         if (job.controller.signal.aborted && !job.round) return null;
         try {
             await saving.completion;
-            diagnostics?.info('小剧场回复已保存', { phase: 'saving', savedAt: now() });
+            diagnostics?.info('小剧场回复已保存', { phase: 'saving', savedAt: now(), requestId: job.resultId });
         } catch (error) {
             if (isRemovedResult(error)) return null;
         }

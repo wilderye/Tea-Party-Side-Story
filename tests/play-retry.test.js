@@ -59,6 +59,10 @@ for (const stream of [false, true]) for (const apiMode of ['tavern', 'custom']) 
         assert.equal(saved.results.length, 1); assert.equal(saved.results[0].id, result.result.id);
         const entries = f.diagnostics.read().entries;
         assert.equal(entries.filter(entry => entry.error).length, 2);
+        const received = entries.filter(entry => entry.received);
+        assert.deepEqual([...new Set(received.map(entry => entry.attempt))], [1, 2, 3]);
+        assert.ok(received.every(entry => entry.requestId === result.result.id));
+        assert.equal(entries.find(entry => entry.operation === '小剧场回复已保存').requestId, result.result.id);
         assert.match(f.diagnostics.export(), /开始第 2\/3 次自动重试/);
         assert.doesNotMatch(f.diagnostics.export(), /private synthetic prompt|最终正文|discarded thought|synthetic-secret/);
         assert.ok(entries.findIndex(entry => entry.error) < entries.findIndex(entry => entry.operation.startsWith('将在')));

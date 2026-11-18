@@ -289,3 +289,125 @@ test('流的读取错误保留原始原因，清理流时不会用另一个错�
         { headers: { 'Content-Type': 'text/event-stream' } }));
     await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming }).send({}), error => error === original);
 });
+
+test('流式收到的原始消息和未知控制字段进入日志，字节分片不改变正文与完成判断', async t => {
+    const first = { choices: [{ delta: { content: 'private reply中文', reasoning_content: 'private thought' } }],
+        futureControl: { flags: ['new-value'], nested: [{ position: 2 }] } };
+    const final = { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { completion_tokens: 8 },
+        futureFinal: { marker: 'keep-final-field' } };
+    const raw = 'id: synthetic-event\r\nevent: message\r\nretry: 900\r\nvendor-flag: keep-wire-field\r\n'
+        + `data: ${JSON.stringify(first)}\r\n\r\n: heartbeat\r\n\r\ndata: ${JSON.stringify(final)}\r\n\r\n`;
+    const bytes = new TextEncoder().encode(raw);
+    const ctx = mockPlayContext(t, async () => new Response(new ReadableStream({ start(controller) {
+        for (let offset = 0; offset < bytes.length; offset += 7) controller.enqueue(bytes.slice(offset, offset + 7));
+        controller.close();
+    } }), { headers: { 'Content-Type': 'text/event-stream', 'X-Future-Header': 'keep-header', 'Set-Cookie': 'private cookie' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'stream-request', attempt: 1 });
+    const result = await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() });
+    assert.equal(result, 'private reply中文'); trace.finish('complete');
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    assert.equal(packets[0].headers['x-future-header'], 'keep-header'); assert.equal(packets[0].status, 200);
+    const event = packets.find(packet => packet.kind === 'event' && packet.data?.futureControl);
+    assert.deepEqual(event.data.futureControl, first.futureControl);
+    assert.deepEqual(event.fields['vendor-flag'], ['keep-wire-field']); assert.deepEqual(event.fields.retry, ['900']);
+    assert.deepEqual(packets.find(packet => packet.data?.futureFinal).data.futureFinal, final.futureFinal);
+    const end = packets.at(-1);
+    assert.equal(end.kind, 'stream-end'); assert.equal(end.endedBy, 'reader-end');
+    assert.equal(end.readerDone, true); assert.equal(end.bodyEnded, true); assert.equal(end.completed, true);
+    assert.equal(end.receivedBytes, bytes.length); assert.equal(end.receivedChunks, Math.ceil(bytes.length / 7));
+    assert.equal(end.framedEvents, 3); assert.equal(end.dataEvents, 2); assert.equal(end.parsedEvents, 2);
+    assert.equal(end.tail, null); assert.ok(end.firstDataAt); assert.ok(end.lastDataAt);
+    assert.doesNotMatch(diagnostics.export(), /private reply|private thought|private cookie/);
+});
+
+test('结束字段已到但末尾没有消息分隔时，日志保留未交给原生读取器的完整元数据', async t => {
+    const tail = { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'private tail story' }] } }],
+        futureTail: { code: 'terminal-control', detail: ['unknown-tail-field'] } };
+    const raw = 'data: {"choices":[{"delta":{"content":"private body"}}]}\n\n'
+        + 'event: message\nid: tail-event\ndata: ' + JSON.stringify(tail);
+    const ctx = mockPlayContext(t, async () => new Response(raw, { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'tail-request', attempt: 1 });
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+    const end = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data;
+    assert.equal(end.readerDone, true); assert.equal(end.bodyEnded, true); assert.equal(end.completed, false);
+    assert.equal(end.tail.delimited, false); assert.equal(end.tail.parsed, true);
+    assert.equal(end.tail.data.candidates[0].finishReason, 'STOP'); assert.deepEqual(end.tail.data.futureTail, tail.futureTail);
+    assert.deepEqual(end.tail.fields.id, ['tail-event']);
+    assert.doesNotMatch(diagnostics.export(), /private body|private tail story/);
+});
+
+test('读取停止前已收到的后续消息仍保留非正文数据，原错误独立记录且不覆盖正文', async t => {
+    const ctx = mockPlayContext(t, async () => streamResponse([
+        { choices: [{ delta: { content: 'private body' } }] },
+        { error: { message: 'original upstream failure', code: 'upstream_reset', request_id: 'r-future' } },
+        { choices: [{ delta: { content: 'private unread body' } }], futureUnread: { reason: 'keep-received-field' } }, '[DONE]',
+    ]));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'error-request', attempt: 1 }), seen = [];
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onText: text => seen.push(text), onReceived: trace.receiver() }), error => {
+            trace.finish('failed', error); return error.message === 'original upstream failure';
+        });
+    assert.deepEqual(seen, ['private body']);
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    assert.equal(packets.find(packet => packet.data?.futureUnread).data.futureUnread.reason, 'keep-received-field');
+    assert.equal(packets.at(-1).dataEvents, 4); assert.equal(packets.at(-1).eventsRead, 2);
+    assert.equal(diagnostics.read().entries.at(-1).error.message, 'original upstream failure');
+    assert.doesNotMatch(diagnostics.export(), /private body|private unread body/);
+});
+
+test('非流式成功及 HTTP 错误都记录去除正文后的完整响应，未来字段不依赖名单', async t => {
+    let reply = { choices: [{ message: { content: 'private full reply' } }], futureProvider: { zone: 'new-zone', states: ['keep-state'] } };
+    let status = 200;
+    const ctx = mockPlayContext(t, async () => Response.json(reply, { status, headers: { 'X-Trace-Future': 'future-header' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'json-request', attempt: 1 });
+    const request = createPreparedPlayRequest(ctx, data());
+    assert.equal(await request.send({ onReceived: trace.receiver() }), 'private full reply');
+    status = 429; reply = { error: { message: 'original capacity error', code: 'future-code', retry_after: 25,
+        futureError: { level: 'new-level' }, request: { prompt: 'private request echo' } } };
+    trace.update({ attempt: 2 });
+    await assert.rejects(request.send({ onReceived: trace.receiver() }), error => {
+        trace.finish('failed', error); return error.status === 429;
+    });
+    const packets = diagnostics.read().entries.flatMap(entry => entry.received ?? []).map(packet => packet.data);
+    assert.deepEqual(packets.find(packet => packet.data?.futureProvider).data.futureProvider, { zone: 'new-zone', states: ['keep-state'] });
+    assert.deepEqual(packets.find(packet => packet.data?.error).data.error.futureError, { level: 'new-level' });
+    assert.ok(packets.some(packet => packet.status === 429));
+    assert.doesNotMatch(diagnostics.export(), /private full reply|private request echo/);
+});
+
+test('原始读取错误和主动取消有独立的流结束证据，诊断回调失败不改变请求结果', async t => {
+    const original = new Error('actual connection reset', { cause: new Error('ECONNRESET') });
+    const ctx = mockPlayContext(t, async () => new Response(new ReadableStream({ start(controller) { controller.error(original); } }),
+        { headers: { 'Content-Type': 'text/event-stream' } }));
+    const events = [];
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: value => events.push(value) }), error => error === original);
+    assert.equal(events.at(-1).endedBy, 'error'); assert.equal(events.at(-1).stage, 'reading');
+    assert.equal(events.at(-1).readerDone, false); assert.equal(events.at(-1).bodyEnded, false);
+    t.mock.method(globalThis, 'fetch', async () => streamResponse([{ choices: [{ delta: { content: 'private reply' } }] }, '[DONE]']));
+    const controller = new AbortController(), stopped = [];
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ signal: controller.signal, onText() { controller.abort(); }, onReceived: value => stopped.push(value) }), error => error.name === 'AbortError');
+    assert.equal(stopped.at(-1).endedBy, 'aborted'); assert.equal(stopped.at(-1).aborted, true);
+    assert.equal(await createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived() { throw Error('diagnostics unavailable'); } }), 'private reply');
+});
+
+test('无法解析的末尾只记录格式证据和解析错误，不把未解析正文写入日志', async t => {
+    const ctx = mockPlayContext(t, async () => new Response('data: {"choices":[{"delta":{"content":"private truncated story',
+        { headers: { 'Content-Type': 'text/event-stream' } }));
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const trace = diagnostics.start('小剧场生成', { requestId: 'truncated-request', attempt: 1 });
+    await assert.rejects(createPreparedPlayRequest(ctx, { ...data(), stream: true }, { streaming: testStreaming })
+        .send({ onReceived: trace.receiver() }), error => { trace.finish('failed', error); return error.code === 'stream_interrupted'; });
+    const end = diagnostics.read().entries.flatMap(entry => entry.received ?? []).at(-1).data;
+    assert.equal(end.tail.parsed, false); assert.equal(end.tail.parseError.name, 'SyntaxError');
+    assert.ok(end.tail.characters > 0); assert.equal(end.eventsRead, 0);
+    assert.doesNotMatch(diagnostics.export(), /private truncated story/);
+});

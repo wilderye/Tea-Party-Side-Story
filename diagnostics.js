@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'teahouse-diagnostics-v1';
-const fields = new Set(['phase', 'apiMode', 'source', 'model', 'stream', 'endpoint',
+const fields = new Set(['phase', 'apiMode', 'source', 'model', 'stream', 'endpoint', 'requestId', 'attempt',
     'startedAt', 'requestStartedAt', 'firstContentAt', 'lastContentAt', 'receivedCharacters', 'savedAt',
     'count', 'file', 'line', 'column']);
 // UI observations are scalars selected by the collector, never DOM/content or
@@ -76,10 +76,51 @@ function errorDetails(error, clean, seen = new Set()) {
         try { item = error[key]; } catch { continue; }
         if (typeof item === 'string') result[key] = clean(item);
         else if (item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item))) result[key] = item;
-        else if (typeof item === 'object' && item !== null) result[key] = errorDetails(item, clean, seen);
+        else if (typeof item === 'object' && item !== null) result[key] = key === 'error'
+            ? responseDetails(item, clean, key, seen) : errorDetails(item, clean, seen);
     }
     seen.delete(error);
     return result;
+}
+
+function responseDetails(value, clean, key = '', seen = new Set(), contentContext = false) {
+    const words = key.replace(/([a-z\d])([A-Z])/g, '$1_$2').replace(/[-\s]/g, '_').toLowerCase();
+    const name = words.replace(/_/g, '');
+    const bodyContext = name !== 'error' && (contentContext || /^(?:content|thinking|reasoning|reasoningdetails|thought|analysis|output|body)$/.test(name));
+    if (/^(?:request(?:data|body|headers|config|options)?|config|configuration|settings|options|payload|parameters|messages|prompts?|input|arguments|args|partialjson)$/.test(name)) {
+        return value == null ? value : '[内容已移除]';
+    }
+    if (/(?:apikey|authorization|authentication|credentials?|cookies?|password|secrets?|accesstoken|refreshtoken|idtoken|csrftoken|signature|toolsignatures)$/.test(name)
+        || name === 'key' || typeof value === 'string' && /(?:^|_)token$/.test(words)) {
+        return value == null ? value : '[已隐藏]';
+    }
+    if (Array.isArray(value) && (name === 'bytes' || name === 'data' && value.every(item => typeof item === 'number'))) return '[内容已移除]';
+    const textField = /^(?:text|content|body|data|delta|output|response|completion|token|thought|thinking|reasoning|reasoningcontent|analysis|refusal|generatedtext|outputtext|responsetext|answer|transcript|citedtext|quote|thinkingtext|encryptedcontent|redactedcontent)$/.test(name)
+        || /(?:^|_)(?:text|content|body|thinking|reasoning|transcript)$/.test(words) || contentContext && name === 'summary';
+    if (typeof value === 'string') {
+        if ((!key || textField) && !['[DONE]', '[正文已移除]', '[内容已移除]', '[已隐藏]'].includes(value)) return '[正文已移除]';
+        return clean(value).replace(/\bdata:[^\s;,]+;base64,[a-z\d+/=_-]+/gi, '[媒体内容已移除]');
+    }
+    if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+    if (!value || typeof value !== 'object') return undefined;
+    if (value instanceof Error || typeof DOMException !== 'undefined' && value instanceof DOMException) return errorDetails(value, clean, seen);
+    if (seen.has(value)) return '[循环引用]';
+    seen.add(value);
+    let result;
+    if (Array.isArray(value)) result = value.map(item => responseDetails(item, clean, key, seen, bodyContext));
+    else {
+        result = {};
+        for (const [field, item] of Object.entries(value)) {
+            if (['__proto__', 'prototype', 'constructor'].includes(field)) continue;
+            result[field] = responseDetails(item, clean, textField && field === 'value' ? key : field, seen, bodyContext);
+        }
+    }
+    seen.delete(value);
+    return result;
+}
+
+export function serializeDiagnosticResponse(value, secrets = []) {
+    return responseDetails(value, redactor(secrets));
 }
 
 /** Also used when an error crosses the history worker boundary. */
@@ -108,6 +149,7 @@ export function formatDiagnostic(entry) {
     const context = [...fields].filter(key => entry[key] !== undefined && entry[key] !== '')
         .map(key => `${key}: ${entry[key]}`);
     if (entry.view) context.push(JSON.stringify(entry.view));
+    if (entry.received) context.push(`received: ${JSON.stringify(entry.received, null, 2)}`);
     return `[${entry.at}] [${entry.level}] ${[message, ...context].join('\n')}`;
 }
 
@@ -124,7 +166,7 @@ function metadata(value, clean) {
 /** Local diagnostics contain observed events and errors, never request/settings objects. */
 export function createDiagnostics({ storage, limit = 500, now = () => new Date().toISOString(),
     uuid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}` } = {}) {
-    let entries = [], persistenceError = '', epoch = 0, viewTimer;
+    let entries = [], persistenceError = '', epoch = 0, viewTimer, receivedBatch;
     const listeners = new Set();
     try {
         storage ??= globalThis.localStorage;
@@ -137,6 +179,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
                     operation: clean(item.operation ?? ''),
                     message: clean(item.message ?? item.status ?? ''),
                     ...metadata(item, clean), ...(item.view ? { view: viewMetadata(item.view) } : {}),
+                    ...(item.received ? { received: responseDetails(item.received, clean) } : {}),
                     ...(item.error ? { error: errorDetails(item.error, clean) } : {}) };
             }).sort((a, b) => a.at.localeCompare(b.at));
     } catch (error) {
@@ -172,6 +215,7 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
     }
     function changed() {
         clearTimeout(viewTimer); viewTimer = undefined;
+        receivedBatch = undefined;
         persist();
         let viewerFailed = false;
         for (const listener of listeners) {
@@ -194,6 +238,23 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
         changed();
         return entry;
     }
+    function receive(operation, value, values, clean, sequence) {
+        const data = responseDetails(value, clean), signature = JSON.stringify(data), at = now();
+        const scope = JSON.stringify([operation, values.requestId, values.startedAt, values.attempt]);
+        if (!receivedBatch || receivedBatch.scope !== scope || entries.at(-1) !== receivedBatch.entry
+            || receivedBatch.entry.received.length >= 64) {
+            const entry = { id: uuid(), at, level: 'info', operation: clean(operation), message: '收到接口数据',
+                ...metadata(values, clean), received: [] };
+            entries.push(entry); trim(entries, limit);
+            receivedBatch = { entry, scope };
+        }
+        const previous = receivedBatch.entry.received.at(-1);
+        if (previous && receivedBatch.signature === signature) {
+            previous.count++; previous.lastSequence = sequence; previous.lastAt = at;
+        } else receivedBatch.entry.received.push({ sequence, lastSequence: sequence, count: 1, at, lastAt: at, data });
+        receivedBatch.signature = signature;
+        if (!viewTimer) { viewTimer = setTimeout(changed, 1000); viewTimer.unref?.(); }
+    }
     // Long operations add milestones to the same timeline as ordinary runtime logs.
     // Per-chunk updates stay in memory until a milestone or the final outcome.
     function start(operation, initial = {}, privateValues = []) {
@@ -210,6 +271,16 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
                     append('info', operation, values, undefined, clean, phaseNames[values.phase] ?? values.phase);
                 }
                 if (!hadContent && values.firstContentAt) append('info', operation, values, undefined, clean, '首次收到正文');
+            },
+            receiver() {
+                if (closed || ownEpoch !== epoch) return;
+                const receivedValues = { ...values }, receivedClean = clean;
+                let sequence = 0;
+                return value => {
+                    if (ownEpoch !== epoch) return;
+                    try { receive(operation, value, receivedValues, receivedClean, ++sequence); }
+                    catch (error) { append('error', '记录接口响应', receivedValues, error, receivedClean); }
+                };
             },
             finish(status, error, final = {}) {
                 if (closed) return;
@@ -236,7 +307,10 @@ export function createDiagnostics({ storage, limit = 500, now = () => new Date()
         info(operation, values = {}) { append('info', operation, values); },
         warn(operation, error, values = {}, secrets = []) { append('warn', operation, values, error, redactor(secrets)); },
         error(operation, error, values = {}, secrets = []) { append('error', operation, values, error, redactor(secrets)); },
-        read: ({ includeEntries = true } = {}) => ({ entries: includeEntries ? structuredClone(entries) : [], count: entries.length, persistenceError, limit }),
+        read({ includeEntries = true } = {}) {
+            if (includeEntries) receivedBatch = undefined;
+            return { entries: includeEntries ? structuredClone(entries) : [], count: entries.length, persistenceError, limit };
+        },
         export() { if (viewTimer) changed(); return entries.map(formatDiagnostic).join('\n\n'); },
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         clear() { entries = []; epoch++; changed(); },

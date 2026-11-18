@@ -208,7 +208,8 @@ async function verify(page, url, viewport) {
     await screenshot('settings'); await closeSettings();
 
     responses = [{ status: 429, json: { error: { message: 'synthetic rate limit', code: 429 } } },
-        { json: { text: '', thought: 'discarded thought' } }, { json: { text: '自动重试成功的正文' } }];
+        { json: { text: '', thought: 'discarded thought' } }, { json: { text: '自动重试成功的正文',
+            futureProvider: { state: 'keep-unknown-metadata', values: ['provider-new-state'] } } }];
     await send('重试验证');
     await panel.getByText('遇到 429，2 秒后进行第 1/2 次自动重试。', { exact: true }).waitFor();
     assert.equal(await panel.locator('.play-assistant-message .play-stop').filter({ visible: true }).count(), 0, '只有一条生成时使用输入框旁的停止按钮');
@@ -256,6 +257,20 @@ async function verify(page, url, viewport) {
     assert.equal(await rateLimit.isChecked(), true); assert.equal(await empty.isChecked(), true);
     assert.equal(await maxRetries.inputValue(), '2'); assert.equal(await interval.inputValue(), '0.1');
     assert.equal(calls.length, 13, '刷新页面不恢复已结束的自动重试');
+    const logs = panel.locator('.tea-diagnostics').filter({ visible: true });
+    await logs.getByRole('button', { name: '查看日志', exact: true }).click();
+    const text = await logs.locator('.tea-log-list').innerText();
+    assert.match(text, /keep-unknown-metadata/); assert.match(text, /provider-new-state/);
+    assert.doesNotMatch(text, /自动重试成功的正文|discarded thought/);
+    const received = await page.evaluate(() => diagnostics.read().entries.filter(entry => entry.received));
+    assert.ok(received.every(entry => entry.requestId && entry.attempt > 0));
+    assert.deepEqual([...new Set(received.slice(0, 3).map(entry => entry.attempt))], [1, 2, 3]);
+    const downloading = page.waitForEvent('download');
+    await logs.getByRole('button', { name: '导出日志', exact: true }).click();
+    const exported = await fs.readFile(await (await downloading).path(), 'utf8');
+    assert.match(exported, /keep-unknown-metadata/); assert.doesNotMatch(exported, /自动重试成功的正文|discarded thought/);
+    await logs.getByRole('button', { name: '查看日志', exact: true }).scrollIntoViewIfNeeded();
+    await screenshot('logs');
 }
 
 (async () => {

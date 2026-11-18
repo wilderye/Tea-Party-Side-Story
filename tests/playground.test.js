@@ -254,6 +254,28 @@ test('真实读取流内错误后保留片段并保存为失败，错误原文�
     assert.doesNotMatch(diagnostics.export(), /private prompt|已经生成的片段/);
 });
 
+test('停止后连接稍晚结束仍记录清理证据，不等待连接清理才显示已停止', async t => {
+    const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
+    const entered = deferred(), cleanup = deferred(), finished = deferred();
+    const f = fixture({ diagnostics, prepareRequest: async () => ({ send: async ({ signal, onReceived, onText }) => {
+        onText('private partial reply'); entered.resolve();
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        await cleanup.promise;
+        onReceived({ kind: 'stream-end', endedBy: 'aborted', future: { cleanupFinished: true }, content: 'private late reply' });
+        finished.resolve(); throw signal.reason;
+    } }) });
+    const pending = f.service.send({ prompt: 'private prompt' });
+    await entered.promise; const requestId = f.service.getState().resultId;
+    f.service.stop(); const result = await pending;
+    assert.equal(result.result.status, 'stopped'); assert.equal(result.result.text, 'private partial reply');
+    assert.equal(diagnostics.read().entries.some(entry => entry.received), false);
+    cleanup.resolve(); await finished.promise;
+    const receipt = diagnostics.read().entries.find(entry => entry.received);
+    assert.equal(receipt.requestId, requestId); assert.equal(receipt.attempt, 1);
+    assert.equal(receipt.received[0].data.future.cleanupFinished, true);
+    assert.doesNotMatch(diagnostics.export(), /private partial reply|private late reply|private prompt/);
+});
+
 test('读取和保存演出记录失败留下完整日志，并继续把原错误交给界面处理', async () => {
     const diagnostics = createDiagnostics({ storage: { getItem: () => null, setItem() {} } });
     const f = fixture({ diagnostics });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDiagnostics, observePluginErrors } from '../diagnostics.js';
+import { createDiagnostics, observePluginErrors, serializeDiagnosticResponse } from '../diagnostics.js';
 
 function fixture(options = {}) {
     const files = new Map();
@@ -288,4 +288,105 @@ test('清空日志取消待保存观察，存储失败仍能导出观察', () =>
     storage.setItem = () => { throw Error('storage disabled'); };
     logs.view('新观察', { sequence: 2 }); logs.flush();
     assert.match(logs.export(), /新观察/); assert.match(logs.read().persistenceError, /导出/);
+});
+
+test('收到的响应递归保留未知字段和结构，只移除正文、思维内容、媒体、工具参数和凭据', () => {
+    const original = {
+        vendor_future: { flags: ['new-control', 'another-control'], nested: [{ state: 'future-state', value: 7 }], context: 'keep-context' },
+        choices: [{ delta: { content: 'private story', reasoning_content: 'private reasoning', refusal: 'private refusal',
+            tool_calls: [{ id: 'call-id', function: { name: 'syntheticTool', arguments: 'private arguments' } }] },
+            finish_reason: 'stop', logprobs: { content: [{ token: 'private token', bytes: [112, 114, 105], logprob: -0.2 }] } }],
+        candidates: [{ index: 0, finishReason: 'STOP', safetyRatings: [{ category: 'TEST', probability: 'LOW' }],
+            content: { role: 'model', parts: [{ text: 'private gemini story', thought: true, thoughtSignature: 'private signature' },
+                { inlineData: { mimeType: 'image/png', data: 'private base64' } },
+                { functionCall: { name: 'syntheticTool', args: { privateArgument: 'private argument value' } } }] } }],
+        content_block: { type: 'thinking', thinking: 'private claude thought', signature: 'private claude signature' },
+        reasoning_details: [{ type: 'reasoning.summary', summary: 'private thought summary', format: 'text', index: 0 }],
+        rich: { text: { value: 'private rich text', annotations: [{ kind: 'citation', index: 0 }] } },
+        futureOutputText: 'private future body', data: [112, 114, 105],
+        usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 60, thoughtsTokenCount: 20 },
+        headers: { 'x-new-diagnostic': 'header-control', 'set-cookie': 'private cookie', 'x-api-key': 'private key' },
+        echo: { request: { prompt: 'private prompt' }, settings: { password: 'private password' } },
+        error: { message: 'original provider failure\nsecond line', summary: 'provider error summary', code: 'new-code', future: { phase: 'upstream' } },
+    };
+    const before = structuredClone(original), result = serializeDiagnosticResponse(original);
+    assert.deepEqual(result.vendor_future, before.vendor_future);
+    assert.deepEqual(result.usageMetadata, before.usageMetadata);
+    assert.equal(result.choices[0].finish_reason, 'stop'); assert.equal(result.choices[0].logprobs.content[0].logprob, -0.2);
+    assert.equal(result.candidates[0].content.role, 'model'); assert.equal(result.candidates[0].content.parts[0].thought, true);
+    assert.deepEqual(result.candidates[0].safetyRatings, before.candidates[0].safetyRatings);
+    assert.equal(result.candidates[0].content.parts[1].inlineData.mimeType, 'image/png');
+    assert.equal(result.choices[0].delta.tool_calls[0].function.name, 'syntheticTool');
+    assert.deepEqual(result.error, before.error); assert.equal(result.headers['x-new-diagnostic'], 'header-control');
+    assert.equal(result.reasoning_details[0].summary, '[正文已移除]'); assert.equal(result.reasoning_details[0].format, 'text');
+    assert.equal(result.choices[0].delta.content, '[正文已移除]'); assert.equal(result.futureOutputText, '[正文已移除]');
+    assert.doesNotMatch(JSON.stringify(result), /private|112,114,105/);
+    assert.deepEqual(original, before);
+});
+
+test('响应批量记录保留超过五百条消息的全部非正文变化，查看和导出不逐包写存储', () => {
+    const { logs, storage } = fixture();
+    const trace = logs.start('小剧场生成', { requestId: 'synthetic-request', attempt: 1 });
+    const receive = trace.receiver();
+    let writes = 0; storage.setItem = () => { writes++; };
+    for (let sequence = 0; sequence < 1000; sequence++) receive({ kind: 'event',
+        data: { content: `private story ${sequence}`, future: { index: sequence, flag: 'new-field' } } });
+    assert.equal(writes, 0);
+    const packets = logs.read().entries.flatMap(entry => entry.received ?? []);
+    assert.deepEqual(packets.map(packet => packet.data.data.future.index), Array.from({ length: 1000 }, (_, index) => index));
+    assert.ok(logs.read().count < 1000);
+    const error = new Error('original read failure'); trace.finish('failed', error);
+    assert.equal(writes, 1);
+    const exported = logs.export(); assert.doesNotMatch(exported, /private story/);
+    const loaded = createDiagnostics({ storage: { getItem: () => JSON.stringify(logs.read().entries), setItem() {} } });
+    assert.equal(loaded.export(), exported);
+    assert.equal(loaded.read().entries.at(-1).error.message, 'original read failure');
+    assert.ok(exported.indexOf('"index": 999') < exported.indexOf(error.stack));
+});
+
+test('完全相同的非正文响应合并次数，已查看记录不再修改，重试和并发请求分别编号', () => {
+    const { logs } = fixture();
+    const first = logs.start('小剧场生成', { requestId: 'first', attempt: 1 });
+    const second = logs.start('小剧场生成', { requestId: 'second', attempt: 1 });
+    const receiveFirst = first.receiver(), receiveSecond = second.receiver();
+    for (const content of ['private one', 'private two', 'private three']) receiveFirst({ data: { content, future: 'same' } });
+    const viewed = logs.read().entries.find(entry => entry.received);
+    assert.equal(viewed.received[0].count, 3); assert.equal(viewed.received[0].sequence, 1);
+    assert.equal(viewed.received[0].lastSequence, 3);
+    receiveFirst({ data: { content: 'private four', future: 'same' } });
+    receiveSecond({ data: { content: 'private second', future: 'same' } });
+    first.update({ attempt: 2 }); first.receiver()({ data: { content: 'private retry', future: 'same' } });
+    const entries = logs.read().entries.filter(entry => entry.received);
+    assert.deepEqual(entries.map(entry => [entry.requestId, entry.attempt, entry.received[0].sequence]),
+        [['first', 1, 1], ['first', 1, 4], ['second', 1, 1], ['first', 2, 1]]);
+    assert.equal(entries[0].received[0].count, 3);
+    logs.clear(); receiveFirst({ data: { future: 'late-old-data' } }); logs.flush();
+    assert.equal(logs.export(), '');
+});
+
+test('迟到的接口结束信息保留原请求编号和重试次数，操作结束后仍脱敏，清空后不恢复', () => {
+    const { logs } = fixture();
+    const trace = logs.start('小剧场生成', { requestId: 'synthetic-request', attempt: 1 }, ['synthetic-secret']);
+    const first = trace.receiver(); trace.update({ attempt: 2 });
+    const second = trace.receiver(); trace.finish('stopped');
+    first({ kind: 'stream-end', future: 'late-first', credential_echo: 'synthetic-secret' });
+    second({ kind: 'stream-end', future: 'late-second', credential_echo: 'synthetic-secret' });
+    const entries = logs.read().entries.filter(entry => entry.received);
+    assert.deepEqual(entries.map(entry => [entry.requestId, entry.attempt, entry.received[0].sequence]),
+        [['synthetic-request', 1, 1], ['synthetic-request', 2, 1]]);
+    assert.doesNotMatch(logs.export(), /synthetic-secret/);
+    logs.clear(); first({ kind: 'stream-end' }); second({ kind: 'stream-end' });
+    assert.equal(logs.export(), '');
+});
+
+test('错误附带的接口响应采用同一内容过滤规则，保留原错误及接口未知字段', () => {
+    const { logs } = fixture();
+    const error = new Error('original upstream error');
+    error.error = { error: { message: 'original upstream error', summary: 'diagnostic error summary', future: { code: 'new-provider-code' } },
+        reasoning_details: [{ type: 'reasoning.summary', summary: 'private reasoning summary', format: 'text' }],
+        choices: [{ delta: { content: 'private response content' } }] };
+    logs.error('请求失败', error);
+    const exported = logs.export();
+    assert.match(exported, /original upstream error/); assert.match(exported, /diagnostic error summary|new-provider-code|reasoning.summary/);
+    assert.doesNotMatch(exported, /private reasoning summary|private response content/);
 });
