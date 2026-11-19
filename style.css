@@ -156,7 +156,7 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .tea-page-controls button svg { width:16px; height:16px; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-page-popover .tea-page-hint { margin:0; font-size:12px; line-height:16px; text-align:center; color:var(--tea-muted); }
 :is(#teahouse-panel,.tea-panel-surface) .tea-page-popover .tea-page-error { color:var(--tea-error,#9d4535); }
-:is(#teahouse-panel,.tea-panel-surface) .tea-workspace { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--tea-paper); }
+:is(#teahouse-panel,.tea-panel-surface) .tea-workspace { display:flex; flex-direction:column; position:relative; min-width:0; min-height:0; background:var(--tea-paper); contain:layout style; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-topbar { display:flex; height:64px; flex:none; align-items:center; justify-content:space-between; padding:0 40px 0 12px; gap:16px; border-bottom:1px solid var(--tea-line); }
 :is(#teahouse-panel,.tea-panel-surface) .tea-topbar>.tea-tabs { margin-right:auto; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-tabs { display:flex; align-items:stretch; height:100%; gap:32px; }
@@ -531,7 +531,6 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-person-time { display:flex; flex-direction:column; gap:1px; flex:none; text-align:right; color:var(--tea-sidebar-muted,#b6cabc); font-size:11px; line-height:16px; font-variant-numeric:tabular-nums; }
 :is(#teahouse-panel,.tea-panel-surface) .play-person-time small { font:inherit; color:inherit; }
 :is(#teahouse-panel,.tea-panel-surface) .play-person[aria-pressed=true] .play-person-time { color:var(--tea-selected-muted,#354d3f); }
-:is(#teahouse-panel,.tea-panel-surface) .play-workspace { position:relative; contain:layout style; }
 :is(#teahouse-panel,.tea-panel-surface) .tea-settings-layer { position:absolute; grid-column:2; grid-row:1; inset:0; z-index:10; width:100%; height:100%; display:flex; flex-direction:column; min-height:0; background:var(--tea-paper); }
 :is(#teahouse-panel,.tea-panel-surface) .play-workspace[hidden],
 :is(#teahouse-panel,.tea-panel-surface) .play-catalog[hidden] { display:none!important; }
