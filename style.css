@@ -799,15 +799,14 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-stack { position:relative; flex:1; min-height:0; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-stack>.play-favorite-reading { position:absolute; inset:0; background:var(--tea-paper); }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-navigation { position:sticky; top:calc(50% - 22px); z-index:2; display:flex; justify-content:space-between; height:0; margin:0 -28px; pointer-events:none; }
-:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation,.play-favorite-footer)>.tea-icon { width:44px; min-width:44px; height:44px; pointer-events:auto; background:none!important; user-select:none; -webkit-user-select:none; }
-:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation,.play-favorite-footer)>.tea-icon:hover { background:none!important; }
-:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation,.play-favorite-footer)>.tea-icon:disabled { pointer-events:none; }
-:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation,.play-favorite-footer) .tea-glyph svg { width:22px; height:22px; }
+:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation)>.tea-icon { width:44px; min-width:44px; height:44px; pointer-events:auto; background:none!important; user-select:none; -webkit-user-select:none; }
+:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation)>.tea-icon:hover { background:none!important; }
+:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation)>.tea-icon:disabled { pointer-events:none; }
+:is(#teahouse-panel,.tea-panel-surface) :is(.play-favorite-navigation,.play-favorite-inline-navigation) .tea-glyph svg { width:22px; height:22px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-inline-navigation { display:none; flex:none; margin-left:auto; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-source-row { display:none; align-items:center; gap:8px; margin-bottom:18px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-source-row:has(>.play-go-branch:not([hidden])) { display:flex; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-source-row>.play-go-branch { margin:0; }
-:is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer { display:flex; align-items:center; justify-content:space-between; margin-top:24px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-article { max-width:var(--play-reading-width); margin:0 auto; padding-top:20px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-head { display:flex; align-items:flex-start; gap:16px; margin-bottom:24px; }
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-heading { flex:1; min-width:0; }
@@ -826,6 +825,8 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
 :is(#teahouse-panel,.tea-panel-surface) .play-favorite-mobile-head { display:none; }
 
 @media(min-width:761px) {
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer { margin-top:17px; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer>.tea-icon:not(.play-message-top) { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-user-meta { justify-content:flex-end; }
     :is(#teahouse-panel,.tea-panel-surface) .play-user-meta::after { order:0; }
     :is(#teahouse-panel,.tea-panel-surface) .play-user-meta .play-header-actions { order:1; }
@@ -855,6 +856,11 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-reading { padding:8px 8px 24px; scrollbar-gutter:auto; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-navigation { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-inline-navigation { display:flex; align-items:center; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer { justify-content:space-between; margin-top:24px; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer>.tea-icon { color:inherit!important; border-radius:50%!important; background:none!important; user-select:none; -webkit-user-select:none; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer>.tea-icon:hover { background:none!important; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer>.tea-icon:disabled { pointer-events:none; }
+    :is(#teahouse-panel,.tea-panel-surface) .play-favorite-footer .tea-glyph svg { width:22px; height:22px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-source-row:has(>.play-favorite-inline-navigation:not([hidden])) { display:flex; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-reading:not(:has(.play-edit-form)) .play-favorite-article { --play-message-inset:10px; padding-left:10px; padding-right:10px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-favorite-article { padding-top:10px; }

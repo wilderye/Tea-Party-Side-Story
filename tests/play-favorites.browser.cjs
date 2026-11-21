@@ -137,6 +137,7 @@ async function screenshot(page,name){
    }
    await screenshot(page,`${viewport.width}-favorite-read.png`);
    await reader.getByRole('button',{name:'编辑演出记录收藏',exact:true}).click();
+   assert.equal(await reader.locator('.play-go-branch').isVisible(),false,'编辑收藏时隐藏前往分支按钮');
    assert.equal(await reader.locator('.play-favorite-character').isVisible(),false,'编辑收藏时隐藏角色名');
    assert.equal(await reader.getByRole('textbox',{name:'收藏标题',exact:true}).inputValue(),'从选集带来的标题');
    const favoriteText='第一行正文超过目录能显示的字数所以末尾应该截断并显示三个英文点点点\n<thinking>收藏中手写的标签内容</thinking>\n第二行不能进入标题';
@@ -155,6 +156,7 @@ async function screenshot(page,name){
    await screenshot(page,`${viewport.width}-favorite-edit.png`);
    await reader.getByRole('button',{name:'保存',exact:true}).click();
    await reader.getByRole('button',{name:'编辑演出记录收藏',exact:true}).waitFor();
+   assert.equal(await reader.locator('.play-go-branch').isVisible(),true,'保存收藏后恢复前往分支按钮');
    const saved=await page.evaluate(async id=>{const rows=await runtime.listFavorites();return runtime.getFavorite(rows.find(row=>row.source.roundId===id).id)},generated.roundId);
    assert.equal(saved.title,'');assert.equal(saved.text,favoriteText);assert.equal(saved.firstLine.includes('第二行'),false);
    assert.equal(await reader.locator('.play-favorite-character').isVisible(),true,'保存后阅读状态恢复角色名');
@@ -165,9 +167,11 @@ async function screenshot(page,name){
    await reader.getByRole('textbox',{name:'收藏标题',exact:true}).fill('失败后保留草稿');
    await page.evaluate(()=>window.failSave=true);await reader.getByRole('button',{name:'保存',exact:true}).click();
    await reader.getByRole('alert').waitFor();assert.equal(await reader.getByRole('textbox',{name:'收藏标题',exact:true}).inputValue(),'失败后保留草稿');
+   assert.equal(await reader.locator('.play-go-branch').isVisible(),false,'保存失败后仍隐藏前往分支按钮');
    await button('设置').click();await button(viewport.width<=760?'返回列表':'设置').click();
    assert.equal(await reader.getByRole('textbox',{name:'收藏标题',exact:true}).inputValue(),'失败后保留草稿');
    await reader.getByRole('button',{name:'取消',exact:true}).click();await page.evaluate(()=>window.failSave=false);
+   assert.equal(await reader.locator('.play-go-branch').isVisible(),true,'取消收藏编辑后恢复前往分支按钮');
    assert.equal(await reader.locator('.play-favorite-character').isVisible(),true,'取消后阅读状态恢复角色名');
    if(viewport.width<=760)await button('返回收藏目录').click();
    await screenshot(page,`${viewport.width}-favorite-list.png`);

@@ -19,8 +19,9 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
     const node = element('article', undefined, 'play-favorite-reading tea-scroll');
     const navigation = createNavigation('play-favorite-navigation');
     const inlineNavigation = createNavigation('play-favorite-inline-navigation');
-    const footer = createNavigation('play-favorite-footer');
+    const footer = createNavigation('play-favorite-footer play-message-actions');
     const top = iconButton('top', '回顶', () => { node.scrollTop = 0; });
+    top.classList.add('play-message-top');
     footer.node.insertBefore(top, footer.next);
     const article = element('div', undefined, 'play-favorite-article play-message');
     const head = element('header', undefined, 'play-favorite-head');
@@ -97,6 +98,7 @@ export function createPlayFavoriteReader(playground, { onChange, onRemove, onNav
         return button;
     }
     function updateNavigation() {
+        sourceRow.hidden = !!editor;
         for (const controls of [navigation, inlineNavigation, footer]) {
             controls.node.hidden = !!editor;
             controls.previous.disabled = !canPrevious || removing;

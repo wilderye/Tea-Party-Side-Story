@@ -88,8 +88,10 @@ async function verify(page, viewport) {
     await read(ids[0]);
     assert.equal(await previous().isDisabled(), true);
     assert.equal(await next().isEnabled(), true);
-    assert.equal(await footerPrevious().isDisabled(), true);
-    assert.equal(await footerNext().isEnabled(), true);
+    if (mobile) {
+        assert.equal(await footerPrevious().isDisabled(), true);
+        assert.equal(await footerNext().isEnabled(), true);
+    }
     assert.equal(await reader.locator('.play-sent-prompt-action').count(), 0, '收藏阅读不再显示查看提示词按钮');
     await turn(1, ids[1]);
     const layout = await reader.evaluate((node, selector) => {
@@ -129,7 +131,7 @@ async function verify(page, viewport) {
         assert.ok(heading.title.bottom <= Math.min(heading.character.top, heading.tools.top), '角色和图标排在标题下方');
         assert.ok(Math.abs(heading.character.middle - heading.tools.middle) < 1, '角色和图标位于同一行');
     } else {
-        assert.equal(await reader.locator('.play-favorite-inline-navigation').isVisible(), false, '电脑版只新增底部箭头');
+        assert.equal(await reader.locator('.play-favorite-inline-navigation').isVisible(), false, '电脑版隐藏随文的顶部箭头');
         assert.ok(layout.buttons[0].x + arrowWidth <= layout.prose.x + 1, '左箭头的点击范围不覆盖正文');
         assert.ok(layout.buttons[1].x >= layout.prose.right - 1, '右箭头的点击范围不覆盖正文');
     }
@@ -142,11 +144,19 @@ async function verify(page, viewport) {
     await reader.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle(page);
     if (!mobile) assert.ok(Math.abs((await next().boundingBox()).y - beforeScroll.y) < 1, '电脑版正文到底部时两侧箭头仍保持原位');
     assert.equal(await footer.isVisible(), true);
-    const footerBoxes = await Promise.all([footerPrevious().boundingBox(), top().boundingBox(), footerNext().boundingBox()]);
-    const [leftBox, topBox, rightBox] = footerBoxes;
-    assert.ok(Math.abs(leftBox.x - layout.prose.x) < 1 && Math.abs(rightBox.x + rightBox.width - layout.prose.right) < 1,
-        '底部左右箭头分别靠正文左侧和右侧');
-    assert.ok(Math.abs(topBox.x + topBox.width / 2 - (layout.prose.x + layout.prose.right) / 2) < 1, '回顶按钮位于底部中间');
+    const topBox = await top().boundingBox(), footerBoxes = [topBox];
+    if (mobile) {
+        const [leftBox, rightBox] = await Promise.all([footerPrevious().boundingBox(), footerNext().boundingBox()]);
+        footerBoxes.push(leftBox, rightBox);
+        assert.ok(Math.abs(leftBox.x - layout.prose.x) < 1 && Math.abs(rightBox.x + rightBox.width - layout.prose.right) < 1,
+            '手机底部左右箭头分别靠正文左侧和右侧');
+        assert.ok(Math.abs(topBox.x + topBox.width / 2 - (layout.prose.x + layout.prose.right) / 2) < 1, '手机回顶按钮位于底部中间');
+    } else {
+        assert.equal(await footer.getByRole('button').count(), 1, '电脑底部只显示回顶按钮');
+        assert.equal(await footerPrevious().count(), 0, '电脑底部隐藏上一条收藏按钮');
+        assert.equal(await footerNext().count(), 0, '电脑底部隐藏下一条收藏按钮');
+        assert.ok(Math.abs(topBox.x + topBox.width - layout.prose.right) < 1, '电脑回顶按钮靠正文右侧');
+    }
     for (const box of footerBoxes) {
         assert.ok(Math.abs(box.y - topBox.y) < 1 && box.y >= layout.pane.y
             && box.y + box.height <= layout.pane.y + layout.pane.height, '底部按钮处于同一行且完整可见');
@@ -155,9 +165,9 @@ async function verify(page, viewport) {
     await top().click(); await settle(page);
     assert.equal(await reader.evaluate(node => node.scrollTop), 0, '回顶按钮返回当前收藏开头');
     await reader.evaluate(node => { node.scrollTop = node.scrollHeight; }); await settle(page);
-    await turn(1, ids[2], true);
+    await turn(1, ids[2], mobile);
     assert.equal(await reader.evaluate(node => node.scrollTop), 0, '新收藏从正文开头显示');
-    await turn(-1, ids[1], true);
+    await turn(-1, ids[1], mobile);
     assert.equal(await reader.evaluate(node => node.scrollTop), 0, '返回曾读过的收藏也从开头显示');
 
     // A mouse drag that leaves and returns must not be reduced to its final displacement.
@@ -204,8 +214,10 @@ async function verify(page, viewport) {
     for (; index + 1 < ids.length; index++) await turn(1, ids[index + 1]);
     assert.equal(await next().isDisabled(), true, '最后一条不能继续切换');
     assert.equal(await previous().isEnabled(), true);
-    assert.equal(await footerNext().isDisabled(), true, '底部下一条按钮在最后一条也停用');
-    assert.equal(await footerPrevious().isEnabled(), true);
+    if (mobile) {
+        assert.equal(await footerNext().isDisabled(), true, '底部下一条按钮在最后一条也停用');
+        assert.equal(await footerPrevious().isEnabled(), true);
+    }
     await openCatalog();
     assert.equal(await panel.locator(`.tea-story[data-id="${ids.at(-1)}"]`).getAttribute('aria-current'), 'true', '跨页阅读后目录同步到当前收藏');
     assert.ok(Number(await panel.locator('.tea-page-current').textContent()) > 1, '实际跨越目录分页');
@@ -222,7 +234,9 @@ async function verify(page, viewport) {
     await search.fill('收藏第20条'); await settle(page);
     await panel.locator('.tea-story').first().click(); await settle(page);
     assert.equal(await previous().isDisabled(), true); assert.equal(await next().isDisabled(), true, '只有一条搜索结果时两个箭头均停用');
-    assert.equal(await footerPrevious().isDisabled(), true); assert.equal(await footerNext().isDisabled(), true, '底部箭头遵循相同的搜索边界');
+    if (mobile) {
+        assert.equal(await footerPrevious().isDisabled(), true); assert.equal(await footerNext().isDisabled(), true, '底部箭头遵循相同的搜索边界');
+    }
     await openCatalog(); await search.fill(''); if (mobile) await button('取消搜索').click();
     await button('排序方式').click(); await panel.getByRole('menuitemradio', { name: '随机顺序', exact: true }).click();
     await settle(page);
@@ -237,7 +251,7 @@ async function verify(page, viewport) {
         round: await runtime.getRound(seed.a), settings: JSON.stringify(fixture.settings) })), original,
         '阅读和取消编辑不修改收藏内容、来源演出、聊天或最终设置');
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ viewport, url, checks: '长标题换行、角色和图标同行、手机顶部箭头随文滚动、底部两端箭头和居中回顶、首尾停用、目录跨页、拖动取消、原生触控、键盘、编辑保护、搜索与排序、数据不变', errors }));
+    console.log(JSON.stringify({ viewport, url, checks: '长标题换行、角色和图标同行、手机顶部箭头随文滚动与底部布局、电脑底部仅保留靠右回顶、首尾停用、目录跨页、拖动取消、原生触控、键盘、编辑保护、搜索与排序、数据不变', errors }));
 }
 
 (async () => {
