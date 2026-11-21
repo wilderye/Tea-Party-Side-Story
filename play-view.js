@@ -1,6 +1,7 @@
 import { element, textButton, glyph, iconButton } from './ui.js';
 import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
+import { expandPlayUserNames } from './play-processing.js';
 import { recordViewEvent } from './view-diagnostics.js';
 import { playRoundDepth, playMessageIdentity } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
@@ -198,9 +199,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             if (!userEditor) { view.userText.replaceChildren(); view.promptText = null; view.promptSourceSignature = null; }
             return;
         }
-        // Expand only display names; keep the saved prompt and other macros untouched.
-        const names = { user: identity.name, char: roundCharacter(round).name };
-        const original = round.prompt.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
+        const original = expandPlayUserNames(round.prompt, identity.name, roundCharacter(round).name);
         const depth = playRoundDepth(round, 'user');
         const sourceSignature = JSON.stringify([original, context?.userName, playground.display?.revision ?? 0, depth]);
         if (!userEditor && view.promptSourceSignature !== sourceSignature) {

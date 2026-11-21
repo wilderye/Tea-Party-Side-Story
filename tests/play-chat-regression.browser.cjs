@@ -114,6 +114,65 @@ async function verifyWebState(page, url, mobile) {
     await frame.getByRole('button', { name: '1', exact: true }).waitFor();
     await screenshot(page, `branch-web-state-${mobile ? 'mobile' : 'desktop'}.png`);
 }
+async function verifyUserMessageRendering(page, url) {
+    const prompt = '{{user}} 对 <user> 说话。{{char}} 与 <char>。\n\n{{USER}} / <USER> / {{CHAR}} / <CHAR>\n\n<story>标签内容</story>\n\n{{other}} 和 <character> 保留。\n\n规则：人设标记';
+    const aiText = 'AI 消息：{{user}} 与 {{char}}。';
+    await page.goto(url); await page.waitForFunction(() => window.ready);
+    assert.equal(page.url(), url); assert.match(await page.title(), /小剧场/);
+    const ids = await page.evaluate(async ({ prompt, aiText }) => {
+        const round = await runtime.getRound(seed.a);
+        await testHistory.editPrompt(round.id, prompt, round.prompt);
+        await testHistory.editResult(round.id, round.results[0].id, aiText, round.results[0].text);
+        ctx.name1 = '当前人设';
+        rules.globalRules.push({ id: 'user-display', scriptName: '合成用户显示规则', findRegex: '人设标记', replaceString: '{{user}}/{{char}}',
+            placement: [1], minDepth: null, maxDepth: null, markdownOnly: true, trimStrings: [] });
+        await runtime.display.refresh(ctx.characters[0]);
+        const source = await runtime.getChat(seed.a), branch = await runtime.createBranch(source.id, source.messages[1].id);
+        const ai = branch.messages[1], first = ai.results[0], secondId = crypto.randomUUID();
+        await testHistory.begin({ roundId: branch.id, chatMode: true, operation: 'another', messageId: ai.id,
+            character: ctx.characters[0], resultId: secondId, startedAt: '2026-01-02T00:00:00Z',
+            context: { ...first.context, userName: '后来的茶客', userAvatar: 'second-user.png' } });
+        await testHistory.saveResult(branch.id, secondId, { text: aiText, status: 'complete', finishedAt: '2026-01-02T00:00:01Z' });
+        await testHistory.setMessageVersion(branch.id, ai.id, first.id, secondId);
+        return { sourceId: source.id, branchId: branch.id, bodyRevision: branch.messages[0].bodyRevision, mainChat: structuredClone(ctx.chat) };
+    }, { prompt, aiText });
+    await page.getByRole('button', { name: '打开小剧场面板', exact: true }).click();
+    const panel = page.locator('.tea-panel-surface[data-active=true]');
+    await button(panel, '剧场演出').click();
+    const record = panel.locator(`[data-record="${ids.sourceId}"]`);
+    await record.locator('.play-user-text').getByText('规则：茶客/测试甲', { exact: true }).waitFor();
+    const recordText = await record.locator('.play-user-text').innerText();
+    await button(panel, '历史记录').click();
+    await panel.locator(`[data-chat-id="${ids.branchId}"] .play-history-open`).click();
+    const branch = panel.locator('.play-branch-page[aria-hidden=false]'), user = branch.locator('.play-user-message').first();
+    await user.locator('.play-user-text').getByText('规则：茶客/测试甲', { exact: true }).waitFor();
+    assert.equal(await user.locator('.play-user-text').innerText(), recordText);
+    assert.match(recordText, /茶客 对 茶客 说话。测试甲 与 测试甲。/);
+    assert.match(recordText, /茶客 \/ 茶客 \/ 测试甲 \/ 测试甲/);
+    assert.ok(recordText.includes('<story>标签内容</story>'));
+    assert.ok(recordText.includes('{{other}} 和 <character> 保留。'));
+    assert.equal(await branch.locator('.play-assistant-message .play-results').innerText(), aiText);
+    assert.equal(await user.locator('iframe').count(), 0);
+    await branch.locator('.play-assistant-message [data-chat-action=next]').click();
+    await user.locator('.play-speaker').getByText('后来的茶客', { exact: true }).waitFor();
+    await user.locator('.play-user-text').getByText('规则：后来的茶客/测试甲', { exact: true }).waitFor();
+    assert.ok((await user.locator('.play-user-text').innerText()).includes('后来的茶客 对 后来的茶客 说话。'));
+    await screenshot(page, `branch-user-names-${page.viewportSize().width}.png`);
+    await branch.locator('.play-assistant-message [data-chat-action=previous]').click();
+    await user.locator('.play-speaker').getByText('茶客', { exact: true }).waitFor();
+    await user.locator('.play-user-text').getByText('规则：茶客/测试甲', { exact: true }).waitFor();
+    assert.equal(await user.locator('.play-user-text').innerText(), recordText);
+    await user.getByRole('button', { name: '修改用户消息', exact: true }).click();
+    const editScope = page.viewportSize().width <= 760 ? panel.locator('.play-edit-sheet') : user;
+    const editor = editScope.getByRole('textbox', { name: '用户消息原文', exact: true });
+    await editor.waitFor(); assert.equal(await editor.inputValue(), prompt);
+    await editScope.getByRole('button', { name: '取消', exact: true }).click();
+    assert.equal(await user.locator('.play-user-text').innerText(), recordText);
+    const stored = await page.evaluate(async id => ({ chat: await runtime.getChat(id), mainChat: ctx.chat }), ids.branchId);
+    assert.equal(stored.chat.messages[0].text, prompt);
+    assert.equal(stored.chat.messages[0].bodyRevision, ids.bodyRevision);
+    assert.deepEqual(stored.mainChat, ids.mainChat);
+}
 async function verifyCatalog(page, url) {
     const panel = await openPanel(page, url);
     await page.evaluate(() => {
@@ -167,6 +226,8 @@ async function verifyFavoriteFailure(page, url) {
             ['late reads', verifyLateReads, { width: 1332, height: 896 }],
             ['web state desktop', (page, url) => verifyWebState(page, url, false), { width: 1332, height: 896 }],
             ['web state mobile', (page, url) => verifyWebState(page, url, true), { width: 390, height: 844 }],
+            ['user message rendering desktop', verifyUserMessageRendering, { width: 1332, height: 896 }],
+            ['user message rendering mobile', verifyUserMessageRendering, { width: 390, height: 844 }],
             ['catalog', verifyCatalog, { width: 1332, height: 896 }],
             ['favorite failure', verifyFavoriteFailure, { width: 1332, height: 896 }],
         ]) {

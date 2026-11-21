@@ -3,6 +3,7 @@ import { playMessageDepths, playHiddenRanges, playChatMessageIdentity } from './
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText, playTextPreview } from './play-render.js';
+import { expandPlayUserNames } from './play-processing.js';
 import { playChatTitle } from './play-history.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { setupPlayReplyHeaderActions, createPlayFloorIcon, createPlayReplyActions, renderPlayReply, showPlayReplyStop, syncPlayReplyFooter, updatePlayReplyCount, createPlayInputSizer, createPlayResultMenu, createPlayMessageTop, playMessageNeedsTop, scrollPlayMessageToTop, revealPlayEditor, placePlayEditorActions } from './play-message-ui.js';
@@ -165,10 +166,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     function processed(message, result = currentResult(message), character = owner(), depth = messageDepths.get(message)) {
         const text = result?.text ?? message.text;
-        const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}/${depth}`;
+        const identity = message.role === 'user' ? playChatMessageIdentity(chat.messages, message) : null;
+        const key = `${message.id}/${result?.id ?? ''}/${result?.bodyRevision ?? message.bodyRevision}/${playground.display?.revision ?? 0}/${depth}`
+            + (identity ? `/${JSON.stringify([identity.name, character?.name])}` : '');
         const cached = displayCache.get(key);
         if (cached?.raw === text) return cached.text;
-        const rendered = playground.display?.process(text, character, result?.context, message.role, depth) ?? text;
+        const original = identity ? expandPlayUserNames(text, identity.name, character?.name ?? '') : text;
+        const context = identity ? { userName: identity.name } : result?.context;
+        const rendered = playground.display?.process(original, character, context, message.role, depth) ?? original;
         cacheEntry(displayCache, key, { raw: text, text: rendered });
         return rendered;
     }
@@ -503,7 +508,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             if (!body.contains(session.editor.body)) { body.replaceChildren(session.editor.body); session.editor.restore(session.state); }
         } else if (message.role === 'user') {
             const text = processed(message);
-            if (view.userText !== text || body.querySelector('.play-edit-form')) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, true, { role: 'user' }); view.userText = text; }
+            if (view.userText !== text || body.querySelector('.play-edit-form')) { renderPlayText(body, text, `${chat.id}/${message.id}`, false, false, { role: 'user', name: identity.name }); view.userText = text; }
         } else renderPlayReply(output, result, { name: owner()?.name, displayText: processed(message, result), job: playground.getState(result.id), error, tools, anchor: `${chat.id}/${message.id}` });
         if (view.reply) {
             const reply = view.reply, last = chat.messages.at(-1)?.id === message.id;

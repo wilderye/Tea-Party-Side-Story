@@ -2,6 +2,11 @@ import { readPlaySettings } from './play-settings.js';
 
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+export function expandPlayUserNames(source, userName, characterName) {
+    const names = { user: userName, char: characterName };
+    return source.replace(/\{\{(user|char)\}\}|<(user|char)>/gi, (_, macro, tag) => names[(macro ?? tag).toLowerCase()]);
+}
+
 /** Literal, case-sensitive pairs. Incomplete outer blocks remain visible. */
 export function hidePlayTags(source, names) {
     const tags = [...new Set(names.split(/[,，\r\n]+/).map(name => name.trim()).filter(Boolean))];
