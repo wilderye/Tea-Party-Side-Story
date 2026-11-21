@@ -175,6 +175,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function roundBusy(roundId, jobs = playground.getStates()) {
         return jobs.some(job => (job.roundId ?? job.requestedRoundId) === roundId);
     }
+    function actionPermission(action, round, result, role = 'assistant') {
+        return playground.getActionPermission(action, { round, resultId: result?.id, role });
+    }
     function syncCurrent() {
         try { current = readPlayTarget(ctx()).character; currentError = ''; }
         catch (error) { current = null; currentError = error.message; }
@@ -227,7 +230,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const favorite = favoriteOperations.isFavorite(source, favoriteRows.get(favoriteSourceKey(source)));
         view.favorite.title = favorite ? '取消收藏' : '收藏演出记录';
         view.favorite.setAttribute('aria-label', view.favorite.title); view.favorite.setAttribute('aria-pressed', String(favorite));
-        view.favorite.hidden = !canEditResult(result) || !result.text.trim();
+        view.favorite.hidden = !actionPermission('favorite', round, result).available;
         view.favorite.disabled = !favoritesReady || !!view.removing || isEditing(round.id, 'assistant');
     }
     function updatePromptFavoriteStar(round, view) {
@@ -263,7 +266,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const round = records.get(id)?.round, view = views.get(id);
         if (!round || !view || !favoritesReady || view.removing || isEditing(id, 'assistant')) return;
         const result = selectedResult(round);
-        if (!canEditResult(result) || !result.text.trim()) return;
+        if (!actionPermission('favorite', round, result).available) return;
         notify('');
         const source = { roundId: id, resultId: result.id, startedAt: result.startedAt }, key = favoriteSourceKey(source);
         const character = structuredClone(roundCharacter(round)), depth = playRoundDepth(round), savedResult = structuredClone(result);
@@ -554,11 +557,11 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.stop.hidden = !result || !showPlayReplyStop(job, multipleActive);
             view.stop.dataset.resultId = job.resultId ?? '';
             view.edit.hidden = !canEditPrompt(round) || isEditing(id, 'user');
-            view.editReply.hidden = !canEditResult(result) || isEditing(id, 'assistant');
+            view.editReply.hidden = !canEditResult(round, result) || isEditing(id, 'assistant');
             view.edit.disabled = view.editReply.disabled = !!view.removing || messageEditing.busy;
             view.removePrompt.hidden = view.removeReply.hidden = false;
-            view.removePrompt.disabled = !canRemoveMessage(round, 'user', jobs);
-            view.removeReply.disabled = !canRemoveMessage(round, 'assistant', jobs);
+            view.removePrompt.disabled = !canRemoveMessage(round, 'user');
+            view.removeReply.disabled = !canRemoveMessage(round, 'assistant');
             view.generate.hidden = !own || !round?.prompt || !!round.results.length;
             view.generate.disabled = !canGenerate(round);
             view.again.hidden = !(own && round.prompt !== null) || round?.initialIsLast === false;
@@ -568,7 +571,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             view.continueBtn.hidden = !(own && round?.prompt !== null && currentSelected?.text?.trim());
             if (round?.initialIsLast === false || round?.initialAssistantHidden) view.continueBtn.hidden = true;
             view.branch.hidden = !onBranch;
-            view.branch.disabled = !result || !canEditResult(result) || isEditing(id) || settings.enabled === false;
+            view.branch.disabled = !result || !actionPermission('branch', round, result).available || isEditing(id);
             view.continueBtn.disabled = !canCont;
             if (round) { updateResultNavigation(round, view); updateFavoriteStar(round, view); updatePromptFavoriteStar(round, view); }
             if (view.sourceMissing) {
@@ -580,20 +583,22 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
     }
     function canGenerate(round) {
-        return !!round && round.initialIsLast !== false && round.prompt !== null && canWrite() && round.characterId === selected?.id
+        return !!round && canWrite() && round.characterId === selected?.id && actionPermission('another', round).available
             && playground.availability().available && !isEditing(round.id) && !views.get(round.id)?.removing;
     }
     function canRewrite(round, result) {
-        return canGenerate(round) && !!result && playground.availability({ resultId: result.id }).available;
+        return canGenerate(round) && !!result && actionPermission('again', round, result).available;
     }
     function canContinue(round, result) {
-        return canRewrite(round, result) && !!result?.text?.trim() && !round.initialAssistantHidden;
+        return canGenerate(round) && !!result && actionPermission('continue', round, result).available;
     }
     function updateResultNavigation(round, view) {
         view.swipes.hidden = round.initialIsLast === false;
         const index = round.results.indexOf(selectedResult(round)), atEnd = index === round.results.length - 1;
-        view.prev.disabled = isEditing(round.id) || !!view.removing || index <= 0;
-        view.next.disabled = isEditing(round.id) || !!view.removing || (atEnd && !canGenerate(round));
+        const canChoose = actionPermission('choose', round, selectedResult(round)).available && !isEditing(round.id) && !view.removing;
+        view.count.disabled = !canChoose;
+        view.prev.disabled = !canChoose || index <= 0;
+        view.next.disabled = !canChoose || (atEnd && !canGenerate(round));
         view.next.title = atEnd && canWrite() && round.prompt !== null ? '生成新剧场' : '下一个结果';
         view.next.setAttribute('aria-label', view.next.title);
     }
@@ -608,12 +613,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         keepReading(updateComposer); scheduleSave();
     }
     function canEditPrompt(round) {
-        return !!round && round.prompt !== null && settings.enabled !== false;
+        return !!round && actionPermission('edit', round, undefined, 'user').available;
     }
-    function canRemoveMessage(round, role, jobs = playground.getStates()) {
-        if (!round || settings.enabled === false || isEditing(round.id, role)) return false;
+    function canRemoveMessage(round, role) {
+        if (!round || isEditing(round.id, role)) return false;
         const view = views.get(round.id);
-        return !view?.removing && !roundBusy(round.id, jobs);
+        return !view?.removing && actionPermission('remove', round, undefined, role).available;
     }
     async function removeMessage(id, role) {
         const round = records.get(id)?.round, view = views.get(id);
@@ -687,8 +692,8 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         const target = readTarget();
         await runGeneration(() => playground.generateAnother(id, target));
     }
-    function canEditResult(result) {
-        return result && settings.enabled !== false && !['preparing', 'generating', 'retry-wait', 'unfinished'].includes(result.status);
+    function canEditResult(round, result) {
+        return !!result && actionPermission('edit', round, result).available;
     }
     function isEditing(id, role) {
         return !!messageEditing.find('record', id, role);
@@ -714,7 +719,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     function editResult(id) {
         const round = records.get(id)?.round, result = round && selectedResult(round);
         const view = views.get(id), output = view?.outputs.get(result?.id);
-        if (!canEditResult(result) || !output || view.removing || messageEditing.busy) return;
+        if (!canEditResult(round, result) || !output || view.removing || messageEditing.busy) return;
         openMessageEditor(id, 'assistant', result.id);
     }
     function openMessageEditor(id, role, resultId) {
@@ -727,7 +732,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             const view = views.get(id);
             const result = role === 'assistant' ? round.results.find(item => item.id === resultId) : null;
-            if (!view || view.removing || (role === 'user' ? !canEditPrompt(round) : !canEditResult(result))) return null;
+            if (!view || view.removing || (role === 'user' ? !canEditPrompt(round) : !canEditResult(round, result))) return null;
             records.set(id, { round });
             const original = role === 'user' ? round.prompt : result.text;
             const character = roundCharacter(round);
@@ -850,7 +855,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     async function branchFromRound(id) {
         const round = records.get(id)?.round;
-        if (!round || !onBranch || isEditing(id) || !canEditResult(selectedResult(round))) return;
+        if (!round || !onBranch || isEditing(id) || !actionPermission('branch', round, selectedResult(round)).available) return;
         try {
             rememberPosition();
             const chat = await playground.getChat(id, { selectedResultId: selectedResult(round)?.id });
@@ -898,7 +903,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         }
         for (const [id, output] of view.outputs) if (output.box.hidden !== (id !== result.id)) output.box.hidden = id !== result.id;
         const output = view.outputs.get(result.id);
-        view.editReply.hidden = !canEditResult(result) || !!replyEditor;
+        view.editReply.hidden = !canEditResult(round, result) || !!replyEditor;
         updateFavoriteStar(round, view);
         const job = playground.getState(result.id);
         const depth = playRoundDepth(round);
@@ -912,7 +917,6 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             name: roundCharacter(round).name, anchor: `${round.id}/assistant/${result.id}`, editing: !!replyEditor });
         view.swipes.hidden = false;
         updateResultNavigation(round, view);
-        view.count.disabled = isEditing(round.id) || !!view.removing;
         updatePlayReplyCount(view.count, index, round.results.length);
         restoreRecordEditors(view);
         syncMessageActions(view);
@@ -1081,12 +1085,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     async function changeResult(id, direction, resultId) {
         let round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
-        if (round.initialIsLast === false) return;
+        if (!actionPermission('choose', round, selectedResult(round)).available) return;
         const index = round.results.indexOf(selectedResult(round));
         const result = resultId ? round.results.find(item => item.id === resultId) : round.results[index + direction];
         if (!result) return;
         if (round.initialAssistantId) {
-            try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId, { playSelection: true }); }
+            try { await playground.setMessageVersion(id, round.initialAssistantId, result.id, round.selectedResultId); }
             catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); return; }
             round = playground.session.currentRound(id); records.set(id, { round });
         }
@@ -1096,6 +1100,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
     }
     function showResults(id) {
         const round = records.get(id)?.round; if (!round || isEditing(id) || views.get(id)?.removing) return;
+        if (!actionPermission('choose', round, selectedResult(round)).available) return;
         resultMenu.toggle({ key: id, root, readingArea, feed, opener: views.get(id).count, alignment: views.get(id).results,
             selectedId: selectedResult(round).id,
             entries: round.results.map(result => {

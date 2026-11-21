@@ -97,3 +97,5 @@ README.md
 !tests/play-save-flow.browser.cjs
 !tests/play-favorite-operations.test.js
 !tests/play-favorite-feedback.browser.cjs
+!tests/play-action-state.test.js
+!tests/play-action-consistency.browser.cjs

@@ -7,7 +7,7 @@ export const playHistoryMethods = [...readMethods, 'begin', 'saveResult', 'editP
     'addFavorite', 'addManualFavorite', 'editFavorite', 'removeFavorite', 'removePrompt', 'removeReply',
     'listChats', 'createBranch', 'setMessageVersion', 'renameChat', 'editMessage', 'removeMessage', 'truncateChat', 'deleteChat',
     'addChatFavorite', 'syncChatFavorite', 'setMessagesHidden', 'setUserIdentity', 'ensureChat'];
-const workerVersion = 17;
+const workerVersion = 18;
 
 export function createPlayCleanup() {
     const tasks = [];

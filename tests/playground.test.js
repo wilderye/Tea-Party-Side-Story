@@ -187,29 +187,34 @@ test('删除消息不请求模型或改主聊天；全部回复删除后可重�
     await assert.rejects(f.service.removeReply(first.roundId, removed.results), error => error.code === 'disabled');
 });
 
-test('本页生成中及尚未保存时禁止删除；旧消息仍然可以删除', async () => {
+test('生成中及尚未保存时保护 AI 消息；用户消息和旧消息仍然可以删除', async () => {
     const f = fixture(), old = await f.service.send({ prompt: '旧消息' });
     const started = deferred(), finish = deferred();
     f.control.response = async () => { started.resolve(); return finish.promise; };
     const task = f.service.send({ prompt: '正在生成' }); await started.promise;
     const job = f.service.getState(), current = await f.service.getRound(job.roundId);
-    await assert.rejects(f.service.removePrompt(job.roundId, current.prompt), error => error.code === 'busy');
+    await f.service.removePrompt(job.roundId, current.prompt);
+    assert.equal((await f.service.getRound(job.roundId)).prompt, null);
     await assert.rejects(f.service.removeReply(job.roundId, current.results), error => error.code === 'busy');
     await f.service.removeReply(old.roundId, [old.result]);
     f.io.beforeWrite = name => { if (name === PLAY_HISTORY_INDEX) throw Error('模拟保存失败'); };
     finish.resolve('完整回复'); await task;
-    await assert.rejects(f.service.removeReply(job.roundId, current.results), /模拟保存失败/);
+    await assert.rejects(f.service.removeReply(job.roundId, current.results), error => error.code === 'busy');
     f.io.beforeWrite = null; await f.service.session.flush(job.roundId);
     await f.service.removeReply(job.roundId, (await f.service.getRound(job.roundId)).results);
     assert.equal(f.service.getState().phase, 'idle');
 });
 
-test('其他窗口删除正在生成的消息后，迟到回复不重建消息或阻塞后续发送', async () => {
+test('其他窗口明确结束并删除未完成消息后，迟到回复不重建消息或阻塞后续发送', async () => {
     const f = fixture(), started = deferred(), finish = deferred();
     f.control.response = async () => { started.resolve(); return finish.promise; };
     const task = f.service.send({ prompt: '另一窗口将删除' }); await started.promise;
     const job = f.service.getState(), saved = await f.store.getRound(job.roundId);
-    await f.createStore().removeReply(saved.id, saved.results);
+    await assert.rejects(f.createStore().removeReply(saved.id, saved.results), error => error.code === 'chat_busy');
+    const other = createPlayground({ history: f.createStore(), now: () => time(20) });
+    await other.finishUnfinishedChat(saved.id);
+    const stopped = await f.store.getRound(saved.id);
+    await f.createStore().removeReply(saved.id, stopped.results);
     await f.createStore().removePrompt(saved.id, saved.prompt);
     finish.resolve('迟到的正文');
     assert.equal(await task, null);

@@ -150,9 +150,15 @@ export function createPlayRuntime(ctx, settings, history, { prepareRequest = cre
             }
             catch (error) { if (!session.isSaveError(error)) diagnostics?.error('更新聊天收藏', error); throw error; }
         },
-        async favoriteChat(id) { await session.flush(id); return chatFavorites.add(id); },
+        async favoriteChat(id) {
+            const permission = playground.getActionPermission('favorite-chat', { chatId: id });
+            if (!permission.available) throw new PlaygroundError(permission.code, permission.message);
+            await session.flush(id);
+            return chatFavorites.add(id);
+        },
         deleteChat: (id, revision) => {
-            if (!playground.availability({ chatId: id }).available) throw new PlaygroundError('busy', '请结束并保存这条聊天后再删除。');
+            const permission = playground.getActionPermission('delete-chat', { chatId: id });
+            if (!permission.available) throw new PlaygroundError(permission.code, permission.message);
             return session.mutate(id, revision => chatFavorites.removeChat(id, revision), revision);
         },
         addManualFavorite({ characterAvatar, title, text, firstLine }) {

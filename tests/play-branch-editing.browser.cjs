@@ -204,7 +204,10 @@ async function verifyOperations(page, url, viewport) {
     await page.evaluate(() => emitGeneration('当前回复正在生成')); await latest.getByText('当前回复正在生成', { exact: true }).waitFor();
     for (const item of [firstUser, firstAi]) assert.equal(await button(item, item === firstUser ? '修改用户消息' : '编辑回复原文').isEnabled(), true);
     assert.equal(await latest.locator('[data-chat-action=edit]').isDisabled(), true);
-    assert.equal(await latest.locator('.play-count').isDisabled(), true);
+    assert.equal(await latest.locator('.play-count').isEnabled(), true);
+    await latest.locator('.play-count').click(); await versions.waitFor();
+    assert.equal(await versions.getByRole('option').count(), 1);
+    await versions.press('Escape'); await versions.waitFor({ state: 'detached' });
     const mobile = viewport.width <= 760, sheet = panel.locator('.play-edit-sheet');
     const editScope = item => mobile ? sheet : item, editActions = item => mobile ? sheet.locator('.play-edit-sheet-head .play-edit-actions') : item.locator('.play-edit-actions');
     await button(firstUser, '修改用户消息').click();

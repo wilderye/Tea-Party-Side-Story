@@ -918,8 +918,6 @@ dialog.popup.teahouse-dialog > .popup-body { padding:0!important; height:100%; m
     :is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-header-actions .tea-glyph svg { width:16px; height:16px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-header-actions .play-floor-icon { font-size:14px; }
     :is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-header-actions .tea-icon:hover:not(:disabled) { color:var(--tea-heading,#234a3f)!important; background:transparent!important; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-reply-tools.is-generating:not(.is-expanded)>.play-reply-more { display:none; }
-    :is(#teahouse-panel,.tea-panel-surface) .play-message-meta .play-reply-tools.is-generating:not(.is-expanded):not(:has(>:not(.play-reply-secondary,.play-reply-more,[hidden]))) { display:none; }
     :is(#teahouse-panel,.tea-panel-surface) .play-assistant-meta .play-message-identity { min-width:0; max-width:none; }
     .play-hidden-manager { padding:19px 20px 22px; }
     .play-hidden-summary { margin:13px 0 20px; }

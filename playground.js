@@ -1,7 +1,7 @@
 import { createPlaySession } from './play-session.js';
 import { PlayHistoryError, readPlayContext, readPlayOrigin, readPlayReasoning, playCurrentMessages, playStartRound } from './play-history.js';
 import { playContinuationError, readPlayRetrySettings } from './play-settings.js';
-import { playRequestMessages, playMessageIsPending, playUserIdentity } from './play-message-context.js';
+import { getPlayActionPermission, playResultIsPending, playRequestMessages, playUserIdentity } from './play-message-context.js';
 import { createPlayFavoriteOperations } from './play-favorite-operations.js';
 
 export class PlaygroundError extends Error {
@@ -94,21 +94,32 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function getState(resultId) {
         return readJob(resultId ? findJob(resultId) : [...jobs.values()].at(-1));
     }
-    function hasRoundJob(roundId) {
-        return [...jobs.values()].some(job => !job.closed && (job.acceptedId ?? job.requestedRoundId) === roundId);
+    function getActionPermission(action, target = {}, activeJobs) {
+        if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
+        const id = target.chatId ?? target.chat?.id ?? target.round?.id;
+        const chat = target.chat ?? (!target.round && id ? session.currentChat(id) ?? { id, startMessageIds: [], messages: [] } : undefined);
+        const pending = session.pendingOperations(id);
+        return getPlayActionPermission(action, { ...target, chat, pending,
+            jobs: activeJobs ?? [...jobs.values()].filter(job => !job.closed).map(readJob) });
     }
-    function assertIdleChat(id) {
-        if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-        if (hasRoundJob(id)) throw new PlaygroundError('busy', '这条聊天正在生成或尚未保存，请结束并保存后再操作。');
+    function assertAction(action, target, activeJobs) {
+        const permission = getActionPermission(action, target, activeJobs);
+        if (!permission.available) throw new PlaygroundError(permission.code, permission.message);
     }
-    async function changeChatMessages(id, messageIds, operation, run) {
+    async function changeChatMessages(id, messageIds, action, operation, run) {
         if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-        const ownJobs = [...jobs.values()].filter(job => !job.closed && (job.acceptedId ?? job.requestedRoundId) === id)
-            .map(job => ({ phase: job.phase, messageId: job.messageId ?? job.round?.initialAssistantId, resultId: job.resultId, replaceResultId: job.replaceResultId }));
-        if (messageIds.some(messageId => playMessageIsPending({ id: messageId }, ownJobs))) {
-            throw new PlaygroundError('busy', '所选消息正在生成或尚未保存，请结束并保存后再操作。');
-        }
+        const chat = await session.ensureChat(id);
+        for (const messageId of messageIds) if (chat.messages.some(message => message.id === messageId)) assertAction(action, { chat, messageId });
         return session.mutate(id, revision => historyAction(operation, () => run(revision), true));
+    }
+    async function removeChatMessage(id, messageId, revision, expected = {}) {
+        return changeChatMessages(id, [messageId], 'remove', '删除聊天消息',
+            () => history.removeMessage(id, messageId, session.revision(id, revision), expected));
+    }
+    async function editChatMessage(id, messageId, update, options) {
+        const chat = await session.ensureChat(id);
+        assertAction('edit', { chat, messageId, resultId: update.resultId });
+        return session.edit(id, messageId, update, options).chat;
     }
     function notify(job) {
         if (job.acceptedId) {
@@ -125,9 +136,13 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     }
     function availability({ resultId, chatId } = {}) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
-        const job = resultId && findJob(resultId);
-        if (job && !job.closed) return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
-        if (chatId && hasRoundJob(chatId)) return { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' };
+        const active = [...jobs.values()].filter(job => !job.closed).map(readJob);
+        if (resultId && playResultIsPending({ id: resultId }, active, session.pendingOperations())) {
+            return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
+        }
+        if (chatId && !getActionPermission('send', { chatId }).available) {
+            return { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' };
+        }
         if (typeof prepareRequest !== 'function') return { available: false, code: 'generation_unavailable', message: PLAY_GENERATION_UNAVAILABLE };
         if (prepareRequest.isReady && !prepareRequest.isReady()) return { available: false, code: 'generation_loading', message: '正在载入酒馆的生成接口…' };
         return { available: true };
@@ -151,10 +166,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     }
     async function start({ roundId, replaceResultId, continueResultId, characterId, character, prompt, origin,
         chatMode = false, operation, messageId, expectedRevision }) {
-        const available = availability({ resultId: replaceResultId || continueResultId, ...(chatMode ? { chatId: roundId } : {}) });
+        operation ??= continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send';
+        const available = availability({ resultId: replaceResultId || continueResultId,
+            ...(chatMode && operation === 'send' ? { chatId: roundId } : {}) });
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
-        operation ??= continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send';
         // Synchronous capture: later settings changes do not change this request.
         // Only the public context below is saved; environment may contain keys.
         let environment;
@@ -169,8 +185,11 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let baseText = '';
         let continueExtra;
         let resolvedContext;
+        const cached = roundId && session.currentChat(roundId);
+        const cachedMessage = operation !== 'send' && (chatMode ? cached?.messages.at(-1)
+            : cached?.messages.find(message => cached.startMessageIds.includes(message.id) && message.role === 'assistant'));
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
-            requestedRoundId: roundId, replaceResultId, chatMode, messageId, operation,
+            requestedRoundId: roundId, replaceResultId, chatMode, messageId: messageId ?? cachedMessage?.id ?? null, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
             context, closed: false };
         Object.defineProperties(job, {
@@ -194,11 +213,15 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (continueResultId && !current?.messages.flatMap(message => message.results ?? []).some(result => result.id === continueResultId && result.text !== undefined)) {
                     current = await abortable(() => session.getChat(roundId), job.controller.signal);
                 }
+                const target = operation === 'send' ? null : chatMode ? current.messages.find(message => message.id === messageId) ?? current.messages.at(-1)
+                    : current.messages.find(message => current.startMessageIds.includes(message.id) && message.role === 'assistant');
+                if (operation !== 'send' && target) messageId ??= target.id;
+                job.messageId = messageId ?? job.messageId;
+                assertAction(operation === 'regenerate' ? 'again' : operation,
+                    { chat: current, message: target, resultId: continueResultId ?? replaceResultId, isLast: !target || target === current.messages.at(-1) },
+                    [...jobs.values()].filter(other => !other.closed && other !== job).map(readJob));
                 if (continueResultId) {
-                    const assistant = current.messages.find(message => message.results?.some(result => result.id === continueResultId));
-                    if (assistant?.hidden) throw new PlaygroundError('message_hidden', '请先显示此楼层再续写。');
                     const target = current.messages.flatMap(message => message.results ?? []).find(result => result.id === continueResultId);
-                    if (!target?.text?.trim()) throw new PlaygroundError('empty_result', '这份结果没有正文，无法续写；请使用重新生成。');
                     baseText = target.text; continueExtra = readPlayReasoning(target.extra ?? {});
                 }
             }
@@ -360,7 +383,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     }
 
     return {
-        availability, session, publish, favoriteOperations,
+        availability, getActionPermission, session, publish, favoriteOperations,
         getState,
         getStates: () => [...jobs.values()].filter(job => !job.closed).map(readJob),
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
@@ -384,7 +407,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         getChatWindow: (id, options) => historyAction('读取分支聊天显示范围', () => session.getChatWindow(id, options)),
         ensureChat: (id, options) => session.ensureChat(id, options),
         async finishUnfinishedChat(id) {
-            assertIdleChat(id);
+            assertAction('finish', { chatId: id });
             await session.mutate(id, async () => {
                 const chat = await history.getChat(id);
                 for (const message of chat.messages) for (const result of message.results ?? []) {
@@ -394,41 +417,35 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 return history.getChat(id);
             });
         },
-        createBranch(id, messageId, revision) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
+        async createBranch(id, messageId, revision) {
+            await session.ensureChat(id);
+            assertAction('branch', { chatId: id, messageId });
             return session.mutate(id, revision => historyAction('创建分支', () => history.createBranch(id, messageId, revision), true), revision);
         },
-        setMessageVersion(id, messageId, resultId, expectedResultId, options = {}) {
-            if (options.playSelection) {
-                if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            } else assertIdleChat(id);
-            return session.mutate(id, () => historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId, options)));
+        async setMessageVersion(id, messageId, resultId, expectedResultId) {
+            await session.ensureChat(id);
+            assertAction('choose', { chatId: id, messageId, resultId });
+            return session.mutate(id, () => historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId)));
         },
         renameChat(id, name, revision) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             return session.mutate(id, revision => historyAction('修改聊天名称', () => history.renameChat(id, name, revision), true), revision);
         },
         setMessagesHidden(id, messageIds, hidden, revision) {
-            return changeChatMessages(id, messageIds, '修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, session.revision(id, revision)));
+            return changeChatMessages(id, messageIds, 'visibility', '修改楼层显隐', () => history.setMessagesHidden(id, messageIds, hidden, session.revision(id, revision)));
         },
-        async editMessage(id, messageId, update) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (playMessageIsPending(session.currentChat(id)?.messages.find(message => message.id === messageId), [...jobs.values()])) throw new PlaygroundError('busy', '所选消息正在生成或尚未保存，请结束并保存后再操作。');
-            return session.edit(id, messageId, update).chat;
-        },
-        removeMessage(id, messageId, revision) {
-            return changeChatMessages(id, [messageId], '删除聊天消息', () => history.removeMessage(id, messageId, session.revision(id, revision)));
-        },
+        editMessage: editChatMessage,
+        removeMessage: removeChatMessage,
         truncateChat(id, messageId, revision) {
-            assertIdleChat(id);
+            assertAction('truncate', { chatId: id });
             return session.mutate(id, revision => historyAction('删除所选消息及后续对话', () => history.truncateChat(id, messageId, revision), true), revision);
         },
         deleteChat(id, revision, options) {
-            assertIdleChat(id);
+            assertAction('delete-chat', { chatId: id });
             return session.mutate(id, revision => historyAction('删除该聊天', () => history.deleteChat(id, revision, options), true), revision);
         },
         addChatFavorite(input) {
-            assertIdleChat(input.chatId);
+            assertAction('favorite-chat', { chatId: input.chatId });
             return session.mutate(input.chatId, revision => historyAction('收藏该聊天', () => history.addChatFavorite({ ...input, expectedRevision: revision }), true), input.expectedRevision);
         },
         async syncChatFavorite(id, input) {
@@ -460,10 +477,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         listFavorites: () => historyAction('读取演出收藏列表', () => history.listFavorites()),
         getFavorite: id => historyAction('读取演出收藏', () => history.getFavorite(id)),
         async addFavorite(input) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (findJob(input.resultId)) {
-                throw new PlaygroundError('busy', '请在这份回复结束并保存后收藏');
-            }
+            await session.ensureChat(input.roundId);
+            const result = session.currentResult(input.roundId, input.resultId);
+            assertAction('favorite', { chatId: input.roundId, messageId: input.messageId, resultId: input.resultId,
+                result: result && { ...result, text: input.expectedText } });
             await session.flush(input.roundId);
             return historyAction('收藏演出记录', () => history.addFavorite(input), true);
         },
@@ -480,34 +497,30 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             return historyAction('取消演出收藏', () => history.removeFavorite(id), true);
         },
         async editPrompt(roundId, text, expectedText) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             if (typeof text !== 'string' || !text.trim()) throw new PlayHistoryError('invalid_history', '提示词不能为空。');
+            await session.ensureChat(roundId);
             const round = session.currentRound(roundId);
-            session.edit(roundId, round?.initialUserId, { text, expectedText });
+            await editChatMessage(roundId, round?.initialUserId, { text, expectedText });
             return session.currentRound(roundId);
         },
         async editResult(roundId, resultId, text, expectedText) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
             if (typeof text !== 'string' || !text.trim()) throw new PlayHistoryError('invalid_history', '回复正文不能为空。');
-            if (findJob(resultId) && !findJob(resultId).closed) throw new PlaygroundError('busy', '这条回复正在生成或保存，请结束后再编辑。');
+            await session.ensureChat(roundId);
             const round = session.currentRound(roundId);
-            session.edit(roundId, round?.initialAssistantId, { text, resultId, expectedText }, { select: round?.initialIsLast });
+            await editChatMessage(roundId, round?.initialAssistantId, { text, resultId, expectedText }, { select: round?.initialIsLast });
             return session.currentRound(roundId);
         },
         async removePrompt(roundId, expectedText) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (hasRoundJob(roundId)) {
-                throw new PlaygroundError('busy', '这轮回复正在生成或尚未保存，请结束并保存后再删除。');
-            }
-            const round = await session.mutate(roundId, () => historyAction('删除用户消息', () => history.removePrompt(roundId, expectedText), true));
-            return round;
+            await session.ensureChat(roundId);
+            const round = session.currentRound(roundId);
+            if (round?.initialUserId) await removeChatMessage(roundId, round.initialUserId, undefined, { expectedText });
+            return session.currentRound(roundId);
         },
         async removeReply(roundId, expectedResults) {
-            if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
-            if (hasRoundJob(roundId)) {
-                throw new PlaygroundError('busy', '这条回复正在生成或尚未保存，请结束并保存后再删除。');
-            }
-            return session.mutate(roundId, () => historyAction('删除 AI 消息及全部版本', () => history.removeReply(roundId, expectedResults), true));
+            await session.ensureChat(roundId);
+            const round = session.currentRound(roundId);
+            if (round?.initialAssistantId) await removeChatMessage(roundId, round.initialAssistantId, undefined, { expectedResults });
+            return session.currentRound(roundId);
         },
         getRound: id => historyAction('读取演出记录', () => session.getRound(id)),
         async createRoundReader() {

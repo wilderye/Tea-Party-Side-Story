@@ -118,6 +118,7 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
     async function flush(id, boundary = Infinity) {
         const item = entry(id);
         if (item.running) { await item.running; return flush(id, boundary); }
+        let failedTarget;
         const work = async () => {
             let value;
             while (item.pending.length && item.pending[0].sequence <= boundary) {
@@ -128,14 +129,17 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
                 } catch (error) {
                     if (operation.kind === 'mutation') item.pending.shift();
                     else { if (error && typeof error === 'object') saveErrors.add(error); onSaveError(error); }
-                    changed(id, 'save-error', operation.target); throw error;
+                    failedTarget = operation.target; throw error;
                 }
             }
             return value;
         };
         const task = work(); item.running = task;
         try { return await task; }
-        finally { if (item.running === task) item.running = null; }
+        finally {
+            if (item.running === task) item.running = null;
+            if (failedTarget) changed(id, 'save-error', failedTarget);
+        }
     }
     function enqueue(id, kind, run, target = {}, auto = true) {
         changed(id, 'content', target);
@@ -243,6 +247,8 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
         }) };
     }
     return {
+        pendingOperations: id => (id ? [chats.get(id)].filter(Boolean) : [...chats.values()]).flatMap(item =>
+            item.pending.map(operation => ({ chatId: item.chat?.id, kind: operation.kind, saving: !!item.running, ...operation.target }))),
         currentChat: id => clone(entry(id).chat),
         currentRound: id => entry(id).chat ? playStartRound(clone(entry(id).chat)) : null,
         currentResult: (id, resultId) => clone(result(id, resultId)),

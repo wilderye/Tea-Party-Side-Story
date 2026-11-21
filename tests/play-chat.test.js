@@ -337,17 +337,16 @@ test('生成服务允许旧消息编辑、显隐和单条删除；当前请求�
     assert.deepEqual(requests[1].environment.branchHistory.map(message => message.text), ['改过的用户消息', '改过的旧回复', '生成最终文字']);
 });
 
-test('游玩起始对子生成多个版本时可切换查看；分支生成和已有后续的起始楼层仍不可切换', async () => {
+test('演出和聊天生成多个版本时均可切换查看；已有后续的起始楼层仍不可切换', async () => {
     const f = memoryFiles(), initial = await seed(f), ai = initial.messages[1];
     const round = await f.store.begin({ roundId: initial.id, character: characterA, context: contextA,
         resultId: randomUUID(), startedAt: time(8) });
-    await assert.rejects(f.store.setMessageVersion(initial.id, ai.id, ai.results[0].id), { code: 'chat_busy' });
-    const selected = await f.store.setMessageVersion(initial.id, ai.id, ai.results[0].id, undefined, { playSelection: true });
+    const selected = await f.store.setMessageVersion(initial.id, ai.id, ai.results[0].id);
     assert.equal(selected.messages[1].selectedResultId, ai.results[0].id);
     await f.store.saveResult(round.id, round.results.at(-1).id, { text: '生成完成', status: 'complete', finishedAt: time(9) });
     const next = await f.store.begin({ roundId: initial.id, chatMode: true, operation: 'send', prompt: '后续',
         character: characterA, context: contextA, resultId: randomUUID(), startedAt: time(10) });
-    await assert.rejects(f.store.setMessageVersion(next.id, ai.id, ai.results[1].id, undefined, { playSelection: true }), { code: 'message_not_last' });
+    await assert.rejects(f.store.setMessageVersion(next.id, ai.id, ai.results[1].id), { code: 'message_not_last' });
 });
 
 test('迁移和编辑提交失败保留旧指向；另一窗口的变化不会被过期范围删除覆盖', async () => {

@@ -92,7 +92,11 @@ test('过期窗口不能删除修改过的用户消息、回复或未见过的�
     const current = await f.store.getRound(round.id);
     assert.equal(current.results.length, 2);
     assert.equal(current.prompt, '新的用户消息');
-    await f.store.removeReply(round.id, current.results);
+    await assert.rejects(f.store.removeReply(round.id, current.results), error => error.code === 'chat_busy');
+    const unfinished = current.results.find(result => result.status === 'unfinished');
+    await f.store.saveResult(round.id, unfinished.id, { status: 'stopped', finishedAt: time(4) });
+    const stopped = await f.store.getRound(round.id);
+    await f.store.removeReply(round.id, stopped.results);
     assert.equal((await f.store.getRound(round.id)).results.length, 0, '也可以清理已中断、未完成的旧版本');
 });
 

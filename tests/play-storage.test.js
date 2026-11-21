@@ -211,6 +211,49 @@ test('楼层显隐命令通过后台通道传递完整范围和冲突版本', as
     assert.deepEqual(messages[0].args, args);
 });
 
+test('后台保存允许生成中切换和编辑旧版本，删除仍核对目标内容并保护全部版本', async t => {
+    const f = memoryFiles(), initial = await f.begin(), oldId = initial.results[0].id;
+    await f.store.saveResult(initial.id, oldId, { text: '旧版本已保存', status: 'complete', finishedAt: time(1) });
+    const next = await f.begin({ roundId: initial.id, operation: 'another' });
+    const chat = await f.store.getChat(initial.id), user = chat.messages[0], reply = chat.messages[1];
+    const nextId = next.results.at(-1).id, calls = [];
+    browser(t, class {
+        constructor() {
+            this.port = { close() {}, postMessage: data => {
+                calls.push(data);
+                Promise.resolve().then(() => f.store[data.method](...data.args)).then(
+                    value => this.port.onmessage({ data: { id: data.id, value } }),
+                    error => this.port.onmessage({ data: { id: data.id, error: serializeDiagnosticError(error) } }),
+                );
+            } };
+            queueMicrotask(() => this.port.onmessage({ data: { ready: true } }));
+        }
+    });
+    const history = createBrowserPlayHistory(context);
+    const selected = await history.setMessageVersion(chat.id, reply.id, oldId, nextId);
+    assert.equal(selected.messages[1].selectedResultId, oldId);
+    assert.equal(selected.messages[1].results.find(result => result.id === nextId).status, 'unfinished');
+    const edited = await history.editMessage(chat.id, reply.id,
+        { resultId: oldId, text: '旧版本编辑后已保存', expectedText: '旧版本已保存' });
+    assert.equal(edited.messages[1].results.find(result => result.id === oldId).text, '旧版本编辑后已保存');
+    assert.equal(edited.messages[1].results.find(result => result.id === nextId).status, 'unfinished');
+    const confirmedEdit = await f.store.getChat(chat.id);
+    const expectedResults = confirmedEdit.messages[1].results.map(({ id, text }) => ({ id, text }));
+    await assert.rejects(history.removeMessage(chat.id, reply.id, undefined, { expectedResults }), { code: 'chat_busy' });
+    await assert.rejects(history.removeMessage(chat.id, user.id, undefined, { expectedText: '已经改变的用户消息' }), { code: 'delete_conflict' });
+    const removed = await history.removeMessage(chat.id, user.id, undefined, { expectedText: user.text });
+    assert.equal(removed.messages.length, 1);
+    assert.equal(removed.messages[0].results.find(result => result.id === nextId).status, 'unfinished');
+    await f.store.saveResult(chat.id, nextId, { text: '另一个版本独立完成', status: 'complete', finishedAt: time(2) });
+    await assert.rejects(history.removeMessage(chat.id, reply.id, undefined, { expectedResults }), { code: 'delete_conflict' });
+    const saved = await f.store.getChat(chat.id);
+    const confirmed = saved.messages[0].results.map(({ id, text }) => ({ id, text }));
+    const empty = await history.removeMessage(chat.id, reply.id, undefined, { expectedResults: confirmed });
+    assert.deepEqual(empty.messages, []);
+    assert.equal(calls.at(-1).method, 'removeMessage');
+    assert.deepEqual(calls.at(-1).args, [chat.id, reply.id, undefined, { expectedResults: confirmed }]);
+});
+
 test('用户身份保存接入后台和局域网接口，只传递指定消息的身份', async t => {
     const calls = [], identity = { name: '测试用户', avatar: '测试.png' };
     browser(t, class {

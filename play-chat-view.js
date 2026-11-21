@@ -1,5 +1,5 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
-import { playMessageDepths, playHiddenRanges, playMessageIsPending, playChatMessageIdentity } from './play-message-context.js';
+import { playMessageDepths, playHiddenRanges, playChatMessageIdentity } from './play-message-context.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText, playTextPreview } from './play-render.js';
@@ -126,25 +126,29 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const target = () => ({ characterId: chat.characterId, character: { avatar: owner()?.avatar, name: owner()?.name } });
     const ownJobs = (jobs = playground.getStates()) => jobs.filter(job => (job.roundId ?? job.requestedRoundId) === chat?.id);
     const writeBlocked = () => !chat || chatUnavailable || mutating || loading || settings.enabled === false || messageEditing.busy;
-    const busy = (jobs = ownJobs()) => writeBlocked() || !!editingSession() || jobs.length > 0 || chat.messages.some(message => playMessageIsPending(message));
+    const busy = (jobs = ownJobs()) => writeBlocked() || !!editingSession()
+        || !playground.getActionPermission('send', { chat }, jobs).available;
     const canWrite = () => settings.enabled !== false && !!ctx().characters?.some(character => character.avatar === owner()?.avatar);
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
     function messagePermissions(message, jobs = ownJobs()) {
         const result = currentResult(message), session = editingSession(), editing = session?.messageId === message.id;
-        const ready = !writeBlocked() && !editing && !playMessageIsPending(message, jobs), idle = deletingFrom === null && ready;
-        const index = message.results?.indexOf(result), last = chat.messages.at(-1)?.id === message.id, chatIdle = deletingFrom === null && !busy(jobs);
+        const ready = !writeBlocked() && !editing, idle = deletingFrom === null && ready;
+        const index = message.results?.indexOf(result), canChoose = deletingFrom === null && !writeBlocked() && !session;
+        const permission = action => playground.getActionPermission(action, { chat, messageId: message.id, resultId: result?.id }, jobs).available;
+        const canGenerate = canChoose && canWrite() && playground.availability().available;
         const copiesEditor = !!session && chat.messages.findIndex(item => item.id === session.messageId) <= chat.messages.indexOf(message);
-        return { inspect: !chatUnavailable, more: !chatUnavailable, edit: idle, remove: idle, visibility: idle, branch: idle && !copiesEditor,
-            favorite: ready && !!(result?.text ?? message.text)?.trim(),
-            previous: chatIdle && index > 0, choose: chatIdle,
-            next: chatIdle && (index < (message.results?.length ?? 0) - 1 || canWrite()),
-            again: !writeBlocked() && !editing && chatIdle && canWrite(),
-            continue: chatIdle && canWrite() && !!result?.text?.trim() && !message.hidden && last };
+        return { inspect: !chatUnavailable, more: !chatUnavailable, edit: idle && permission('edit'),
+            remove: idle && permission('remove'), visibility: idle && permission('visibility'), branch: idle && !copiesEditor && permission('branch'),
+            favorite: ready && permission('favorite'), previous: canChoose && permission('choose') && index > 0,
+            choose: canChoose && permission('choose'),
+            next: index < (message.results?.length ?? 0) - 1 ? canChoose && permission('choose') : canGenerate && permission('another'),
+            again: canGenerate && permission('again'), continue: canGenerate && permission('continue') };
     }
     function menuPermission(action, jobs = ownJobs()) {
         if (action === 'rename') return !writeBlocked();
         if (action === 'hidden') return !writeBlocked() && !editingSession();
-        return !busy(jobs);
+        return !writeBlocked() && !editingSession() && playground.getActionPermission(
+            action === 'favorite' ? 'favorite-chat' : action === 'delete' ? 'delete-chat' : 'truncate', { chat }, jobs).available;
     }
     function syncPermissions(jobs = playground.getStates()) {
         if (!chat) return;
@@ -615,10 +619,11 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (message) await run(() => playground.truncateChat(chat.id, message.id, chat.revision));
     }
     function updateInput(jobs = playground.getStates()) {
-        const own = ownJobs(jobs), generating = own.find(job => activePhases.has(job.phase));
+        const own = ownJobs(jobs), active = own.filter(job => activePhases.has(job.phase)), generating = active[0];
         const ownPending = own.length > 0;
         const stopping = ownPending || (!input.value.trim() && jobs.some(job => activePhases.has(job.phase)));
-        const icon = stopping ? 'stop' : 'send', label = generating ? '停止这份回复' : ownPending ? '正在保存回复' : stopping ? '停止所有生成' : '发送消息';
+        const icon = stopping ? 'stop' : 'send', label = active.length > 1 ? '停止所有生成'
+            : generating ? '停止这份回复' : ownPending ? '正在保存回复' : stopping ? '停止所有生成' : '发送消息';
         if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
         send.title = label; send.setAttribute('aria-label', label);
         send.disabled = stopping ? ownPending && !generating : busy(own) || !canWrite() || !input.value.trim() || !playground.availability({ chatId: chat?.id }).available;
@@ -803,8 +808,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             } });
     }
     async function sendDraft() {
-        const job = ownJobs().find(job => activePhases.has(job.phase));
-        if (job) { playground.stop(job.resultId); return; }
+        const active = ownJobs().filter(job => activePhases.has(job.phase));
+        if (active.length) { if (active.length === 1) playground.stop(active[0].resultId); else playground.stopAll(); return; }
         if (!input.value.trim()) { playground.stopAll(); return; }
         if (busy() || !canWrite()) return;
         const id = chat.id, text = input.value;
@@ -816,7 +821,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         finally { if (pendingDrafts.get(id) === text) pendingDrafts.delete(id); }
     }
     async function generate(operation, message) {
-        if (busy() || !canWrite()) return;
+        if (writeBlocked() || editingSession() || deletingFrom !== null || !canWrite() || !playground.availability().available
+            || !playground.getActionPermission(operation === 'regenerate' ? 'again' : operation, { chat, messageId: message.id }).available) return;
         const result = currentResult(message), id = chat.id, args = [id, message.id];
         const method = operation === 'another' ? 'generateChatVersion' : operation === 'regenerate' ? 'regenerateChat' : 'continueChat';
         if (operation !== 'another') args.push(result.id);
@@ -830,7 +836,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
     }
     async function selectVersion(message, index) {
-        if (busy() || !message.results[index]) return;
+        if (!messagePermissions(message).choose || !message.results[index]) return;
         await run(() => playground.setMessageVersion(chat.id, message.id, message.results[index].id, message.selectedResultId));
     }
     function closeVersions(restore = true) { versionMenu.close(restore); }
@@ -868,7 +874,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
             }
             const result = current?.results?.find(item => item.id === resultId);
             if (!current || resultId && !result) throw new Error('原回复已删除');
-            if (chat?.id !== id || mutating || loading || settings.enabled === false || playMessageIsPending(current, ownJobs())) return null;
+            if (chat?.id !== id || mutating || loading || !playground.getActionPermission('edit',
+                { chat, messageId, resultId }).available) return null;
             const saved = position(false); chat = latest; chatUnavailable = false;
             const index = chat.messages.indexOf(current); start = Math.min(start, index); end = Math.max(end, index + 1);
             renderChat(saved);
