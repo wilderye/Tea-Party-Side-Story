@@ -842,7 +842,9 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     }
     async function selectVersion(message, index) {
         if (!messagePermissions(message).choose || !message.results[index]) return;
-        await run(() => playground.setMessageVersion(chat.id, message.id, message.results[index].id, message.selectedResultId));
+        remember(); menu.open = false;
+        try { await playground.setMessageVersion(chat.id, message.id, message.results[index].id, message.selectedResultId); }
+        catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
     }
     function closeVersions(restore = true) { versionMenu.close(restore); }
     async function showVersions(message) {

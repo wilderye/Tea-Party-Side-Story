@@ -91,14 +91,32 @@ async function verify(browser, url, viewport, route) {
         assert.equal(await reply.locator('.play-count').isEnabled(), true);
         assert.equal(await button(reply, '更多回复操作').isVisible(), true);
         await expand(reply); await protectedAction('创建分支'); await protectedAction('删除 AI 消息');
+        await flush();
+        await page.evaluate(() => {
+            window.originalSelection = testHistory.setMessageVersion.bind(testHistory);
+            window.originalWindow = testHistory.getChatWindow.bind(testHistory);
+            window.selectionReleased = false; window.selectionWindowReads = 0;
+            const gate = new Promise(resolve => window.releaseSelection = () => { window.selectionReleased = true; resolve(); });
+            testHistory.setMessageVersion = async (...args) => { await gate; return originalSelection(...args); };
+            testHistory.getChatWindow = (...args) => { window.selectionWindowReads++; return originalWindow(...args); };
+        });
+        stage = '保存阻塞时立即切换已有版本';
         await activate(button(reply, '上一个结果'));
-        await reply.getByText('版本一已保存的正文', { exact: true }).waitFor();
+        await reply.getByText('版本一已保存的正文', { exact: true }).waitFor({ timeout: 1500 });
         assert.equal(await selected(), seed.oldId);
+        assert.equal(await page.evaluate(() => selectionReleased), false);
         await choose(1); await reply.getByText('版本二正在生成', { exact: true }).waitFor();
         await choose(0); await reply.getByText('版本一已保存的正文', { exact: true }).waitFor();
         await emit(0, '隐藏的版本二继续生成'); await settle(page);
         assert.equal(await selected(), seed.oldId);
         assert.equal(await reply.getByText('隐藏的版本二继续生成', { exact: true }).isVisible(), false);
+        assert.equal(await page.evaluate(() => selectionWindowReads), 0);
+        assert.equal(await page.evaluate(() => runtime.getStates()[0].phase), 'generating');
+        assert.equal(await reply.locator('.play-count').isEnabled(), true);
+        if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `immediate-version-${route}-${viewport.width}.png`) });
+        await page.evaluate(() => releaseSelection()); await flush();
+        assert.equal(await page.evaluate(id => testHistory.getChat(id).then(chat => chat.messages[1].selectedResultId), seed.id), seed.oldId);
+        await page.evaluate(() => { testHistory.setMessageVersion = originalSelection; testHistory.getChatWindow = originalWindow; });
 
         stage = '收藏和编辑旧版本';
         await activate(button(reply, '收藏演出记录'));
@@ -192,7 +210,7 @@ async function verify(browser, url, viewport, route) {
         assert.deepEqual(errors, []);
         if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `all-versions-${route}-${viewport.width}.png`) });
         console.log(JSON.stringify({ viewport, route, passed: true, versions: 5, requests: 6, errors,
-            checks: '生成中回看、数字菜单、旧版本收藏编辑、并行重新生成续写、新增版本、单独停止、停止所有生成、删除用户消息、分支保留全部版本' }));
+            checks: '保存阻塞时立即切换、连续切换保持最后选择、生成中回看、数字菜单、旧版本收藏编辑、并行重新生成续写、新增版本、单独停止、停止所有生成、删除用户消息、分支保留全部版本' }));
     } catch (error) {
         console.error(JSON.stringify({ viewport, route, stage, errors }));
         if (process.env.TEA_QA_DIR) await page.screenshot({ path: path.join(process.env.TEA_QA_DIR, `failure-${route}-${viewport.width}.png`) });

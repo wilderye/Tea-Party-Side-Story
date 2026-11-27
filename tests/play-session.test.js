@@ -359,6 +359,104 @@ test('编辑旧版本后的选择失败只报告一次，正文已保存，下�
     assert.deepEqual(f.errors, ['版本选择保存失败']);
 });
 
+test('生成中切换已读取版本立即返回，保存等待不阻止显示和继续生成', async () => {
+    const f = await fixture(), started = deferred(), finish = deferred(), entered = deferred(), gate = deferred();
+    const service = createPlayground({ history: f.store, captureEnvironment: () => ({ character: characterA, context: contextA }), isCurrent: () => true,
+        prepareRequest: async () => ({ send: async ({ onText }) => { onText('新版本仍在生成'); started.resolve(); return finish.promise; } }) });
+    await service.getChat(f.chat.id);
+    const generating = service.generateAnother(f.chat.id); await started.promise;
+    const message = service.session.currentChat(f.chat.id).messages[1], oldId = message.results[0].id;
+    const select = f.store.setMessageVersion.bind(f.store), reads = [];
+    f.store.setMessageVersion = async (...args) => { entered.resolve(); await gate.promise; return select(...args); };
+    f.io.beforeRead = name => reads.push(name);
+    let completed = false;
+    const selecting = service.setMessageVersion(f.chat.id, message.id, oldId, message.selectedResultId).then(chat => { completed = true; return chat; });
+    try {
+        await entered.promise; await turn();
+        assert.equal(completed, true, '显示版本不等待文件保存');
+        assert.equal(service.session.currentRound(f.chat.id).selectedResultId, oldId);
+        assert.equal(service.getStates()[0].phase, 'generating');
+        assert.equal(service.getStates()[0].text, '新版本仍在生成');
+        assert.deepEqual(reads, [], '已读取正文不再读取文件');
+        assert.equal(service.session.hasUnsaved(), true);
+    } finally {
+        gate.resolve(); await selecting;
+        finish.resolve('新版本最终正文'); await generating;
+    }
+    assert.equal((await f.createStore().getChat(f.chat.id)).messages[1].selectedResultId, oldId);
+    assert.deepEqual(service.session.currentRound(f.chat.id).results.map(result => result.text), ['原回复', '新版本最终正文']);
+});
+
+async function versionFixture() {
+    const f = await fixture(), next = await f.begin({ roundId: f.chat.id, operation: 'another' });
+    await f.store.saveResult(f.chat.id, next.results.at(-1).id, { text: '第二个版本', status: 'complete', finishedAt: time(3) });
+    f.chat = await f.session.getChat(f.chat.id);
+    const service = createPlayground({ history: f.store, onSaveError: error => f.errors.push(error.message),
+        captureEnvironment: () => ({ character: characterA, context: contextA }), isCurrent: () => true });
+    await service.getChat(f.chat.id);
+    return { ...f, service };
+}
+
+test('连续切换立即显示最后所选版本，保存按顺序完成且旧确认不覆盖新选择', async () => {
+    const f = await versionFixture(), message = f.chat.messages[1], [first, second] = message.results;
+    const gates = [deferred(), deferred()], entered = [deferred(), deferred()], calls = [];
+    const select = f.store.setMessageVersion.bind(f.store);
+    f.store.setMessageVersion = async (...args) => {
+        const index = calls.length; calls.push(args.slice(2)); entered[index].resolve(); await gates[index].promise;
+        return select(...args);
+    };
+    const selecting = f.service.setMessageVersion(f.chat.id, message.id, first.id, second.id);
+    try {
+        await entered[0].promise; await turn();
+        assert.equal(f.service.session.currentRound(f.chat.id).selectedResultId, first.id);
+        const next = await f.service.setMessageVersion(f.chat.id, message.id, second.id, first.id);
+        assert.equal(next.messages[1].selectedResultId, second.id);
+        gates[0].resolve(); await entered[1].promise;
+        assert.equal((await f.store.getChat(f.chat.id)).messages[1].selectedResultId, first.id);
+        assert.equal(f.service.session.currentRound(f.chat.id).selectedResultId, second.id);
+    } finally { gates.forEach(gate => gate.resolve()); await selecting; await f.service.session.flush(f.chat.id); }
+    assert.equal((await f.createStore().getChat(f.chat.id)).messages[1].selectedResultId, second.id);
+    assert.deepEqual(calls, [[first.id, second.id], [second.id, first.id]]);
+});
+
+test('版本选择保存失败保留当前显示和待保存选择，再次选择可以补存', async () => {
+    const f = await versionFixture(), message = f.chat.messages[1], [first, second] = message.results;
+    const select = f.store.setMessageVersion.bind(f.store);
+    f.store.setMessageVersion = () => { throw Error('版本选择保存失败'); };
+    const selected = await f.service.setMessageVersion(f.chat.id, message.id, first.id, second.id);
+    assert.equal(selected.messages[1].selectedResultId, first.id);
+    await until(() => f.errors.length === 1);
+    assert.equal(f.service.session.currentRound(f.chat.id).selectedResultId, first.id);
+    assert.equal((await f.store.getChat(f.chat.id)).messages[1].selectedResultId, second.id);
+    assert.equal(f.service.session.hasUnsaved(), true);
+    f.store.setMessageVersion = select;
+    await f.service.setMessageVersion(f.chat.id, message.id, first.id, first.id);
+    await f.service.session.flush(f.chat.id);
+    assert.equal((await f.createStore().getChat(f.chat.id)).messages[1].selectedResultId, first.id);
+    assert.equal(f.service.session.hasUnsaved(), false);
+    assert.deepEqual(f.errors, ['版本选择保存失败']);
+});
+
+test('切换未读取的版本只加载目标正文，迟到的旧目录不覆盖当前选择', async () => {
+    const f = await versionFixture(), message = f.chat.messages[1], [first, second] = message.results;
+    const service = createPlayground({ history: f.store, captureEnvironment: () => ({ character: characterA, context: contextA }), isCurrent: () => true });
+    await service.session.getChatMetadata(f.chat.id);
+    const captured = deferred(), readGate = deferred(), saveGate = deferred(), entered = deferred(), bodies = [];
+    const read = f.store.getChatWindow.bind(f.store), body = f.store.getMessageBody.bind(f.store), select = f.store.setMessageVersion.bind(f.store);
+    f.store.getChatWindow = async (...args) => { const window = await read(...args); captured.resolve(); await readGate.promise; return window; };
+    f.store.getMessageBody = (...args) => { bodies.push(args[0]); return body(...args); };
+    f.store.setMessageVersion = async (...args) => { entered.resolve(); await saveGate.promise; return select(...args); };
+    const reading = service.getChatWindow(f.chat.id, { latest: true }); await captured.promise;
+    const selecting = service.setMessageVersion(f.chat.id, message.id, first.id, second.id);
+    try {
+        await entered.promise; await turn(); readGate.resolve();
+        const window = await reading;
+        assert.equal(window.chat.messages[1].selectedResultId, first.id);
+        assert.equal(window.chat.messages[1].results[0].text, '原回复');
+        assert.deepEqual(bodies, [first.id]);
+    } finally { readGate.resolve(); saveGate.resolve(); await selecting; await service.session.flush(f.chat.id); }
+});
+
 test('开始保存已完成但回包丢失时，重试沿用消息编号且不会重复发送', async () => {
     const f = await fixture(), begin = f.store.begin.bind(f.store), requests = [], errors = [];
     let lose = true;

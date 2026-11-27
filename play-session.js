@@ -152,6 +152,17 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
     function result(id, resultId) {
         return entry(id).chat?.messages.flatMap(message => message.results ?? []).find(result => result.id === resultId);
     }
+    function setMessageVersion(id, messageId, resultId, expectedResultId) {
+        const chat = entry(id).chat, message = chat?.messages.find(message => message.id === messageId);
+        if (!message?.results?.some(result => result.id === resultId)) throw new PlayHistoryError('result_missing', '这次生成结果已不存在');
+        const selected = message.selectedResultId;
+        if (selected !== resultId && expectedResultId !== undefined && selected !== expectedResultId) {
+            throw new PlayHistoryError('chat_conflict', '回复版本已在其他窗口改变，请重新读取。');
+        }
+        message.selectedResultId = resultId;
+        const change = enqueue(id, 'selection', () => history.setMessageVersion(id, messageId, resultId, selected), { messageId, resultId });
+        return { chat: clone(chat), sequence: change.sequence };
+    }
     function edit(id, messageId, { text, resultId, expectedText }, { select = false } = {}) {
         const item = entry(id), chat = item.chat;
         const message = chat?.messages.find(message => message.id === messageId);
@@ -163,8 +174,7 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
         target.text = text;
         const change = enqueue(id, 'edit', () => history.editMessage(id, messageId, { text, resultId, expectedText: previous }), { messageId, resultId });
         if (select && chat.messages.at(-1) === message && selected !== resultId) {
-            message.selectedResultId = resultId;
-            enqueue(id, 'selection', () => history.setMessageVersion(id, messageId, resultId, selected), { messageId, resultId });
+            setMessageVersion(id, messageId, resultId, selected);
         }
         return { chat: clone(chat), sequence: change.sequence };
     }
@@ -287,7 +297,7 @@ export function createPlaySession(history, { onSaveError = () => {}, onChange = 
             return (id, options) => directory(id, options, reader);
         },
         listCharacters: () => list('listCharacters'), listRounds: id => list('listRounds', id), listChats: id => list('listChats', id),
-        edit, begin, updateResult, finish, flush, revision,
+        edit, setMessageVersion, begin, updateResult, finish, flush, revision,
         isSaveError: error => error && typeof error === 'object' && saveErrors.has(error),
         hasUnsaved: () => [...chats.values()].some(item => item.pending.length),
         async setUserIdentity(id, messageId, resultId, identity) {

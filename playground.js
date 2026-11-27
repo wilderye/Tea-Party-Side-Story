@@ -424,8 +424,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         },
         async setMessageVersion(id, messageId, resultId, expectedResultId) {
             await session.ensureChat(id);
+            const result = session.currentResult(id, resultId);
+            if (result && result.text === undefined) await session.loadMessage(id, messageId, resultId);
             assertAction('choose', { chatId: id, messageId, resultId });
-            return session.mutate(id, () => historyAction('切换回复版本', () => history.setMessageVersion(id, messageId, resultId, expectedResultId)));
+            return session.setMessageVersion(id, messageId, resultId, expectedResultId).chat;
         },
         renameChat(id, name, revision) {
             if (!enabled()) throw new PlaygroundError('disabled', '插件已停用');
