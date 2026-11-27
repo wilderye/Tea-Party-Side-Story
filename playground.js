@@ -97,7 +97,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
     function getActionPermission(action, target = {}, activeJobs) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
         const id = target.chatId ?? target.chat?.id ?? target.round?.id;
-        const chat = target.chat ?? (!target.round && id ? session.currentChat(id) ?? { id, startMessageIds: [], messages: [] } : undefined);
+        const chat = target.chat ?? (!target.round && id ? session.currentChat(id) ?? { id, startMessageIds: [] } : undefined);
         const pending = session.pendingOperations(id);
         return getPlayActionPermission(action, { ...target, chat, pending,
             jobs: activeJobs ?? [...jobs.values()].filter(job => !job.closed).map(readJob) });
@@ -134,14 +134,16 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
             return result;
         } catch (error) { diagnostics?.error(operation, error); throw error; }
     }
-    function availability({ resultId, chatId } = {}) {
+    function availability({ resultId, chatId, action = 'send', chatMode = false } = {}) {
         if (!enabled()) return { available: false, code: 'disabled', message: '插件已停用' };
         const active = [...jobs.values()].filter(job => !job.closed).map(readJob);
         if (resultId && playResultIsPending({ id: resultId }, active, session.pendingOperations())) {
             return { available: false, code: 'busy', message: '这份回复正在生成或保存，请先等待或停止' };
         }
-        if (chatId && !getActionPermission('send', { chatId }).available) {
-            return { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' };
+        if (chatId) {
+            const permission = getActionPermission(action, { chatId, chatMode });
+            if (!permission.available) return permission.code === 'busy'
+                ? { available: false, code: 'busy', message: '这条聊天正在生成或尚未保存，请结束并保存后再发送' } : permission;
         }
         if (typeof prepareRequest !== 'function') return { available: false, code: 'generation_unavailable', message: PLAY_GENERATION_UNAVAILABLE };
         if (prepareRequest.isReady && !prepareRequest.isReady()) return { available: false, code: 'generation_loading', message: '正在载入酒馆的生成接口…' };
@@ -168,7 +170,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         chatMode = false, operation, messageId, expectedRevision }) {
         operation ??= continueResultId ? 'continue' : replaceResultId ? 'regenerate' : roundId ? 'another' : 'send';
         const available = availability({ resultId: replaceResultId || continueResultId,
-            ...(chatMode && operation === 'send' ? { chatId: roundId } : {}) });
+            ...(operation === 'reply' || chatMode && operation === 'send' ? { chatId: roundId, action: operation, chatMode } : {}) });
         if (!available.available) throw new PlaygroundError(available.code, available.message);
         if (!roundId && (typeof prompt !== 'string' || !prompt.trim())) throw new PlaygroundError('empty_prompt', '请先输入小剧场提示词');
         // Synchronous capture: later settings changes do not change this request.
@@ -186,10 +188,10 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         let continueExtra;
         let resolvedContext;
         const cached = roundId && session.currentChat(roundId);
-        const cachedMessage = operation !== 'send' && (chatMode ? cached?.messages.at(-1)
+        const cachedMessage = operation !== 'send' && (chatMode || operation === 'reply' ? cached?.messages.at(-1)
             : cached?.messages.find(message => cached.startMessageIds.includes(message.id) && message.role === 'assistant'));
         const job = { resultId, phase: 'preparing', controller: new AbortController(),
-            requestedRoundId: roundId, replaceResultId, chatMode, messageId: messageId ?? cachedMessage?.id ?? null, operation,
+            requestedRoundId: roundId, replaceResultId, chatMode, messageId: operation === 'reply' ? null : messageId ?? cachedMessage?.id ?? null, operation,
             characterName: environment.character.name, characterAvatar: environment.character.avatar,
             context, closed: false };
         Object.defineProperties(job, {
@@ -213,12 +215,16 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 if (continueResultId && !current?.messages.flatMap(message => message.results ?? []).some(result => result.id === continueResultId && result.text !== undefined)) {
                     current = await abortable(() => session.getChat(roundId), job.controller.signal);
                 }
-                const target = operation === 'send' ? null : chatMode ? current.messages.find(message => message.id === messageId) ?? current.messages.at(-1)
+                const target = operation === 'send' ? null : operation === 'reply' ? current.messages.at(-1)
+                    : chatMode ? current.messages.find(message => message.id === messageId) ?? current.messages.at(-1)
                     : current.messages.find(message => current.startMessageIds.includes(message.id) && message.role === 'assistant');
+                if (operation === 'reply' && messageId && target?.id !== messageId) {
+                    throw new PlaygroundError('chat_conflict', '这条聊天已在其他窗口改变，请保留草稿并重新读取。');
+                }
                 if (operation !== 'send' && target) messageId ??= target.id;
-                job.messageId = messageId ?? job.messageId;
+                if (operation !== 'reply') job.messageId = messageId ?? job.messageId;
                 assertAction(operation === 'regenerate' ? 'again' : operation,
-                    { chat: current, message: target, resultId: continueResultId ?? replaceResultId, isLast: !target || target === current.messages.at(-1) },
+                    { chat: current, message: target, chatMode, resultId: continueResultId ?? replaceResultId, isLast: !target || target === current.messages.at(-1) },
                     [...jobs.values()].filter(other => !other.closed && other !== job).map(readJob));
                 if (continueResultId) {
                     const target = current.messages.flatMap(message => message.results ?? []).find(result => result.id === continueResultId);
@@ -237,7 +243,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
                 chatMode, operation,
                 messageId, expectedRevision, ...(continueResultId ? { expectedText: baseText } : {}) };
             job.acceptedId = roundId ?? input.newRoundId;
-            job.messageId = messageId ?? input.assistantMessageId;
+            job.messageId = operation === 'reply' ? input.assistantMessageId : messageId ?? input.assistantMessageId;
             job.userMessageId = input.operation === 'send' ? input.userMessageId : null;
             job.userIdentity = job.userMessageId ? playUserIdentity(context) : null;
             let acceptance;
@@ -391,6 +397,7 @@ export function createPlayground({ history, captureEnvironment, isCurrent, prepa
         sendChat(chatId, { characterId, character, prompt, origin = null, expectedRevision }) {
             return start({ roundId: chatId, chatMode: true, operation: 'send', characterId, character, prompt, origin, expectedRevision });
         },
+        replyToLastMessage(chatId, target = {}) { return start({ ...target, roundId: chatId, operation: 'reply' }); },
         generateChatVersion(chatId, messageId, target = {}) {
             return start({ ...target, roundId: chatId, messageId, chatMode: true, operation: 'another' });
         },

@@ -99,3 +99,5 @@ README.md
 !tests/play-favorite-feedback.browser.cjs
 !tests/play-action-state.test.js
 !tests/play-action-consistency.browser.cjs
+!tests/play-send.test.js
+!tests/play-send.browser.cjs

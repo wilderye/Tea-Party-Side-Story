@@ -121,6 +121,13 @@ export function playStartRound(chat) {
 
 const startRound = playStartRound;
 
+function appendAssistantMessage(chat, input, results = []) {
+    const assistant = { id: input.assistantMessageId, role: 'assistant', createdAt: input.startedAt,
+        results, selectedResultId: input.resultId };
+    chat.messages.push(assistant);
+    return assistant;
+}
+
 export function preparePlayGeneration(value, input) {
     const chat = clone(value);
     const context = readPlayContext(input.context);
@@ -131,22 +138,34 @@ export function preparePlayGeneration(value, input) {
         const saved = existing.results.find(result => result.id === input.resultId);
         const user = chat.messages.find(message => message.id === input.userMessageId);
         if (saved.startedAt !== input.startedAt || JSON.stringify(saved.context) !== JSON.stringify(context)
-            || input.operation === 'send' && (user?.text !== input.prompt || existing.id !== input.assistantMessageId)) {
+            || input.operation === 'send' && user?.text !== input.prompt
+            || ['send', 'reply'].includes(input.operation) && existing.id !== input.assistantMessageId) {
             throw new PlayHistoryError('chat_conflict', '当前回复版本已改变，请重新读取后再操作。');
         }
         return chat;
     }
     let assistant;
-    if (input.operation === 'send') {
-        assert(isText(input.prompt), '请先输入消息');
-        assertPlayAction('send', { chat });
-        const user = { id: input.userMessageId, role: 'user', text: input.prompt, origin: readPlayOrigin(input.origin),
-            createdAt: input.startedAt, bodyRevision: input.userBodyRevision, userIdentity: playUserIdentity(context) };
-        assistant = { id: input.assistantMessageId, role: 'assistant', createdAt: input.startedAt,
-            results: [result], selectedResultId: result.id };
-        chat.messages.push(user, assistant);
+    if (['send', 'reply'].includes(input.operation)) {
+        let user;
+        if (input.operation === 'send') {
+            assert(isText(input.prompt), '请先输入消息');
+            assertPlayAction('send', { chat });
+            user = { id: input.userMessageId, role: 'user', text: input.prompt, origin: readPlayOrigin(input.origin),
+                createdAt: input.startedAt, bodyRevision: input.userBodyRevision, userIdentity: playUserIdentity(context) };
+            chat.messages.push(user);
+        } else {
+            const last = chat.messages.at(-1);
+            if (input.messageId !== last?.id) throw new PlayHistoryError('chat_conflict', '这条聊天已在其他窗口改变，请保留草稿并重新读取。');
+            assertPlayAction('reply', { chat, chatMode: input.chatMode });
+            if (last.role === 'user') user = last;
+        }
+        assistant = appendAssistantMessage(chat, input, [result]);
+        if (input.operation === 'reply') chat.startMessageIds = chat.startMessageIds.filter(id => chat.messages.some(message => message.id === id));
         if (!chat.startMessageIds.some(id => chat.messages.some(message => message.id === id))) {
-            chat.startMessageIds = [user.id, assistant.id];
+            chat.startMessageIds = [user?.id, assistant.id].filter(Boolean);
+        } else if (input.operation === 'reply' && user && chat.startMessageIds.includes(user.id)
+            && !chat.messages.some(message => message.role === 'assistant' && chat.startMessageIds.includes(message.id))) {
+            chat.startMessageIds.push(assistant.id);
         }
     } else {
         assistant = input.chatMode ? chat.messages.at(-1)
@@ -155,8 +174,7 @@ export function preparePlayGeneration(value, input) {
             throw new PlayHistoryError('message_not_last', '只能对聊天末尾的 AI 楼层操作，请先从较早楼层创建分支。');
         }
         if (!assistant) {
-            assistant = { id: input.assistantMessageId, role: 'assistant', createdAt: input.startedAt, results: [], selectedResultId: result.id };
-            chat.messages.push(assistant);
+            assistant = appendAssistantMessage(chat, input);
             chat.startMessageIds = chat.startMessageIds.filter(id => chat.messages.some(message => message.id === id));
             chat.startMessageIds.push(assistant.id);
         }

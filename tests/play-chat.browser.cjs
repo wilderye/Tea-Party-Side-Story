@@ -306,7 +306,7 @@ async function verifyConcurrentControls(page, panel, branch) {
     const latest = branch.locator('.play-assistant-message').last();
     await latest.getByText('并发A已收到正文', { exact: true }).first().waitFor();
     assert.equal(await latest.locator('.play-stop').isVisible(), false, '仅一份任务时使用输入框旁的停止按钮');
-    assert.equal(await send.getAttribute('aria-label'), '停止这份回复');
+    assert.equal(await send.getAttribute('aria-label'), '停止所有生成');
     assert.equal(await branch.locator('.play-stop-all').count(), 0);
     await page.evaluate(async () => {
         const a = runtime.getStates()[0], chat = await runtime.getChat(a.roundId), b = await runtime.createBranch(chat.id, chat.messages[1].id);
@@ -324,23 +324,27 @@ async function verifyConcurrentControls(page, panel, branch) {
     assert.ok(boxes.stop.bottom <= boxes.top.top || boxes.stop.right <= boxes.top.left || boxes.top.right <= boxes.stop.left,
         '停止与回顶互不重叠；分支按钮在页头');
     await input.fill('尚未发送');
-    assert.equal(await send.getAttribute('aria-label'), '停止这份回复');
-    await send.click();
+    assert.equal(await send.getAttribute('aria-label'), '停止所有生成');
+    await latest.locator('.play-stop').click();
     await page.waitForFunction(() => runtime.getStates().length === 1);
     await latest.getByText('并发A已收到正文', { exact: true }).first().waitFor();
     assert.equal(await latest.locator('.play-stop').isVisible(), false);
     assert.equal(await latest.locator('footer').innerText().then(text => /已停止|正在生成|正在重试/.test(text)), false);
-    assert.equal(await send.getAttribute('data-icon'), 'send', '另一分支生成时当前分支可发送');
+    assert.equal(await send.getAttribute('data-icon'), 'stop', '另一分支仍在生成时保留共同的总停止');
     await screenshot(page, `branch-stopped-${await page.evaluate(() => innerWidth)}.png`);
     await input.fill('');
     assert.equal(await send.getAttribute('aria-label'), '停止所有生成');
-    await input.press('Control+Enter'); await page.waitForFunction(() => runtime.getStates().length === 0);
+    await input.press('Control+Enter'); await settle(page);
+    assert.equal(await page.evaluate(() => runtime.getStates().length), 1);
+    await send.click(); await page.waitForFunction(() => runtime.getStates().length === 0);
     assert.equal(await send.getAttribute('aria-label'), '发送消息');
     await input.fill('快捷键停止当前分支'); await send.click();
     await page.waitForFunction(() => runtime.getStates().some(job => job.phase === 'generating'));
     await input.fill('快捷键停止后保留的草稿');
-    await input.press('Control+Enter'); await page.waitForFunction(() => runtime.getStates().length === 0);
+    await input.press('Control+Enter'); await settle(page);
+    assert.equal(await page.evaluate(() => runtime.getStates().length), 1);
     assert.equal(await input.inputValue(), '快捷键停止后保留的草稿');
+    await send.click(); await page.waitForFunction(() => runtime.getStates().length === 0);
     await input.fill(''); await settle(page);
     assert.equal(await input.evaluate(node => node.clientHeight), 44);
 }
@@ -386,9 +390,9 @@ async function verify(page, url, viewport) {
     assert.deepEqual(generatingTools, ['收藏演出记录', '编辑回复原文', '更多回复操作'],
         '电脑和手机生成中都保留更多回复操作入口');
     await input.fill('下一轮尚未发送的草稿');
-    assert.equal(await branch.getByRole('button', { name: '停止这份回复', exact: true }).count() >= 1, true);
+    assert.equal(await branch.getByRole('button', { name: '停止所有生成', exact: true }).count(), 1);
     assert.equal(await button('发送消息').count(), 0, '本分支生成时同一按钮切换为停止');
-    assert.equal(await input.locator('..').locator('.play-send').getAttribute('aria-label'), '停止这份回复');
+    assert.equal(await input.locator('..').locator('.play-send').getAttribute('aria-label'), '停止所有生成');
     await button('关闭聊天页面').click();
     await original.waitFor(); await settle(page);
     const returnScroll = await originalFeed.evaluate(node => node.scrollTop);

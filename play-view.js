@@ -3,7 +3,7 @@ import { readPlayTarget } from './play-runtime.js';
 import { renderPlayText, playTextPreview } from './play-render.js';
 import { expandPlayUserNames } from './play-processing.js';
 import { recordViewEvent } from './view-diagnostics.js';
-import { playRoundDepth, playMessageIdentity } from './play-message-context.js';
+import { playRoundDepth, playMessageIdentity, getPlayComposerAction } from './play-message-context.js';
 import { createPlayEditor } from './play-editor.js';
 import { favoriteFirstLine, favoriteSourceKey } from './play-favorites-view.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters } from './play-character-picker.js';
@@ -76,10 +76,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         isComposing: () => inputComposing, getContextHeight: () => contextLine.offsetHeight });
     const nativeInputSizing = inputSizer.nativeSizing;
     input.setAttribute('aria-label', '小剧场提示词'); input.placeholder = '写下小剧场提示词…';
-    const send = iconButton('send', '发送小剧场', () => {
-        if (composerStopsGeneration()) playground.stopAll();
-        else void sendDraft();
-    }); send.classList.add('play-send');
+    const send = iconButton('send', '发送小剧场', () => void sendDraft(true)); send.classList.add('play-send');
     inputRow.append(input, send); inner.append(contextLine, inputRow); compose.append(inner); page.append(readingArea, compose);
 
     const records = new Map(), views = new Map(), rowsByCharacter = new Map(), historyWindows = new Map();
@@ -164,8 +161,13 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         return drafts.get(key);
     }
     function canWrite() { return !!selected?.avatar && settings.enabled !== false; }
-    function composerStopsGeneration() {
-        return !input.value.trim() && playground.getStates().some(job => activePhases.has(job.phase));
+    function latestRound() {
+        return records.get(rowsByCharacter.get(selected?.id)?.at(-1)?.id)?.round ?? null;
+    }
+    function composerAction(allowStop = true) {
+        const round = latestRound();
+        return getPlayComposerAction({ prompt: input.value, jobs: playground.getStates(), allowStop,
+            lastRole: round?.results.length ? 'assistant' : round?.prompt != null ? 'user' : null });
     }
     function readTarget() {
         return { characterId: selected?.id, character: { avatar: selected?.avatar, name: selected?.name } };
@@ -535,11 +537,12 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         updateControls();
     }
     function updateSendControl() {
-        const available = playground.availability(), stopping = composerStopsGeneration();
+        const action = composerAction(), round = latestRound(), stopping = action === 'stop';
+        const available = playground.availability(action === 'reply' ? { chatId: round.id, action } : {});
         const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送小剧场';
         if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
         const title = !stopping && !available.available ? available.message : label;
-        const disabled = !canWrite() || (!stopping && (!input.value.trim() || !available.available));
+        const disabled = !canWrite() || !action || (!stopping && !available.available);
         if (send.title !== title) send.title = title;
         if (send.getAttribute('aria-label') !== label) send.setAttribute('aria-label', label);
         if (send.disabled !== disabled) send.disabled = disabled;
@@ -662,10 +665,16 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         catch (error) { notifyRequestError(error, request.resultId); }
         finally { if (request.resultId) requests.delete(request.resultId); }
     }
-    async function sendDraft() {
-        if (!canWrite() || !playground.availability().available || !input.value.trim()) return;
+    async function sendDraft(allowStop = false) {
+        const action = composerAction(allowStop);
+        if (action === 'stop') { playground.stopAll(); return; }
+        const round = latestRound();
+        if (!action || !canWrite() || !playground.availability(action === 'reply' ? { chatId: round.id, action } : {}).available) return;
         const draft = draftFor(), prompt = input.value, target = readTarget();
-        await runGeneration(() => playground.send({ ...target, prompt, origin: draft.origin }), { draft, prompt, role: 'latest' });
+        if (action === 'reply') {
+            await runGeneration(() => playground.replyToLastMessage(round.id, { ...target, messageId: round.initialUserId,
+                expectedRevision: records.get(round.id)?.revision }), { role: 'latest' });
+        } else await runGeneration(() => playground.send({ ...target, prompt, origin: draft.origin }), { draft, prompt, role: 'latest' });
     }
     async function regenerate(round) {
         const result = selectedResult(round);
@@ -1034,7 +1043,7 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
         let retainedCharacters = [...records.values()].reduce((size, cached) => size + recordSize(cached), 0);
         for (const [id, cached] of records) {
             if (records.size <= 160 && retainedCharacters <= 4 * 1024 * 1024) break;
-            if (!visibleIds.has(id) && !views.has(id) && !roundBusy(id)) { records.delete(id); retainedCharacters -= recordSize(cached); }
+            if (!visibleIds.has(id) && id !== rows.at(-1)?.id && !views.has(id) && !roundBusy(id)) { records.delete(id); retainedCharacters -= recordSize(cached); }
         }
         const savedTarget = pendingReveal?.key === key ? pendingReveal.roundId : positions.get(key)?.anchor?.split('/')[0];
         const targetId = visibleIds.has(savedTarget) ? savedTarget : visibleRows.at(-1)?.id;
@@ -1221,8 +1230,9 @@ export function createPlayView(ctx, settings, playground, notify, diagnostics, p
             }
             const { start, end } = historyRange(rows, key);
             const visibleRows = rows.slice(start, end);
+            const readingRows = rows.length && !visibleRows.includes(rows.at(-1)) ? [...visibleRows, rows.at(-1)] : visibleRows;
             const liveRounds = new Set(playground.getStates().map(job => job.roundId));
-            const pending = visibleRows.filter(row => {
+            const pending = readingRows.filter(row => {
                 const cached = records.get(row.id);
                 return cached?.revision !== row.revision || cached?.error || liveRounds.has(row.id);
             }).sort((a, b) => {

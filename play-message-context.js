@@ -2,6 +2,13 @@ export function playJobCanStop(job) {
     return !!job && ['preparing', 'generating', 'retry-wait'].includes(job.phase);
 }
 
+export function getPlayComposerAction({ prompt = '', chatMode = false, lastRole = null, jobs = [], allowStop = true } = {}) {
+    const hasPrompt = !!prompt.trim();
+    if (jobs.some(playJobCanStop) && (chatMode || !hasPrompt)) return allowStop ? 'stop' : null;
+    if (hasPrompt) return 'send';
+    return lastRole === 'user' || chatMode && lastRole === 'assistant' ? 'reply' : null;
+}
+
 export function playResultIsPending(result, jobs = [], pending = []) {
     return !!result && (['unfinished', 'preparing', 'generating', 'retry-wait'].includes(result.status)
         || jobs.some(job => playJobCanStop(job) && (job.resultId === result.id || job.replaceResultId === result.id))
@@ -14,27 +21,35 @@ export function playMessageIsPending(message, jobs = [], pending = []) {
 }
 
 export function getPlayActionPermission(action, { chat, round, message, messageId, result, resultId, role = 'assistant',
-    isLast, jobs = [], pending = [] } = {}) {
+    isLast, chatMode = false, jobs = [], pending = [] } = {}) {
     if (round) {
         const userId = round.initialUserId ?? `${round.id}/user`, assistantId = round.initialAssistantId ?? round.id;
         chat = { id: round.id, startMessageIds: [userId, assistantId], messages: [
             round.prompt !== null && { id: userId, role: 'user', text: round.prompt, hidden: round.initialUserHidden },
-            { id: assistantId, role: 'assistant', results: round.results, selectedResultId: round.selectedResultId, hidden: round.initialAssistantHidden },
+            (action !== 'reply' || round.results.length > 0) && { id: assistantId, role: 'assistant', results: round.results, selectedResultId: round.selectedResultId, hidden: round.initialAssistantHidden },
         ].filter(Boolean) };
         isLast ??= round.initialIsLast !== false;
     }
     const messages = chat?.messages ?? [];
     if (message === undefined) message = messageId ? messages.find(item => item.id === messageId)
+        : action === 'reply' ? messages.at(-1)
         : resultId ? messages.find(item => item.results?.some(version => version.id === resultId)) : messages.findLast(item => item.role === role);
     if (result === undefined) result = resultId ? message?.results?.find(item => item.id === resultId)
         : message?.results?.find(item => item.id === message.selectedResultId) ?? message?.results?.at(-1);
     isLast ??= !message || messages.at(-1)?.id === message.id;
     const blocked = (code, text) => ({ available: false, code, message: text });
     const busy = text => blocked('busy', text);
-    pending = action === 'send' ? [] : action === 'edit' ? pending.filter(operation => operation.saving !== false) : pending;
+    pending = ['send', 'reply'].includes(action) ? [] : action === 'edit' ? pending.filter(operation => operation.saving !== false) : pending;
     const resultPending = playResultIsPending(result, jobs, pending);
     const messagePending = playMessageIsPending(message, jobs, pending);
-    if (action === 'finish') {
+    if (action === 'reply') {
+        if (Array.isArray(chat?.messages) && (!isLast || !message || message.role !== 'user' && (!chatMode || message.role !== 'assistant'))) {
+            return blocked('empty_prompt', '请先输入小剧场提示词');
+        }
+        if (jobs.some(job => playJobCanStop(job) && (job.roundId ?? job.requestedRoundId) === chat?.id)) {
+            return busy('这条聊天正在生成或尚未保存，请结束并保存后再操作。');
+        }
+    } else if (action === 'finish') {
         if (jobs.some(job => playJobCanStop(job) && (job.roundId ?? job.requestedRoundId) === chat?.id)
             || pending.some(operation => ['begin', 'result'].includes(operation.kind))) {
             return busy('这条聊天正在生成或尚未保存，请结束并保存后再操作。');

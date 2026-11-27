@@ -1,5 +1,5 @@
 import { element, textButton, iconButton, glyph } from './ui.js';
-import { playMessageDepths, playHiddenRanges, playChatMessageIdentity } from './play-message-context.js';
+import { playMessageDepths, playHiddenRanges, playChatMessageIdentity, getPlayComposerAction } from './play-message-context.js';
 import { createPlayCharacterPicker, createCharacterAvatar, mergePlayCharacters, playCharacterKey } from './play-character-picker.js';
 import { createPlayEditor } from './play-editor.js';
 import { renderPlayText, playSearchText, playTextPreview } from './play-render.js';
@@ -55,7 +55,7 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const menuItems = element('div', undefined, 'tea-sort-menu'); menu.append(summary, menuItems);
     const inputRow = element('div', undefined, 'play-input-row');
     const input = element('textarea', undefined, 'play-compose-input'); input.rows = 1; input.placeholder = '接着剧情继续聊…'; input.setAttribute('aria-label', '分支聊天输入');
-    const send = iconButton('send', '发送消息', () => void sendDraft()); send.classList.add('play-send'); send.dataset.icon = 'send';
+    const send = iconButton('send', '发送消息', () => void sendDraft(true)); send.classList.add('play-send'); send.dataset.icon = 'send';
     inputRow.append(menu, input, send); inner.append(inputRow); compose.append(inner);
     const deleteControls = element('div', undefined, 'play-delete-controls'); deleteControls.hidden = true;
     const deleteDescription = element('span'), confirmDelete = textButton('确认删除', () => void confirmMessageDeletion());
@@ -127,8 +127,8 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
     const target = () => ({ characterId: chat.characterId, character: { avatar: owner()?.avatar, name: owner()?.name } });
     const ownJobs = (jobs = playground.getStates()) => jobs.filter(job => (job.roundId ?? job.requestedRoundId) === chat?.id);
     const writeBlocked = () => !chat || chatUnavailable || mutating || loading || settings.enabled === false || messageEditing.busy;
-    const busy = (jobs = ownJobs()) => writeBlocked() || !!editingSession()
-        || !playground.getActionPermission('send', { chat }, jobs).available;
+    const busy = (jobs = ownJobs(), action = 'send') => writeBlocked() || !!editingSession()
+        || !playground.getActionPermission(action, { chat, chatMode: true }, jobs).available;
     const canWrite = () => settings.enabled !== false && !!ctx().characters?.some(character => character.avatar === owner()?.avatar);
     const currentResult = message => message.results?.find(result => result.id === message.selectedResultId);
     function messagePermissions(message, jobs = ownJobs()) {
@@ -624,14 +624,14 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
         if (message) await run(() => playground.truncateChat(chat.id, message.id, chat.revision));
     }
     function updateInput(jobs = playground.getStates()) {
-        const own = ownJobs(jobs), active = own.filter(job => activePhases.has(job.phase)), generating = active[0];
-        const ownPending = own.length > 0;
-        const stopping = ownPending || (!input.value.trim() && jobs.some(job => activePhases.has(job.phase)));
-        const icon = stopping ? 'stop' : 'send', label = active.length > 1 ? '停止所有生成'
-            : generating ? '停止这份回复' : ownPending ? '正在保存回复' : stopping ? '停止所有生成' : '发送消息';
+        const own = ownJobs(jobs), action = getPlayComposerAction({ prompt: input.value, chatMode: true,
+            lastRole: chat?.messages.at(-1)?.role, jobs });
+        const stopping = action === 'stop';
+        const icon = stopping ? 'stop' : 'send', label = stopping ? '停止所有生成' : '发送消息';
         if (send.dataset.icon !== icon) { send.replaceChildren(glyph(icon)); send.dataset.icon = icon; }
         send.title = label; send.setAttribute('aria-label', label);
-        send.disabled = stopping ? ownPending && !generating : busy(own) || !canWrite() || !input.value.trim() || !playground.availability({ chatId: chat?.id }).available;
+        send.disabled = !stopping && (!action || busy(own, action) || !canWrite()
+            || !playground.availability({ chatId: chat?.id, action, chatMode: true }).available);
         compose.hidden = deletingFrom !== null;
         input.disabled = settings.enabled === false;
         scheduleInputSizing();
@@ -812,15 +812,18 @@ export function createPlayChatView(ctx, settings, playground, promptFavorites, {
                 }
             } });
     }
-    async function sendDraft() {
-        const active = ownJobs().filter(job => activePhases.has(job.phase));
-        if (active.length) { if (active.length === 1) playground.stop(active[0].resultId); else playground.stopAll(); return; }
-        if (!input.value.trim()) { playground.stopAll(); return; }
-        if (busy() || !canWrite()) return;
+    async function sendDraft(allowStop = false) {
+        const action = getPlayComposerAction({ prompt: input.value, chatMode: true,
+            lastRole: chat?.messages.at(-1)?.role, jobs: playground.getStates(), allowStop });
+        if (action === 'stop') { playground.stopAll(); return; }
+        if (!action || busy(ownJobs(), action) || !canWrite()) return;
         const id = chat.id, text = input.value;
-        positions.set(id, { bottom: true }); pendingDrafts.set(id, text);
+        positions.set(id, { bottom: true });
+        if (action === 'send') pendingDrafts.set(id, text);
         try {
-            const task = playground.sendChat(id, { ...target(), prompt: text, expectedRevision: chat.revision });
+            const task = action === 'reply' ? playground.replyToLastMessage(id, { ...target(), chatMode: true,
+                messageId: chat.messages.at(-1).id, expectedRevision: chat.revision })
+                : playground.sendChat(id, { ...target(), prompt: text, expectedRevision: chat.revision });
             await task;
         } catch (error) { if (!playground.session.isSaveError(error)) notify(error.message); }
         finally { if (pendingDrafts.get(id) === text) pendingDrafts.delete(id); }
